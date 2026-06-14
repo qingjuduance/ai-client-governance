@@ -105,6 +105,15 @@
   项目官网、源码仓库、发行页、权威讨论和维护状态。
 - 形成执行计划时必须写出“现成方案检索结果”：查了哪些关键词或来源，
   找到了哪些候选，最终采用、改造、参考或放弃的原因。
+- 设计或修改规则、流程、脚本门禁、文档架构、知识正文、验证策略、
+  安装同步机制或编码处理方案前，也必须先联网核对外部成熟做法。
+- 联网核对优先使用官方文档、规范、源码仓库、项目维护文档和权威手册；
+  可以参考博客或问答整理思路，但正式规则和结论不能只依赖二手资料。
+- task tracking 必须记录“联网核对记录”：搜索关键词或直接打开的来源、
+  采用了哪些结论、哪些资料只作参考未采用、无法联网或无法找到权威资料时的
+  风险边界。
+- 如果用户指出“为什么没有联网查”“有没有成熟方法”等问题，必须把该问题记录到
+  corrections，并优先补齐联网核对门禁，而不是只在当前回复里口头说明。
 
 ## 会话操作账本与恢复现场
 
@@ -150,6 +159,12 @@
 - 是否需要 Git 收口或多轮验证：
 - 任务规模结论：
 - 子 AI 决策：
+
+## 联网核对记录
+
+| 来源或关键词 | 用途 | 采用结论 | 未采用或风险边界 |
+|---|---|---|---|
+|  |  |  |  |
 
 ## 影响面扫描
 
@@ -208,6 +223,7 @@
 | 引用记录和循环引用检查已完成 |  |  |
 | pending/corrections 状态已处理或说明不适用 |  |  |
 | 脚本、导出或构建验证已完成或说明不适用 |  |  |
+| 联网核对和来源记录已完成或说明不适用 |  |  |
 | Git 状态、提交和推送边界已检查 |  |  |
 | 最终剩余事项已列明 |  |  |
 
@@ -510,6 +526,36 @@ python scripts\agent_comm.py lock status --active-only
 - 脚本文件默认使用 UTF-8 保存；PowerShell 脚本若需要兼容 Windows PowerShell 5.1，
   应避免在脚本源码字符串中直接写必须由解析器读取的非 ASCII 模板，或明确验证
   解析器能按预期读取。输出中文内容时要用真实命令验证编码。
+- 在 Windows/PowerShell 中读取或写入仓库维护文件时，默认显式指定 UTF-8：
+  `Get-Content -Raw -Encoding UTF8`、`Set-Content -Encoding UTF8`、
+  `Out-File -Encoding UTF8`。不要依赖 Windows PowerShell 5.1 的默认 ANSI
+  编码，也不要把控制台当前代码页当作文件编码依据。
+- PowerShell 需要调用 Python、Git、Node 或其它外部程序并传递中文路径、
+  中文 stdout/stderr 或中文 JSON 时，先设置本次进程编码：
+  `$OutputEncoding = [System.Text.UTF8Encoding]::new()`，
+  `[Console]::InputEncoding = [System.Text.UTF8Encoding]::new()`，
+  `[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()`。
+  如果改变编码可能影响用户交互式终端，必须只在脚本或命令作用域内设置。
+- Python 脚本读取/写入仓库文本文件必须显式使用 `encoding="utf-8"`；
+  `subprocess.run(..., text=True)`、`subprocess.Popen(..., text=True)` 或
+  等价文本模式读取外部程序输出时，也必须显式传入 `encoding="utf-8"` 和必要的
+  `errors="replace"`。在 PowerShell 中运行涉及中文输出或中文路径的 Python 校验时，
+  设置 `$env:PYTHONUTF8 = "1"`，必要时设置
+  `$env:PYTHONIOENCODING = "utf-8"` 后再运行。
+- Git 输出中文路径时优先使用
+  `git -c core.quotepath=false status --short` 或等价命令记录人工可读输出；
+  脚本解析 Git 路径列表时优先使用 `-z` 的 NUL 分隔输出，避免路径转义和空格歧义。
+  如果看到 `\345\...` 这类转义路径，先判断是否只是 Git 路径转义，
+  不要误判为文件内容乱码。
+- JSON 文件必须按 UTF-8 处理；用于跨系统传输、配置或工具互操作的 JSON 不应写入
+  UTF-8 BOM。发现 JSON 带 BOM 时先报告和记录风险，不自动重写。
+- 发现乱码、中文路径显示异常、脚本输出问号或转义路径时，必须记录到
+  task tracking 或 corrections：触发命令、PowerShell 版本、当前编码设置、
+  文件真实编码判断、是否为 Git quotePath 显示问题，以及最终处理方式。
+- 只要仓库中存在 `scripts/validate_encoding.py`，新增或修改 `.md`、`.json`、
+  `.ps1`、`.py`、`.yaml`、`.yml`、`.toml`、`.css`、`.html`、`.js`、`.ts`
+  等文本文件后，收口前必须运行该脚本或等价 UTF-8 检查。脚本第一版只读报告，
+  不自动转码、不自动重写 BOM、不自动修改 PowerShell 脚本。
 - 修改 PowerShell 脚本后，至少运行语法解析：
 
 ```powershell

@@ -115,7 +115,14 @@ def resolve_from_root(root: Path, value: str) -> Path:
 def run_git_changed(root: Path) -> list[Path]:
     try:
         result = subprocess.run(
-            ["git", "status", "--porcelain", "--untracked-files=all"],
+            [
+                "git",
+                "-c",
+                "core.quotepath=false",
+                "status",
+                "--porcelain",
+                "--untracked-files=all",
+            ],
             cwd=root,
             check=True,
             capture_output=True,

@@ -199,6 +199,7 @@ $managedPaths = @(
     [ordered]@{ source = "scripts\agent_group_status.py"; target = "scripts\agent_group_status.py"; type = "file" },
     [ordered]@{ source = "scripts\scan_corrections.py"; target = "scripts\scan_corrections.py"; type = "file" },
     [ordered]@{ source = "scripts\validate_doc_task.py"; target = "scripts\validate_doc_task.py"; type = "file" },
+    [ordered]@{ source = "scripts\validate_encoding.py"; target = "scripts\validate_encoding.py"; type = "file" },
     [ordered]@{ source = "check-ai-rules-sync.ps1"; target = "check-ai-rules-sync.ps1"; type = "file" }
 )
 

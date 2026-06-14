@@ -46,6 +46,11 @@
       "type": "file"
     },
     {
+      "source": "scripts/validate_encoding.py",
+      "target": "scripts/validate_encoding.py",
+      "type": "file"
+    },
+    {
       "source": "check-ai-rules-sync.ps1",
       "target": "check-ai-rules-sync.ps1",
       "type": "file"

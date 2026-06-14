@@ -13,6 +13,7 @@
 | 会话检查 | `check-ai-rules-sync.ps1` |
 | 同步脚本 | `sync-ai-rules.ps1` |
 | 文档门禁 | `scripts/validate_doc_task.py` |
+| 编码门禁 | `scripts/validate_encoding.py` |
 
 本仓库只保存通用 AI 协作规则、通用脚本和安装同步工具，不保存某个项目的
 特殊文档体系、简历、学习正文、源码快照、路线材料或会话运行状态。
@@ -76,6 +77,27 @@ python scripts\validate_doc_task.py `
 同步、DoD 或影响面扫描未记录。脚本只报告问题，不自动修改 README、引用记录、
 pending、corrections 或 Git 状态。
 
+## 编码门禁
+
+在 Windows、PowerShell、Python 和 Git 混用场景中处理中文路径或中文内容时，
+收口前运行只读编码门禁：
+
+```powershell
+$env:PYTHONUTF8 = "1"
+$env:PYTHONIOENCODING = "utf-8"
+python scripts\validate_encoding.py `
+  --root . `
+  --paths AGENTS.md README.md .\scripts `
+  --windows-powershell51 `
+  --smoke `
+  --strict
+```
+
+脚本会检查目标文本文件是否可按 UTF-8 读取，并提示常见风险：PowerShell
+`Get-Content`、`Set-Content`、`Out-File`、`Add-Content` 缺少 `-Encoding`，
+Python 文本 I/O 缺少 `encoding="utf-8"`，以及 Windows PowerShell 5.1 读取
+非 ASCII `.ps1` 时可能需要 BOM 或解析器验证。脚本只报告问题，不自动转码或重写文件。
+
 ## 远程仓库
 
 首次使用远程仓库时，在本目录执行：
@@ -118,6 +140,7 @@ AGENTS.md
 - `scripts/agent_group_status.py`
 - `scripts/scan_corrections.py`
 - `scripts/validate_doc_task.py`
+- `scripts/validate_encoding.py`
 - `check-ai-rules-sync.ps1`
 
 不纳入同步：
