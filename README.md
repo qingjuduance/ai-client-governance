@@ -14,6 +14,7 @@
 | 同步脚本 | `sync-ai-rules.ps1` |
 | 文档门禁 | `scripts/validate_doc_task.py` |
 | 编码门禁 | `scripts/validate_encoding.py` |
+| 日志门禁 | `AGENTS.md` 的日志优先与可观测性门禁 |
 
 本仓库只保存通用 AI 协作规则、通用脚本和安装同步工具，不保存某个项目的
 特殊文档体系、简历、学习正文、源码快照、路线材料或会话运行状态。
@@ -97,6 +98,17 @@ python scripts\validate_encoding.py `
 `Get-Content`、`Set-Content`、`Out-File`、`Add-Content` 缺少 `-Encoding`，
 Python 文本 I/O 缺少 `encoding="utf-8"`，以及 Windows PowerShell 5.1 读取
 非 ASCII `.ps1` 时可能需要 BOM 或解析器验证。脚本只报告问题，不自动转码或重写文件。
+
+## 日志优先与可观测性门禁
+
+处理代码项目、Mod、插件、脚本、工具链、构建、运行或调试问题时，通用规则要求先找
+日志和诊断输出，再决定是否改代码。适用日志包括 stdout/stderr、构建输出、测试输出、
+崩溃转储、平台事件日志、游戏引擎日志、插件加载日志、外部命令输出、监控指标和 trace。
+
+如果没有日志，必须在 task tracking 记录“日志缺失/不足”，优先开启 debug/verbose、
+dry-run、最小复现或补最小诊断日志。Mod、插件和框架扩展优先使用宿主平台 logger；
+日志要能带上事件名、组件入口、关联 ID、退出码、耗时、fallback、重试和脱敏后的参数摘要。
+最终回复要说明依据的日志证据，以及未解决时下一步最该查看的具体日志或诊断命令。
 
 ## 远程仓库
 
