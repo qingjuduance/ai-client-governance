@@ -1,0 +1,31 @@
+{
+  "name": "ai-rules",
+  "description": "Reusable Codex/AI collaboration rules extracted from the self workspace.",
+  "schema_version": 1,
+  "source_workspace": "D:/root/file/resume/self",
+  "managed_paths": [
+    "AGENTS.md",
+    ".codex/skills/agents-rule-maintainer",
+    ".codex/skills/locate-pasted-content",
+    ".codex/skills/self-correction-planner",
+    "scripts/agent_comm.py",
+    "scripts/agent_group_status.py",
+    "scripts/scan_corrections.py",
+    "scripts/scan_markdown_compliance.py",
+    "docs/_meta/agent-collaboration.md",
+    "check-ai-rules-sync.ps1"
+  ],
+  "sync_policy": {
+    "trigger": "new_session_start",
+    "interval_hours": 24,
+    "remote": "origin",
+    "merge_strategy": "git_pull_no_rebase",
+    "conflict_policy": "stop_and_report"
+  },
+  "install": {
+    "config_path": ".codex/ai-rules-config.json",
+    "backup_dir": ".codex/ai-rules-backups",
+    "auto_refresh_default": true
+  }
+}
+

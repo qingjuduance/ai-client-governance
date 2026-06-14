@@ -1,0 +1,4 @@
+interface:
+  display_name: "Self Correction Planner"
+  short_description: "Turn correction notes into repo rules"
+  default_prompt: "Use $self-correction-planner to record correction feedback and plan durable repo rule updates."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agents Rule Maintainer"
+  short_description: "Maintain AGENTS rules with approvals"
+  default_prompt: "Use $agents-rule-maintainer to plan an AGENTS rule update from corrections or task tracking."

@@ -1,0 +1,13 @@
+# Local sync state and logs
+.ai-rules-sync/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Local editor state
+.idea/
+.vscode/
+.trae/
+.uploads/
+
