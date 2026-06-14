@@ -12,6 +12,7 @@
 | 安装脚本 | `install-ai-rules.ps1` |
 | 会话检查 | `check-ai-rules-sync.ps1` |
 | 同步脚本 | `sync-ai-rules.ps1` |
+| 文档门禁 | `scripts/validate_doc_task.py` |
 
 本仓库只保存通用 AI 协作规则、通用脚本和安装同步工具，不保存某个项目的
 特殊文档体系、简历、学习正文、源码快照、路线材料或会话运行状态。
@@ -21,7 +22,7 @@
 在目标项目中安装规则：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File D:\root\file\resume\ai-rules\install-ai-rules.ps1 -TargetProjectPath D:\path\to\project
+powershell -ExecutionPolicy Bypass -File <ai-rules-path>\install-ai-rules.ps1 -TargetProjectPath <target-project-path>
 ```
 
 安装会把本仓库 `AGENTS.md` 安装到目标项目
@@ -57,6 +58,23 @@ powershell -ExecutionPolicy Bypass -File .\check-ai-rules-sync.ps1
 5. 把本次同步、推送、commit 和结果写入 `.ai-rules-sync/state.json`。
 
 如果发生合并冲突，脚本会停止并保留现场，不会自动覆盖任何一方的规则。
+
+## 重构与新文档门禁
+
+重构目录、新建正式 Markdown、同步规则或批量处理文档时，收口前运行只读门禁：
+
+```powershell
+python scripts\validate_doc_task.py `
+  --root . `
+  --task-tracking .codex\task-tracking\<file>.md `
+  --mode new-doc `
+  --require-task-tracking
+```
+
+脚本会检查本次触及 Markdown 是否存在常见漏项，例如 task tracking 必需小节、
+本机绝对路径、正式入口链接 `questions/`、缺少 `.references/`、README 可能需要
+同步、DoD 或影响面扫描未记录。脚本只报告问题，不自动修改 README、引用记录、
+pending、corrections 或 Git 状态。
 
 ## 远程仓库
 
@@ -99,6 +117,7 @@ AGENTS.md
 - `scripts/agent_comm.py`
 - `scripts/agent_group_status.py`
 - `scripts/scan_corrections.py`
+- `scripts/validate_doc_task.py`
 - `check-ai-rules-sync.ps1`
 
 不纳入同步：

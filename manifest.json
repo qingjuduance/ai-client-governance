@@ -41,6 +41,11 @@
       "type": "file"
     },
     {
+      "source": "scripts/validate_doc_task.py",
+      "target": "scripts/validate_doc_task.py",
+      "type": "file"
+    },
+    {
       "source": "check-ai-rules-sync.ps1",
       "target": "check-ai-rules-sync.ps1",
       "type": "file"
