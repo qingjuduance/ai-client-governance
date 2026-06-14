@@ -116,6 +116,104 @@
 - tracking 还必须维护恢复现场：原始请求、最新指令、批准标签、已执行操作、
   未执行操作、运行命令、验证命令、最近安全停止点、下一步动作、当前 Git 状态、
   子 AI 状态、禁止误动范围和最小恢复读取清单。
+- task tracking 建议使用以下通用结构，项目可在 project 规则中追加本地小节，
+  但不得删除恢复现场和验证记录：
+
+```markdown
+# YYYY-MM-DD-任务关键词
+
+## 本次需求概述
+
+- 原始用户请求：
+- 最新用户指令：
+- 批准标签：
+- 当前状态：
+
+## 会话链路
+
+- 上一任务跟踪文档：
+- 本次复用的旧缓存文件：
+- 本次新增缓存文件：
+
+## 缓存索引
+
+| 文件路径 | 用途 | 关键结论 |
+|---|---|---|
+
+## 任务量评估
+
+- 预计修改文件数：
+- 具体对象数：
+- 目录跨度：
+- 是否需要联网/源码核对：
+- 是否需要引用记录、pending、corrections 或状态看板同步：
+- 是否需要 Git 收口或多轮验证：
+- 任务规模结论：
+- 子 AI 决策：
+
+## 计划处理的文件清单
+
+- 将读取：
+- 将修改：
+- 不处理：
+
+## 已查看文件缓存
+
+| 文件路径 | 用途 | 关键结论 |
+|---|---|---|
+
+## 已处理文件
+
+- 路径：处理动作与合规检查结论。
+
+## 未处理文件
+
+- 路径：未处理原因与后续条件。
+
+## 无需处理文件
+
+- 路径：排除原因。
+
+## 操作账本
+
+- 已执行：
+- 未执行：
+
+## 验证记录
+
+- 命令：
+- 结果：
+- 失败项与处理：
+
+## 当前 Git 状态
+
+- 仓库：
+- 分支：
+- remote：
+- 最新提交：
+- 工作区状态：
+
+## 循环引用检查
+
+- 检查范围：
+- 检查方式：
+- 检查结果：
+
+## 恢复现场
+
+- 最近安全停止点：
+- 下一步动作：
+- 当前 Git 状态：
+- 子 AI 状态：
+- 禁止误动范围：
+- 最小恢复读取清单：
+
+## 最终结论
+
+- 当前计划范围内完成：
+- 剩余处理：
+```
+
 - 长任务、架构调整、批量迁移、跨目录修改和任何可能被中断的任务，必须在每个稳定阶段
   更新恢复现场。
 - 最终回复前核对 tracking、pending、智能体组状态、Git 状态和 correction 状态。
@@ -129,6 +227,48 @@
   后续恢复时必须先看的入口。
 - pending 任务完成后不删除文件，而是把索引和任务文件状态更新为 `已完成`，
   写清完成时间、最终结论、验证结果和剩余风险。
+- pending 索引默认维护 `.codex/pending-tasks/index.md`，至少包含：
+
+```markdown
+# Pending Tasks
+
+| 任务文件 | 状态 | 最近更新 | 恢复入口 | 下一步 |
+|---|---|---|---|---|
+```
+
+- 单个 pending 文件建议使用以下通用格式：
+
+```markdown
+# 任务关键词
+
+## 状态
+
+- 状态：待批准 / 进行中 / 待验证 / 阻塞 / 已完成
+- 最近更新：
+- 对应 task tracking：
+
+## 恢复入口
+
+- 原始请求：
+- 最新指令：
+- 批准标签：
+- 最近安全停止点：
+- 下一步动作：
+
+## 最小恢复读取清单
+
+-
+
+## 禁止误动范围
+
+-
+
+## 完成记录
+
+- 完成时间：
+- 验证结果：
+- 剩余风险：
+```
 
 ## Git 操作要求
 
@@ -145,14 +285,56 @@
 
 - 大型重构、批量文档生成、跨目录整理、批量代码修改或用户明确要求多 AI 分工时，
   总控必须先拆出不重叠的文件范围和知识点范围，再创建或登记子 AI 任务树。
+- 大任务默认至少考虑创建一个叶子子 AI 做只读审查、验证或独立实现。
+  如果最终不创建实际子 AI，必须在 task tracking 写清具体证据，例如工具不可用、
+  任务未超过阈值、写范围无法拆分且只读审查也没有价值；不能只写“主控处理”。
 - 创建任何子 AI 前，总控必须先设计上下文压缩输入包，优先写入
   `.codex/agent-briefs/`，或在 spawn 消息中给出等价短输入包。
+- Agent brief 或等价 spawn 输入至少包含：
+
+```markdown
+# Agent Brief
+
+## task_scope
+
+## allowed_files
+
+## required_inputs
+
+## skip_inputs
+
+## confirmed_facts
+
+## validation
+
+## output_contract
+
+## write_scope
+
+## lock_policy
+
+## token_usage_source
+```
+
 - 同时存在多个智能体组时，必须维护 `.codex/agent-groups/current-status.json`
   作为状态看板事实源。
+- 状态看板中的每个组至少记录：
+  `group_id`、`group_title`、`task_tracking_file`、`approval_label`、
+  `last_checkpoint`、`restore_reading_list`、`status`、`parent_node`、
+  `leaf_count`、`active_agents`、`closed_agents`、`residual_agents`、
+  `current_files`、`unfinished_items`、`next_action`、`children`。
 - 展示状态时优先运行 `python scripts/agent_group_status.py --once`；阶段收口后运行
   `python scripts/agent_group_status.py --once --validate`。
 - 长期任务和跨会话恢复需要同步维护 `.codex/agent-comm/` 文件型通信总线，
   使用 `scripts/agent_comm.py` 管理 inbox/outbox、ack、heartbeat、artifact 和锁。
+- 使用通信总线时，常用验收命令包括：
+
+```powershell
+python scripts\agent_comm.py report <group-id>
+python scripts\agent_comm.py validate <group-id>
+python scripts\agent_comm.py lock status --active-only
+```
+
 - 多组并发写入前必须登记 write scope 并获取锁；没有锁和冲突策略时不得让两个组
   同时写同一文件、同一目录或父子目录范围。
 
@@ -167,6 +349,106 @@
   再按频率、严重性和通用性决定是否升级为长期规则。
 - 处理 corrections、README、路线、引用记录、task tracking、索引、状态统计等
   可能被多个会话同时维护的文件前，必须先做并行会话冲突检查。
+- `.codex/corrections/README.md` 至少说明用途、文件结构、记录模板、状态定义、
+  提炼流程、数据保存原则和工具化观察边界。最小结构如下：
+
+````markdown
+# 修正文档
+
+## 用途
+
+## 文件结构
+
+```text
+.codex/corrections/
+├── README.md
+├── index.md
+└── YYYY-MM-DD-错误关键词.md
+```
+
+## 记录模板
+
+## 状态定义
+
+## 提炼流程
+
+## 数据保存原则
+
+## 工具化观察
+````
+
+- 独立纠错文件必须聚焦一个错误，使用以下模板；如果项目需要更多字段，
+  放在 project 规则中追加，不能删除这些通用字段：
+
+```markdown
+# 错误关键词
+
+## 用户纠错摘要
+
+- 用户指出的问题：
+- 发生时间：
+
+## 发生场景
+
+- 关联任务：
+- 关联文件：
+
+## 错误类型
+
+- 类型：
+- 严重程度：
+
+## 具体遗漏
+
+-
+
+## 根因判断
+
+-
+
+## 即时修复动作
+
+-
+
+## 候选规则
+
+-
+
+## 是否需要升级到 AGENTS.md
+
+-
+
+## 关联 task tracking
+
+-
+
+## 当前状态
+
+- 状态：
+- 处理备注：
+```
+
+- `index.md` 是派生汇总，至少包含快速索引、状态汇总、数据处理与工具化观察、
+  提炼备注。快速索引表头固定为：
+
+```markdown
+| 文件 | 状态 | 错误类型 | 是否需要升级 | 关联 tracking |
+|---|---|---|---|---|
+```
+
+- corrections 状态值只使用：`待记录`、`待提炼`、`已提炼进要求`、`暂不升级`、
+  `已废弃`。含义如下：
+  - `待记录`：刚发现问题，还没整理完整。
+  - `待提炼`：已确认是有效问题，等待归类成长期规则。
+  - `已提炼进要求`：已写入通用规则、项目规则、README 或 skill。
+  - `暂不升级`：属于单次失误或已有规则可覆盖，记录即可。
+  - `已废弃`：后续确认不适用或被更准确记录替代。
+- 新增或更新 correction 后必须同步：
+  独立纠错文件、`index.md` 快速索引、状态汇总、工具化观察和当前 task tracking。
+  如果 `index.md` 和独立记录冲突，先以独立记录修正索引，再继续提炼规则。
+- 每次使用 corrections 数据后，必须在 task tracking 记录读取了哪些记录、
+  如何分组、哪些升级、哪些继续观察；如果存在只读扫描脚本，先运行扫描脚本，
+  再根据报告决定是否修改文件。
 
 ## 脚本维护要求
 
@@ -175,6 +457,45 @@
   必须用真实仓库路径跑一次最小可验证用例。
 - 脚本依赖 Windows、Node、Python、PowerShell 或其它本地环境时，验证要使用
   当前仓库实际环境，不能只做伪命令或静态检查。
+- 脚本文件默认使用 UTF-8 保存；PowerShell 脚本若需要兼容 Windows PowerShell 5.1，
+  应避免在脚本源码字符串中直接写必须由解析器读取的非 ASCII 模板，或明确验证
+  解析器能按预期读取。输出中文内容时要用真实命令验证编码。
+- 修改 PowerShell 脚本后，至少运行语法解析：
+
+```powershell
+$tokens = $null
+$errors = $null
+[System.Management.Automation.Language.Parser]::ParseFile(
+  "script.ps1",
+  [ref]$tokens,
+  [ref]$errors
+) | Out-Null
+if ($errors.Count -gt 0) { $errors | ForEach-Object { $_.Message }; exit 1 }
+```
+
+- 修改 Python 脚本后，至少运行：
+
+```powershell
+python -m py_compile scripts\name.py
+python scripts\name.py --help
+```
+
+- 修改 Node 或 JavaScript 脚本后，优先运行项目已有测试；没有测试时至少运行
+  语法或最小入口检查，例如：
+
+```powershell
+node --check scripts\name.js
+node scripts\name.js --help
+```
+
+- 涉及文件复制、删除、移动、安装、同步、导出或批量改写的脚本，必须用临时目录或
+  最小真实仓库路径跑一遍。临时目录清理前必须确认解析后的绝对路径位于预期临时根下；
+  不得对未校验的计算路径执行递归删除。
+- 安装、同步和 Git 类脚本的最小真实用例至少检查：
+  目标文件是否生成、已有文件是否按规则备份或保留、配置文件是否写入、
+  冲突时是否停止、无 remote 时是否跳过 push、有 remote 时是否按审批执行 push。
+- 每次脚本验证都要把命令、工作目录、通过/失败结果、失败输出摘要和后续处理写入
+  task tracking；最终回复只汇报关键结果，不粘贴冗长日志。
 
 ## 通用本地 Skills
 
