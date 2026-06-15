@@ -32,6 +32,22 @@ ABSOLUTE_PATH_RE = re.compile(
 )
 MARKDOWN_LINK_RE = re.compile(r"(?<!!)\[([^\]]+)\]\(([^)]+)\)")
 LONG_LINE_LIMIT = 120
+EXTERNAL_EVIDENCE_MARKERS = [
+    "外部运行",
+    "真实路径",
+    "真实全路径",
+    "日志路径",
+    "日志来源",
+    "游戏目录",
+    "游戏运行",
+    "构建输出",
+    "导出产物",
+    "临时验证根",
+    "ue4ss",
+    "blackmythwukong",
+    "steamapps",
+    "mods",
+]
 
 
 @dataclass
@@ -187,6 +203,24 @@ def is_tracking_or_correction(rel: str) -> bool:
     )
 
 
+def can_record_external_evidence_path(rel: str) -> bool:
+    return (
+        rel.startswith(".codex/task-tracking/")
+        or rel.startswith(".codex/pending-tasks/")
+        or rel.startswith(".codex/corrections/")
+    )
+
+
+def is_external_evidence_path_line(rel: str, lines: list[str], index: int) -> bool:
+    if not can_record_external_evidence_path(rel):
+        return False
+
+    start = max(0, index - 3)
+    end = min(len(lines), index + 4)
+    context = "\n".join(lines[start:end]).lower()
+    return any(marker in context for marker in EXTERNAL_EVIDENCE_MARKERS)
+
+
 def is_formal_entry(rel: str) -> bool:
     name = Path(rel).name.lower()
     if is_reference_file(rel) or is_questions_file(rel) or is_tracking_or_correction(rel):
@@ -237,19 +271,37 @@ def check_markdown_file(
         return
 
     local_links = []
-    for line_no, line in enumerate(text.splitlines(), start=1):
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        line_no = index + 1
+        external_evidence_path = is_external_evidence_path_line(rel, lines, index)
         if ABSOLUTE_PATH_RE.search(line):
-            level = "warning" if is_tracking_or_correction(rel) else "error"
-            add_finding(
-                errors,
-                warnings,
-                notes,
-                level,
-                rel,
-                "contains absolute local path; prefer repository-relative paths",
-                line_no,
-            )
-        if len(line) > LONG_LINE_LIMIT and not line.lstrip().startswith("|"):
+            if external_evidence_path:
+                add_finding(
+                    errors,
+                    warnings,
+                    notes,
+                    "note",
+                    rel,
+                    "records external runtime evidence path",
+                    line_no,
+                )
+            else:
+                level = "warning" if is_tracking_or_correction(rel) else "error"
+                add_finding(
+                    errors,
+                    warnings,
+                    notes,
+                    level,
+                    rel,
+                    "contains absolute local path; prefer repository-relative paths",
+                    line_no,
+                )
+        if (
+            len(line) > LONG_LINE_LIMIT
+            and not line.lstrip().startswith("|")
+            and not external_evidence_path
+        ):
             if "http://" not in line and "https://" not in line:
                 add_finding(
                     errors,

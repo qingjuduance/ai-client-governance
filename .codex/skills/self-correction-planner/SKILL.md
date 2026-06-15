@@ -1,6 +1,11 @@
 ---
 name: self-correction-planner
-description: Record and refine Codex correction notes for this repository. Use when the user says Codex missed something, planned poorly, violated repo rules, needs a correction written down, asks to update requirements from accumulated mistakes, or asks to organize `.codex/corrections/` into durable `AGENTS.md`, README, or skill rules.
+description: >
+  Record and refine Codex correction notes for this repository. Use when the
+  user says Codex missed something, planned poorly, violated repo rules, needs
+  a correction written down, asks to update requirements from accumulated
+  mistakes, or asks to organize `.codex/corrections/` into durable `AGENTS.md`,
+  README, or skill rules.
 ---
 
 # Self Correction Planner
@@ -27,12 +32,21 @@ interview answers, or project documentation.
    - Record only: a single new mistake or missing step needs an audit note.
    - Extract rules: accumulated correction notes need clustering and rule proposals.
    - Implement upgrade: the user has approved a concrete plan to update requirements or skills.
+   - Treat user-pointed Codex mistakes as serious by default. Do not describe
+     them as lightweight, minor, or ordinary suggestions unless the user
+     explicitly says the issue is minor.
 
 3. For a new correction, create or update one file under `.codex/corrections/`:
    - File name format: `YYYY-MM-DD-错误关键词.md`.
    - Use the template from `.codex/corrections/README.md`.
    - Keep the note focused on one mistake, root cause, candidate rule, status,
      and related task tracking.
+   - Record severity as high by default for user-pointed Codex mistakes, unless
+     the user explicitly frames it as minor. `暂不升级` is not a severity
+     downgrade; it only means no new durable rule is added in that pass.
+   - Record an impact audit: affected corrections, index/status summaries,
+     current tracking, pending return action, task/session gates, relevant
+     skills/scripts, and final-response wording.
    - Update `.codex/corrections/index.md` in the same task.
    - Treat the independent correction file as the fact source; `index.md`
      is only a derived summary.
@@ -52,6 +66,9 @@ interview answers, or project documentation.
    - `index.md`: mirror the same status and refresh status counts.
    - Current task tracking: record processed files, checks, final conclusion,
      and circular reference check.
+   - When leaving a record as `暂不升级`, write the existing defense, why no new
+     rule is added, why the issue is still serious, and the next observation
+     point.
 
 7. After every use, record data handling and tooling observation:
    - In task tracking, record which correction records were read, how they were
@@ -76,6 +93,8 @@ interview answers, or project documentation.
 - Keep `.codex/corrections/` as process audit material, not formal learning content.
 - Do not create `questions/` files for Codex workflow corrections.
 - Do not turn every correction into a permanent rule; prefer precise, reusable rules.
+- Do not equate `暂不升级` with low severity. User-pointed mistakes remain
+  serious process events unless the user explicitly says otherwise.
 - Do not store all corrections in one Markdown file; use independent files plus `index.md`.
 - Do not let `index.md` become the fact source; rebuild it from independent
   correction records if the two disagree.
@@ -96,4 +115,4 @@ interview answers, or project documentation.
 - Run the read-only corrections scan after adding or changing it:
   `python scripts/scan_corrections.py`
 - When this skill is changed, run:
-  `python C:\Users\he\.codex\skills\.system\skill-creator\scripts\quick_validate.py .codex\skills\self-correction-planner`
+  `python <skill-creator>/scripts/quick_validate.py .codex/skills/self-correction-planner`

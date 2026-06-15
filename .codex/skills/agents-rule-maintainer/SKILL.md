@@ -1,6 +1,10 @@
 ---
 name: agents-rule-maintainer
-description: Maintain this repository's AGENTS.md rule system. Use when the user asks to add, compress, split, extract, or refine AGENTS rules; promote corrections or task tracking lessons into durable rules; audit whether a workflow should become a rule, script, or skill; or prepare a plan for AGENTS rule maintenance.
+description: >
+  Maintain this repository's AGENTS.md rule system. Use when the user asks to
+  add, compress, split, extract, or refine AGENTS rules; promote corrections or
+  task tracking lessons into durable rules; audit whether a workflow should
+  become a rule, script, or skill; or prepare a plan for AGENTS rule maintenance.
 ---
 
 # Agents Rule Maintainer
@@ -69,6 +73,55 @@ When rules conflict, preserve higher-priority instructions and ask for a plan
 decision instead of silently choosing. Never rewrite unrelated sections just to
 make nearby wording look uniform.
 
+## Applicability Gate
+
+When designing or changing a rule, script, skill, gate, workflow, queue, token
+bucket, daemon, or background monitor, record an applicability gate in task
+tracking before claiming the design is complete:
+
+- Intended scope: which task types, repositories, projects, commands, or events
+  the mechanism covers.
+- Exclusions: which operations should be ignored, discarded, or handled by a
+  lighter record.
+- Practicality: the manual steps removed, the new steps added, and the expected
+  operator cost.
+- Efficiency: the measurable proxy for speed or context reduction, such as
+  fewer file reads, shorter restore lists, fewer manual checks, or faster
+  retries.
+- Extensibility: how inserted user requests, AI-discovered subtasks, child
+  tasks, retries, and future trace/tree fields can be represented.
+- Quantitative source: which script, ledger, report, or section is the fact
+  source, and which text counts are only weak evidence.
+
+Prefer moving this gate into `codex_task_gate.py` or another read-only script
+when the check is deterministic. Keep judgement-heavy tradeoffs in this skill.
+
+## Thin Entry And Tooling Migration
+
+When the user asks to reduce `AGENTS.md` or README content, classify each rule
+before editing:
+
+1. Keep non-negotiable boundaries in `AGENTS.md`: read order, approval, Git,
+   safety, ownership, and conflict handling.
+2. Move judgement-heavy procedures to a skill: planning, task sizing, rule
+   promotion decisions, extraction tradeoffs, and examples that need context.
+3. Move deterministic checks to scripts: counts, section audits, validation,
+   status reports, and pass/fail evidence.
+4. Move runtime state to task tracking, pending tasks, project status, or the
+   script invocation ledger.
+5. Treat queues, token buckets, daemons, or monitors as program candidates only
+   when there is a proven need for continuous observation or scheduling.
+
+Before deleting large prose blocks, run the local read-only audit when available:
+
+```bash
+python scripts/rule_tooling_audit.py --paths AGENTS.md README.md --format markdown
+```
+
+Record the generated migration matrix in task tracking, then edit in small,
+reversible batches. If the audit only proves a candidate and not a completed
+migration, do not claim that `AGENTS.md` or README has already been reduced.
+
 ## Writeback
 
 If the approved work uses corrections or task tracking as evidence, record the
@@ -81,7 +134,7 @@ why anything was not promoted. Keep this writeback inside the approved scope.
 After editing a skill, run:
 
 ```bash
-python C:/Users/he/.codex/skills/.system/skill-creator/scripts/quick_validate.py .codex/skills/agents-rule-maintainer
+python <skill-creator>/scripts/quick_validate.py .codex/skills/agents-rule-maintainer
 ```
 
 For AGENTS rule edits, also run targeted text checks such as:

@@ -2,112 +2,53 @@
 param(
     [Parameter(Mandatory = $true)]
     [string]$TargetProjectPath,
-    [switch]$SkipSync,
+    [string]$RulesRepoPath = $PSScriptRoot,
+    [string]$EmbedPath = ".codex\ai-rules",
+    [string]$RemoteUrl,
+    [ValidateSet("clone", "submodule")]
+    [string]$Mode = "submodule",
+    [string]$Branch,
     [switch]$NoBackup,
-    [bool]$AutoRefresh = $true
+    [switch]$SkipRootEntry,
+    [switch]$SkipProjectPlaceholder
 )
 
 $ErrorActionPreference = "Stop"
-$RulesRepoPath = $PSScriptRoot
+
 if ([string]::IsNullOrWhiteSpace($RulesRepoPath)) {
     $RulesRepoPath = Split-Path -Parent $MyInvocation.MyCommand.Path
 }
-$TargetProjectPath = (Resolve-Path -LiteralPath $TargetProjectPath).Path
+
+function Resolve-RequiredPath {
+    param([string]$Path)
+    return (Resolve-Path -LiteralPath $Path).Path
+}
 
 function Join-ProjectPath {
     param([string]$RelativePath)
     return Join-Path $TargetProjectPath $RelativePath
 }
 
-function Join-RulesPath {
-    param([string]$RelativePath)
-    return Join-Path $RulesRepoPath $RelativePath
+function Write-Utf8NoBomFile {
+    param([string]$Path, [string]$Content)
+
+    $encoding = [System.Text.UTF8Encoding]::new($false)
+    [System.IO.File]::WriteAllText($Path, $Content, $encoding)
 }
 
-function Get-RelativeHashLines {
-    param([string]$RootPath)
-
-    $root = (Resolve-Path -LiteralPath $RootPath).Path.TrimEnd("\", "/")
-    $lines = @()
-    Get-ChildItem -LiteralPath $root -Recurse -File -Force |
-        Sort-Object FullName |
-        ForEach-Object {
-            $relative = $_.FullName.Substring($root.Length).TrimStart("\", "/")
-            $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash
-            $lines += "$relative|$hash"
-        }
-    return $lines
-}
-
-function Test-SameContent {
-    param([string]$SourcePath, [string]$TargetPath)
-
-    if (-not (Test-Path -LiteralPath $TargetPath)) {
-        return $false
-    }
-
-    $sourceItem = Get-Item -LiteralPath $SourcePath
-    $targetItem = Get-Item -LiteralPath $TargetPath
-    if ($sourceItem.PSIsContainer -ne $targetItem.PSIsContainer) {
-        return $false
-    }
-
-    if (-not $sourceItem.PSIsContainer) {
-        $sourceHash = (Get-FileHash -LiteralPath $SourcePath -Algorithm SHA256).Hash
-        $targetHash = (Get-FileHash -LiteralPath $TargetPath -Algorithm SHA256).Hash
-        return $sourceHash -eq $targetHash
-    }
-
-    $sourceLines = @(Get-RelativeHashLines -RootPath $SourcePath)
-    $targetLines = @(Get-RelativeHashLines -RootPath $TargetPath)
-    if ($sourceLines.Count -ne $targetLines.Count) {
-        return $false
-    }
-    for ($i = 0; $i -lt $sourceLines.Count; $i++) {
-        if ($sourceLines[$i] -ne $targetLines[$i]) {
-            return $false
-        }
-    }
-    return $true
-}
-
-function Backup-Or-RemoveTarget {
+function Backup-ExistingFile {
     param([string]$TargetPath, [string]$RelativeTarget, [string]$BackupRoot)
 
     if (-not (Test-Path -LiteralPath $TargetPath)) {
         return
     }
-
-    if (-not $NoBackup) {
-        $backup = Join-Path $BackupRoot $RelativeTarget
-        New-Item -ItemType Directory -Path (Split-Path -Parent $backup) -Force | Out-Null
-        Move-Item -LiteralPath $TargetPath -Destination $backup -Force
-    }
-    else {
-        Remove-Item -LiteralPath $TargetPath -Recurse -Force
-    }
-}
-
-function Copy-ManagedPath {
-    param(
-        [string]$SourceRelativePath,
-        [string]$TargetRelativePath,
-        [string]$BackupRoot
-    )
-
-    $source = Join-RulesPath -RelativePath $SourceRelativePath
-    $target = Join-ProjectPath -RelativePath $TargetRelativePath
-    if (-not (Test-Path -LiteralPath $source)) {
-        throw "Missing managed path in rules repo: $SourceRelativePath"
-    }
-
-    if (Test-SameContent -SourcePath $source -TargetPath $target) {
+    if ($NoBackup) {
+        Remove-Item -LiteralPath $TargetPath -Force
         return
     }
-
-    Backup-Or-RemoveTarget -TargetPath $target -RelativeTarget $TargetRelativePath -BackupRoot $BackupRoot
-    New-Item -ItemType Directory -Path (Split-Path -Parent $target) -Force | Out-Null
-    Copy-Item -LiteralPath $source -Destination $target -Recurse -Force
+    $backup = Join-Path $BackupRoot $RelativeTarget
+    New-Item -ItemType Directory -Path (Split-Path -Parent $backup) -Force | Out-Null
+    Move-Item -LiteralPath $TargetPath -Destination $backup -Force
 }
 
 function Write-GeneratedFile {
@@ -127,11 +68,57 @@ function Write-GeneratedFile {
         if ($existing.TrimEnd() -eq $Content.TrimEnd()) {
             return
         }
-        Backup-Or-RemoveTarget -TargetPath $target -RelativeTarget $RelativePath -BackupRoot $BackupRoot
+        Backup-ExistingFile -TargetPath $target -RelativeTarget $RelativePath -BackupRoot $BackupRoot
     }
 
     New-Item -ItemType Directory -Path (Split-Path -Parent $target) -Force | Out-Null
-    $Content | Set-Content -LiteralPath $target -Encoding UTF8
+    Write-Utf8NoBomFile -Path $target -Content $Content
+}
+
+function Invoke-Git {
+    param(
+        [string]$WorkingDirectory,
+        [string[]]$GitArgs
+    )
+
+    $oldPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $output = & git -C $WorkingDirectory @GitArgs 2>&1
+    $exitCode = $LASTEXITCODE
+    $ErrorActionPreference = $oldPreference
+    if ($exitCode -ne 0) {
+        throw "git -C $WorkingDirectory $($GitArgs -join ' ') failed with exit code $exitCode`n$($output -join "`n")"
+    }
+    if ($output) {
+        $output | Write-Host
+    }
+}
+
+function Test-GitSubmoduleRegistered {
+    param([string]$WorkingDirectory, [string]$RelativePath)
+
+    $oldPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $output = & git -C $WorkingDirectory ls-files --stage -- $RelativePath 2>$null
+    $exitCode = $LASTEXITCODE
+    $ErrorActionPreference = $oldPreference
+    if ($exitCode -ne 0 -or -not $output) {
+        return $false
+    }
+    return (($output -join "`n") -match "^160000\s")
+}
+
+function Test-GitWorkTree {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return $false
+    }
+    $oldPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $output = & git -C $Path rev-parse --is-inside-work-tree 2>$null
+    $exitCode = $LASTEXITCODE
+    $ErrorActionPreference = $oldPreference
+    return $exitCode -eq 0 -and (($output -join "").Trim() -eq "true")
 }
 
 function Get-RootAgentsContent {
@@ -142,25 +129,30 @@ function Get-RootAgentsContent {
         '',
         'This file is a thin entrypoint. Before working in this project, read:',
         '',
-        '1. `.codex/rules/common/AGENTS.md`',
+        '1. `.codex/ai-rules/AGENTS.md`',
         '2. `.codex/rules/project/AGENTS.md`',
         '',
-        'Common rules come from the `ai-rules` repository and cover collaboration,',
-        'approval, task sizing, Git boundaries, recovery, sub-agent coordination,',
-        'corrections, scripts, and rule sync.',
+        'If `.codex/ai-rules/` is missing, read `.codex/ai-rules-config.json`,',
+        'locate the configured ai-rules repository, embed it at `.codex/ai-rules/`,',
+        'then restart the read order.',
         '',
-        'Project rules belong to this project and cover local directories, business',
-        'context, documentation, source snapshots, deliverables, runtime behavior,',
-        'and maintenance requirements.',
+        '## Encoding',
+        '',
+        'On Windows/PowerShell, read rule files with explicit UTF-8. Set',
+        '`$OutputEncoding = [System.Text.UTF8Encoding]::new()` and',
+        '`[Console]::InputEncoding/OutputEncoding` to UTF-8 in the command scope,',
+        'then use `Get-Content -Encoding UTF8` or',
+        '`Get-Content -Raw -Encoding UTF8`.',
         '',
         '## Boundaries',
         '',
-        '- Do not write project-specific rules back to the common `ai-rules` repo.',
-        '- Update common rules only through `.codex/rules/common/`.',
-        '- Update project rules only through `.codex/rules/project/`, following',
-        '  approval, task tracking, validation, and Git boundaries.',
-        '- If common and project rules conflict, follow system/developer rules first,',
-        '  then the more specific project rule, without weakening common safety limits.'
+        '- `.codex/ai-rules/` is the embedded common rules Git repository.',
+        '- Git projects should register it as a submodule so the parent project',
+        '  records the exact ai-rules commit.',
+        '- `.codex/rules/project/` belongs to this project only.',
+        '- Do not write project-specific rules back to the common ai-rules repo.',
+        '- Before each new session, run `.codex/ai-rules/check-ai-rules-sync.ps1`',
+        '  or an equivalent wrapper and warn until the embedded repo is synchronized.'
     )
     return ($lines -join [Environment]::NewLine)
 }
@@ -172,7 +164,7 @@ function Get-ProjectRulesPlaceholder {
         '## Scope',
         '',
         '- This file records only this project''s specific rules.',
-        '- Common AI collaboration rules live in `.codex/rules/common/AGENTS.md`.',
+        '- Common AI collaboration rules live in `.codex/ai-rules/AGENTS.md`.',
         '- Do not write project-specific rules back to the common `ai-rules` repo.',
         '- Add local directory, business, documentation, source snapshot, runtime,',
         '  deliverable, and maintenance requirements here or in nearby Markdown files.'
@@ -180,59 +172,113 @@ function Get-ProjectRulesPlaceholder {
     return ($lines -join [Environment]::NewLine)
 }
 
-if (-not $SkipSync) {
-    $checkScript = Join-Path $RulesRepoPath "check-ai-rules-sync.ps1"
-    & powershell -ExecutionPolicy Bypass -File $checkScript -RulesRepoPath $RulesRepoPath -TargetProjectPath $TargetProjectPath -NoInstallRefresh
-    if ($LASTEXITCODE -ne 0) {
-        throw "AI rules pre-install sync failed with exit code $LASTEXITCODE"
+$TargetProjectPath = Resolve-RequiredPath -Path $TargetProjectPath
+$RulesRepoPath = Resolve-RequiredPath -Path $RulesRepoPath
+
+if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+    throw "git is not available in PATH"
+}
+
+$embedTarget = if ([System.IO.Path]::IsPathRooted($EmbedPath)) {
+    $EmbedPath
+}
+else {
+    Join-ProjectPath -RelativePath $EmbedPath
+}
+$embedParent = Split-Path -Parent $embedTarget
+New-Item -ItemType Directory -Path $embedParent -Force | Out-Null
+
+$source = if (-not [string]::IsNullOrWhiteSpace($RemoteUrl)) { $RemoteUrl } else { $RulesRepoPath }
+$relativeEmbed = $EmbedPath.Replace("\", "/")
+
+if (Test-Path -LiteralPath $embedTarget) {
+    if (-not (Test-GitWorkTree -Path $embedTarget)) {
+        throw "Embed path exists but is not a Git work tree: $embedTarget"
+    }
+    if ($Mode -eq "submodule") {
+        if (-not (Test-GitWorkTree -Path $TargetProjectPath)) {
+            throw "Submodule mode requires target project to be a Git work tree."
+        }
+        if (-not (Test-GitSubmoduleRegistered -WorkingDirectory $TargetProjectPath -RelativePath $relativeEmbed)) {
+            Invoke-Git -WorkingDirectory $TargetProjectPath -GitArgs @("submodule", "add", "--force", $source, $relativeEmbed)
+        }
+    }
+    Write-Host "Embedded ai-rules repo already exists: $embedTarget"
+}
+elseif ($Mode -eq "submodule") {
+    if (-not (Test-GitWorkTree -Path $TargetProjectPath)) {
+        throw "Submodule mode requires target project to be a Git work tree."
+    }
+    $args = @("submodule", "add")
+    if (-not [string]::IsNullOrWhiteSpace($Branch)) {
+        $args += @("-b", $Branch)
+    }
+    $args += @($source, $relativeEmbed)
+    Invoke-Git -WorkingDirectory $TargetProjectPath -GitArgs $args
+}
+else {
+    $args = @("clone")
+    if (-not [string]::IsNullOrWhiteSpace($Branch)) {
+        $args += @("-b", $Branch)
+    }
+    $args += @($source, $embedTarget)
+    $oldPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $output = & git @args 2>&1
+    $exitCode = $LASTEXITCODE
+    $ErrorActionPreference = $oldPreference
+    if ($exitCode -ne 0) {
+        throw "git $($args -join ' ') failed with exit code $exitCode`n$($output -join "`n")"
+    }
+    if ($output) {
+        $output | Write-Host
     }
 }
 
 $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $backupRoot = Join-Path $TargetProjectPath ".codex\ai-rules-backups\$timestamp"
 
-$managedPaths = @(
-    [ordered]@{ source = "AGENTS.md"; target = ".codex\rules\common\AGENTS.md"; type = "file" },
-    [ordered]@{ source = ".codex\skills\agents-rule-maintainer"; target = ".codex\skills\agents-rule-maintainer"; type = "directory" },
-    [ordered]@{ source = ".codex\skills\self-correction-planner"; target = ".codex\skills\self-correction-planner"; type = "directory" },
-    [ordered]@{ source = "scripts\agent_comm.py"; target = "scripts\agent_comm.py"; type = "file" },
-    [ordered]@{ source = "scripts\agent_group_status.py"; target = "scripts\agent_group_status.py"; type = "file" },
-    [ordered]@{ source = "scripts\scan_corrections.py"; target = "scripts\scan_corrections.py"; type = "file" },
-    [ordered]@{ source = "scripts\validate_doc_task.py"; target = "scripts\validate_doc_task.py"; type = "file" },
-    [ordered]@{ source = "scripts\validate_encoding.py"; target = "scripts\validate_encoding.py"; type = "file" },
-    [ordered]@{ source = "check-ai-rules-sync.ps1"; target = "check-ai-rules-sync.ps1"; type = "file" }
-)
-
-foreach ($path in $managedPaths) {
-    Copy-ManagedPath -SourceRelativePath $path["source"] -TargetRelativePath $path["target"] -BackupRoot $backupRoot
+if (-not $SkipRootEntry) {
+    Write-GeneratedFile -RelativePath "AGENTS.md" -Content (Get-RootAgentsContent) -BackupRoot $backupRoot
 }
-
-Write-GeneratedFile -RelativePath "AGENTS.md" -Content (Get-RootAgentsContent) -BackupRoot $backupRoot
-Write-GeneratedFile -RelativePath ".codex\rules\project\AGENTS.md" -Content (Get-ProjectRulesPlaceholder) -BackupRoot $backupRoot -OnlyIfMissing
+if (-not $SkipProjectPlaceholder) {
+    Write-GeneratedFile -RelativePath ".codex\rules\project\AGENTS.md" -Content (Get-ProjectRulesPlaceholder) -BackupRoot $backupRoot -OnlyIfMissing
+}
 
 $configDir = Join-Path $TargetProjectPath ".codex"
 New-Item -ItemType Directory -Path $configDir -Force | Out-Null
 $config = [ordered]@{
-    rulesRepoPath = $RulesRepoPath
+    schema_version = 3
+    mode = if ($Mode -eq "submodule") { "git-submodule" } else { "nested-git-clone" }
+    distributionMode = "embedded-git-repository"
     installedAt = (Get-Date).ToUniversalTime().ToString("o")
-    autoRefresh = $AutoRefresh
-    rootEntryPath = "AGENTS.md"
-    commonRulesPath = ".codex/rules/common/AGENTS.md"
-    projectRulesPath = ".codex/rules/project/AGENTS.md"
-    managedPaths = $managedPaths
-    preservedPaths = @(
-        ".codex/rules/project/",
-        ".codex/task-tracking/",
-        ".codex/pending-tasks/",
-        ".codex/agent-comm/",
-        ".codex/agent-groups/"
-    )
+    sourceRepoPath = $RulesRepoPath
+    embeddedRepoPath = $EmbedPath.Replace("\", "/")
+    commonEntry = ".codex/ai-rules/AGENTS.md"
+    projectEntry = ".codex/rules/project/AGENTS.md"
+    legacyCommonEntry = ".codex/rules/common/AGENTS.md"
+    syncPolicy = [ordered]@{
+        checkEverySession = $true
+        fetchIntervalHours = 24
+        warnUntilSynced = $true
+        autoFetch = $true
+        autoPull = $false
+        autoPush = $false
+        remote = "origin"
+    }
+    boundaries = [ordered]@{
+        commonRulesSource = ".codex/ai-rules/"
+        projectRulesSource = ".codex/rules/project/"
+        copyManagedPaths = $false
+        parentTracksEmbeddedCommit = ($Mode -eq "submodule")
+    }
 }
-$config | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $configDir "ai-rules-config.json") -Encoding UTF8
+Write-Utf8NoBomFile -Path (Join-Path $configDir "ai-rules-config.json") -Content ($config | ConvertTo-Json -Depth 8)
 
-Write-Host "AI common rules installed into $TargetProjectPath"
-Write-Host "Common rules: .codex/rules/common/AGENTS.md"
-Write-Host "Project rules: .codex/rules/project/AGENTS.md"
+Write-Host "AI rules embedded into $TargetProjectPath"
+Write-Host "Embedded repo: $EmbedPath"
+Write-Host "Common entry: .codex/ai-rules/AGENTS.md"
+Write-Host "Project entry: .codex/rules/project/AGENTS.md"
 if (-not $NoBackup) {
-    Write-Host "Changed managed files, if any, were backed up under $backupRoot"
+    Write-Host "Changed generated files, if any, were backed up under $backupRoot"
 }

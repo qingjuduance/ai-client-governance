@@ -1,81 +1,99 @@
 {
   "name": "ai-rules",
-  "description": "Reusable common Codex/AI collaboration rules.",
-  "schema_version": 2,
-  "rules_layout": {
-    "root_entry_target": "AGENTS.md",
-    "common_rules_source": "AGENTS.md",
-    "common_rules_target": ".codex/rules/common/AGENTS.md",
-    "project_rules_target": ".codex/rules/project/AGENTS.md",
-    "project_rules_policy": "create_placeholder_only"
+  "description": "Reusable common Codex/AI collaboration rules embedded as a complete Git repository.",
+  "schema_version": 3,
+  "distributionMode": "embedded-git-repository",
+  "recommendedEmbed": {
+    "targetPath": ".codex/ai-rules",
+    "defaultMethod": "git-submodule",
+    "preferredMethod": "git-submodule",
+    "fallbackMethod": "nested-git-clone",
+    "copyManagedPaths": false
   },
-  "managed_paths": [
-    {
-      "source": "AGENTS.md",
-      "target": ".codex/rules/common/AGENTS.md",
-      "type": "file"
-    },
-    {
-      "source": ".codex/skills/agents-rule-maintainer",
-      "target": ".codex/skills/agents-rule-maintainer",
-      "type": "directory"
-    },
-    {
-      "source": ".codex/skills/self-correction-planner",
-      "target": ".codex/skills/self-correction-planner",
-      "type": "directory"
-    },
-    {
-      "source": "scripts/agent_comm.py",
-      "target": "scripts/agent_comm.py",
-      "type": "file"
-    },
-    {
-      "source": "scripts/agent_group_status.py",
-      "target": "scripts/agent_group_status.py",
-      "type": "file"
-    },
-    {
-      "source": "scripts/scan_corrections.py",
-      "target": "scripts/scan_corrections.py",
-      "type": "file"
-    },
-    {
-      "source": "scripts/validate_doc_task.py",
-      "target": "scripts/validate_doc_task.py",
-      "type": "file"
-    },
-    {
-      "source": "scripts/validate_encoding.py",
-      "target": "scripts/validate_encoding.py",
-      "type": "file"
-    },
-    {
-      "source": "check-ai-rules-sync.ps1",
-      "target": "check-ai-rules-sync.ps1",
-      "type": "file"
-    }
+  "rulesLayout": {
+    "rootEntryTarget": "AGENTS.md",
+    "commonEntry": ".codex/ai-rules/AGENTS.md",
+    "projectEntry": ".codex/rules/project/AGENTS.md",
+    "legacyCommonEntry": ".codex/rules/common/AGENTS.md",
+    "legacyCommonPolicy": "compatibility-only"
+  },
+  "syncPolicy": {
+    "checkEverySession": true,
+    "fetchIntervalHours": 24,
+    "warnUntilSynced": true,
+    "autoFetch": true,
+    "autoPull": false,
+    "autoPush": false,
+    "remote": "origin",
+    "dirtyPolicy": "warn-every-session",
+    "behindPolicy": "warn-and-require-manual-pull",
+    "aheadPolicy": "warn-and-require-manual-push",
+    "divergedPolicy": "warn-and-require-manual-resolution",
+    "missingEmbeddedRepoPolicy": "embed-before-rule-work"
+  },
+  "writeback": {
+    "method": "git-commands-inside-embedded-repo",
+    "workingDirectory": ".codex/ai-rules",
+    "requireUserApprovalForPush": true,
+    "forbiddenSources": [
+      ".codex/rules/project/",
+      ".codex/task-tracking/",
+      ".codex/pending-tasks/",
+      ".codex/corrections/",
+      ".codex/tool-invocations/",
+      ".codex/project-status/",
+      "project-specific-documents"
+    ]
+  },
+  "repoContents": {
+    "commonRules": "AGENTS.md",
+    "skills": [
+      ".codex/skills/agents-rule-maintainer",
+      ".codex/skills/self-correction-planner"
+    ],
+    "scripts": [
+      "scripts/agent_comm.py",
+      "scripts/agent_group_status.py",
+      "scripts/codex_session_gate.py",
+      "scripts/codex_task_gate.py",
+      "scripts/codex_tool_invocations.py",
+      "scripts/codex_tool_flow.py",
+      "scripts/rule_tooling_audit.py",
+      "scripts/scan_corrections.py",
+      "scripts/validate_doc_task.py",
+      "scripts/validate_encoding.py",
+      "check-ai-rules-sync.ps1",
+      "install-ai-rules.ps1"
+    ]
+  },
+  "targetProjectGeneratedFiles": [
+    "AGENTS.md",
+    ".codex/ai-rules-config.json",
+    ".codex/rules/project/AGENTS.md"
   ],
-  "generated_paths": [
-    "AGENTS.md"
-  ],
-  "preserved_paths": [
+  "targetProjectPreservedPaths": [
     ".codex/rules/project/",
     ".codex/task-tracking/",
     ".codex/pending-tasks/",
     ".codex/agent-comm/",
-    ".codex/agent-groups/"
+    ".codex/agent-groups/",
+    ".codex/tool-invocations/",
+    ".codex/project-status/"
   ],
-  "sync_policy": {
-    "trigger": "new_session_start",
-    "interval_hours": 24,
-    "remote": "origin",
-    "merge_strategy": "git_pull_no_rebase",
-    "conflict_policy": "stop_and_report"
+  "legacyCompatibility": {
+    "schemaVersion2ManagedPaths": "deprecated",
+    "commonRulesCopyTarget": ".codex/rules/common/AGENTS.md",
+    "scriptsCopyTarget": "scripts/",
+    "skillsCopyTarget": ".codex/skills/",
+    "migration": "Embed this repository at .codex/ai-rules and update the project root AGENTS.md to read the embedded AGENTS.md first."
   },
-  "install": {
-    "config_path": ".codex/ai-rules-config.json",
-    "backup_dir": ".codex/ai-rules-backups",
-    "auto_refresh_default": true
+  "githubReadmeGate": {
+    "beforePush": true,
+    "requireCurrentAdvantages": true,
+    "sourceOfTruth": [
+      "README.md",
+      "manifest.json",
+      "AGENTS.md"
+    ]
   }
 }

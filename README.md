@@ -4,212 +4,213 @@
 
 | 项目 | 说明 |
 |---|---|
-| 用途 | 保存可跨电脑、跨项目复用的 Codex/AI 协作规则。 |
-| 通用规则源 | `AGENTS.md` |
-| 安装位置 | 目标项目 `.codex/rules/common/AGENTS.md` |
-| 项目规则位置 | 目标项目 `.codex/rules/project/AGENTS.md` |
-| 通用 skills | `.codex/skills/` |
-| 安装脚本 | `install-ai-rules.ps1` |
+| 仓库定位 | 可嵌入到任意项目的通用 Codex/AI 协作规则仓库。 |
+| 推荐嵌入位置 | 目标项目 `.codex/ai-rules/` |
+| 通用规则入口 | `.codex/ai-rules/AGENTS.md` |
+| 项目规则入口 | 目标项目 `.codex/rules/project/AGENTS.md` |
+| 机器清单 | `manifest.json` |
+| 嵌入脚本 | `install-ai-rules.ps1` |
 | 会话检查 | `check-ai-rules-sync.ps1` |
-| 同步脚本 | `sync-ai-rules.ps1` |
-| 文档门禁 | `scripts/validate_doc_task.py` |
-| 编码门禁 | `scripts/validate_encoding.py` |
-| 质量目标门禁 | `AGENTS.md` 的通用质量目标与新增能力门禁 |
-| 沉淀判断门禁 | `AGENTS.md` 的任务收口规则沉淀门禁 |
-| 日志门禁 | `AGENTS.md` 的日志优先与可观测性门禁 |
-| 归因门禁 | `AGENTS.md` 的端到端问题归因门禁 |
-| 自迭代门禁 | `AGENTS.md` 的门禁 warning 自迭代记录 |
+| 推荐嵌入方式 | Git submodule |
+| 默认同步策略 | 每次会话检查；最多 24 小时 fetch 一次；不自动 pull/push。 |
+| 回写方式 | 进入 `.codex/ai-rules/` 后使用普通 Git 命令提交和推送。 |
 
-本仓库只保存通用 AI 协作规则、通用脚本和安装同步工具，不保存某个项目的
-特殊文档体系、简历、学习正文、源码快照、路线材料或会话运行状态。
+这个仓库不是某个项目的 `.codex/rules/common/` 文件夹备份，而是一套完整的
+通用 AI 协作规则仓库。目标项目应把本仓库作为一个独立 Git 仓库嵌入进来，
+Git 项目默认用 submodule 记录精确规则版本，让通用规则、通用 skills、
+门禁脚本、README 和 manifest 保持完整上下文。
 
-## 使用方式
+## 当前优势
 
-在目标项目中安装规则：
+- **完整 Git 边界**：通用规则有自己的 commit、branch、remote 和 history；
+  Git submodule 让父项目只记录一个 gitlink commit，项目内修改通用规则时，
+  可以直接在 `.codex/ai-rules/` 用 Git 回写。
+- **不再依赖复制托管清单**：目标项目不需要把 common 规则、scripts、skills
+  分散复制到多个位置，避免复制漏项、旧文件覆盖和双向同步歧义。
+- **common/project 边界清楚**：本仓库只维护跨项目通用协作规则；项目业务、
+  文档体系、简历、源码快照和本地交付规则留在目标项目。
+- **每次会话都能发现不一致**：检查脚本每次运行都会检查 embedded repo 是否
+  missing、dirty、ahead、behind 或 diverged；一旦不一致，会持续提示到同步完成。
+- **24 小时只限制 fetch**：为了减少远端请求，默认最多 24 小时 fetch 一次；
+  但本地 dirty/ahead/behind/diverged 状态每次会话都会检查并提示。
+- **适合 GitHub 展示和复用**：README、manifest、AGENTS 和脚本共同说明如何嵌入、
+  如何维护边界、如何同步和如何把改动回写给上游。
 
-```powershell
-powershell -ExecutionPolicy Bypass -File <ai-rules-path>\install-ai-rules.ps1 -TargetProjectPath <target-project-path>
-```
+每次准备把本仓库上传或推送到 GitHub 前，都要回看本 README 的“当前优势”和
+`manifest.json`，确认它们真实反映当前仓库能力。新增门禁、skill、脚本或嵌入策略后，
+README 需要同步更新，方便别人一眼看懂这个仓库的价值。
 
-安装会把本仓库 `AGENTS.md` 安装到目标项目
-`.codex/rules/common/AGENTS.md`，并写入项目根 `AGENTS.md` 薄入口。
-薄入口负责依次读取 common 规则和 project 规则。
+## 给其它 AI 的使用约定
 
-项目特有规则归目标项目维护，默认位置是
-`.codex/rules/project/AGENTS.md`。如果该文件不存在，安装脚本只创建一个
-最小占位入口；如果已经存在，安装脚本不会覆盖、合并或重排它的正文。
+当用户在另一个项目里告诉你本仓库位置时，按这个顺序处理：
 
-若目标路径已有同名托管文件或目录且内容不同，脚本会先备份到
-`.codex/ai-rules-backups/`，再刷新 common 规则、通用 scripts、通用 skills
-和会话检查脚本。
+1. 读取本仓库 `README.md` 和 `manifest.json`，确认当前 schema、嵌入位置和同步策略。
+2. 在目标项目中嵌入完整仓库，推荐路径为 `.codex/ai-rules/`；
+   目标项目是 Git 仓库时默认使用 Git submodule。
+3. 更新目标项目根 `AGENTS.md` 为薄入口：先读 `.codex/ai-rules/AGENTS.md`，
+   再读 `.codex/rules/project/AGENTS.md`。
+4. 确认项目特有规则只放在 `.codex/rules/project/`，不要写回本仓库。
+5. 每次新会话先运行 `.codex/ai-rules/check-ai-rules-sync.ps1` 或目标项目根部
+   等价 wrapper；若提示不一致，必须提醒用户，直到 Git 同步完成。
 
-安装后，每次开启新的 Codex 会话时，先执行目标项目根目录下的：
+## 嵌入方式
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\check-ai-rules-sync.ps1
-```
+### 推荐：Git submodule
 
-检查脚本会读取 `.codex/ai-rules-config.json`，找到这份规则仓库；如果距离上次
-成功同步已经超过 24 小时，就执行一次拉取、合并和推送。未超过 24 小时时只输出
-跳过说明。
-
-## 同步行为
-
-`sync-ai-rules.ps1` 在规则仓库中执行：
-
-1. 检查 Git 仓库，不存在时初始化。
-2. 如果有本地规则变更，先提交到本地 Git。
-3. 如果配置了 `origin`，执行 `git pull --no-rebase --no-edit origin <branch>`。
-4. 合并没有冲突后执行 `git push -u origin <branch>`。
-5. 把本次同步、推送、commit 和结果写入 `.ai-rules-sync/state.json`。
-
-如果发生合并冲突，脚本会停止并保留现场，不会自动覆盖任何一方的规则。
-
-## 重构与新文档门禁
-
-重构目录、新建正式 Markdown、同步规则或批量处理文档时，收口前运行只读门禁：
+目标项目已经是 Git 仓库，且希望父仓库记录 ai-rules 的精确版本时，使用 submodule：
 
 ```powershell
-python scripts\validate_doc_task.py `
-  --root . `
-  --task-tracking .codex\task-tracking\<file>.md `
-  --mode new-doc `
-  --require-task-tracking
+git submodule add <ai-rules-url> .codex/ai-rules
+git submodule update --init --recursive
 ```
 
-脚本会检查本次触及 Markdown 是否存在常见漏项，例如 task tracking 必需小节、
-本机绝对路径、正式入口链接 `questions/`、缺少 `.references/`、README 可能需要
-同步、DoD 或影响面扫描未记录。脚本只报告问题，不自动修改 README、引用记录、
-pending、corrections 或 Git 状态。
+后续更新：
 
-## 编码门禁
+```powershell
+git -C .codex/ai-rules fetch origin
+git -C .codex/ai-rules pull --ff-only
+git add .gitmodules .codex/ai-rules
+git commit -m "chore: update embedded ai-rules"
+```
 
-在 Windows、PowerShell、Python 和 Git 混用场景中处理中文路径或中文内容时，
-收口前运行只读编码门禁：
+Git 官方文档把 submodule 定义为“把一个 Git 仓库作为另一个 Git 仓库的子目录”，
+这正是本仓库推荐模型：父项目记录所使用的规则版本，规则仓库保留独立历史。
+
+### 备选：嵌套 clone
+
+如果暂时不想让父仓库记录 submodule，也可以直接 clone：
+
+```powershell
+git clone <ai-rules-url-or-local-path> .codex/ai-rules
+```
+
+这种方式更轻，但父仓库不会自然记录嵌入规则版本。需要在目标项目 README、
+`.codex/ai-rules-config.json` 或 task tracking 中记录当前 commit。
+
+### 脚本辅助嵌入
+
+本仓库提供一个脚本化入口，默认使用 Git submodule，不复制 managed paths：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File <ai-rules-path>\install-ai-rules.ps1 `
+  -TargetProjectPath <target-project-path> `
+  -RemoteUrl <ai-rules-url>
+```
+
+脚本只做三件事：嵌入完整仓库、写目标项目薄入口、写 `.codex/ai-rules-config.json`。
+它不会把 `AGENTS.md`、scripts 或 skills 分散复制到目标项目根目录。
+如果目标项目不是 Git 仓库，或明确不希望父仓库记录 ai-rules 提交，才传
+`-Mode clone` 使用 nested clone。
+
+## 目标项目结构
+
+```text
+target-project/
+├── AGENTS.md
+└── .codex/
+    ├── ai-rules/
+    │   ├── AGENTS.md
+    │   ├── README.md
+    │   ├── manifest.json
+    │   ├── scripts/
+    │   └── .codex/skills/
+    ├── ai-rules-config.json
+    └── rules/
+        └── project/
+            └── AGENTS.md
+```
+
+- `AGENTS.md`：目标项目薄入口，不承载完整规则正文。
+- `.codex/ai-rules/`：本仓库的完整 Git 工作树，是通用规则事实源。
+- `.codex/rules/project/`：目标项目维护的本地规则，不写回本仓库。
+- `.codex/rules/common/`：旧复制模型的兼容路径；新项目不要再把它当事实源。
+
+## 每次会话检查
+
+在目标项目根目录运行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\.codex\ai-rules\check-ai-rules-sync.ps1 `
+  -TargetProjectPath .
+```
+
+检查脚本只读检查嵌入仓库状态，默认行为如下：
+
+- 每次会话都检查 `.codex/ai-rules` 是否存在、是否为 Git 仓库、是否有 dirty 改动。
+- 如果上次 fetch 已超过 24 小时，执行一次 `git fetch`；未超过 24 小时则跳过 fetch。
+- 无论是否 fetch，都会比较本地 HEAD 与 upstream，发现 ahead、behind 或 diverged
+  就提示用户。
+- 不自动 `git pull`，因为 pull 可能修改规则工作树。
+- 不自动 `git push`，因为 push 需要用户明确确认远端边界。
+- warning 会每次出现，直到用户在 `.codex/ai-rules/` 中完成同步。
+
+常见处理命令：
+
+```powershell
+git -C .codex/ai-rules status
+git -C .codex/ai-rules pull --ff-only
+git -C .codex/ai-rules push
+```
+
+如果出现 diverged 或冲突，停止自动处理，保留现场，让用户决定 merge、rebase
+或拆分提交。
+
+## 写回通用规则
+
+修改通用规则时，直接在嵌入仓库中工作：
+
+```powershell
+cd .codex/ai-rules
+git status
+git add AGENTS.md README.md manifest.json scripts
+git commit -m "docs: update common AI rules"
+git push origin main
+```
+
+不要把目标项目 `.codex/rules/project/`、`.codex/task-tracking/`、
+`.codex/pending-tasks/`、`.codex/corrections/`、`.codex/tool-invocations/`
+或业务文档写回本仓库。
+
+## 通用与项目规则边界
+
+纳入本仓库：
+
+- AI 协作审批、任务量评估、恢复现场、Git 边界和子 AI 协作。
+- corrections、pending、task tracking、门禁脚本、编码检查和脚本维护要求。
+- 可跨项目复用的 Codex skills 和只读维护脚本。
+- 嵌入、同步检查、Git 回写和 README/manifest 自描述规则。
+
+不纳入本仓库：
+
+- 目标项目业务规则、目录结构、学习路线、简历规则和交付物规则。
+- 目标项目 `.codex/rules/project/`。
+- 目标项目 task tracking、pending、corrections、tool invocation 账本。
+- 外部项目状态、日志、源码快照、构建产物和本地临时验证目录。
+
+## Legacy 兼容说明
+
+旧版本使用 `managed_paths` 把通用规则复制到 `.codex/rules/common/`，
+还会复制 scripts 和 skills。这个模型已经降级为 legacy：
+
+- 新项目默认使用 `.codex/ai-rules/` 完整嵌入。
+- `.codex/rules/common/` 只作为迁移期间 fallback，不再作为通用规则事实源。
+- `manifest.json` schema 3 不再声明 `managed_paths`。
+- 如需迁移旧项目，先嵌入完整仓库，再把根 `AGENTS.md` 改为读取
+  `.codex/ai-rules/AGENTS.md` 和 `.codex/rules/project/AGENTS.md`。
+
+## 验证建议
+
+修改本仓库后，至少运行：
 
 ```powershell
 $env:PYTHONUTF8 = "1"
-$env:PYTHONIOENCODING = "utf-8"
-python scripts\validate_encoding.py `
-  --root . `
-  --paths AGENTS.md README.md .\scripts `
-  --windows-powershell51 `
-  --smoke `
-  --strict
+$env:PYTHONPYCACHEPREFIX = ".codex\cache\python-pycache"
+python scripts\validate_encoding.py --paths AGENTS.md README.md manifest.json scripts --require-paths
+python -m py_compile scripts\codex_session_gate.py scripts\codex_task_gate.py scripts\codex_tool_flow.py
+python scripts\codex_session_gate.py --help
+python scripts\codex_task_gate.py --help
+python scripts\codex_tool_flow.py --help
 ```
 
-脚本会检查目标文本文件是否可按 UTF-8 读取，并提示常见风险：PowerShell
-`Get-Content`、`Set-Content`、`Out-File`、`Add-Content` 缺少 `-Encoding`，
-Python 文本 I/O 缺少 `encoding="utf-8"`，以及 Windows PowerShell 5.1 读取
-非 ASCII `.ps1` 时可能需要 BOM 或解析器验证。脚本只报告问题，不自动转码或重写文件。
-
-## 通用质量目标门禁
-
-新增或大幅修改功能、规则、脚本、自动化、流程、模板、文档机制、验证策略或协作方式时，
-不能只完成眼前产物，还要检查它是否满足通用质量目标：自我迭代升级、系统化、流程化、
-内容准确化、可量化、减少错误和复发、降低 token/context 输入量、减少无效上下文和提速。
-
-task tracking 需要填写“通用质量目标记录”，用可验证的代理指标说明效果，例如
-warning/error 数量变化、复发次数、验证命令通过数、人工步骤减少数、读取文件数、
-`rg` 查询数、必读文件清单长度、brief 行数、脚本化检查项数、恢复读取清单长度、
-未确认推断数量和剩余观察项。没有真实 token 统计时，只能说明降低上下文输入量，
-不能声称精确节省 token。
-
-## 任务收口规则沉淀门禁
-
-每个任务收口前都要判断：用户的新要求、纠错、反复强调的做法、流程变化、
-脚本或模板更新，是否应该沉淀到要求文档。不能只把本次点名的事情做完，
-却忘记判断其它项目以后是否也要遵守。
-
-判断结论必须落到明确位置：不沉淀、通用规则、项目特有规则、README/索引、
-task tracking 模板、DoD、correction、pending、skill、脚本或检查清单。
-跨项目通用、重复出现、影响审批、验证、Git、编码、上下文成本、子 AI、
-日志、归因或规则同步的要求，默认进入 common 规则候选；只属于当前项目业务、
-文档体系、学习路线、简历或私有目录结构的要求，默认进入 project 规则候选。
-
-## 日志优先与可观测性门禁
-
-处理代码项目、Mod、插件、脚本、工具链、构建、运行或调试问题时，通用规则要求先找
-日志和诊断输出，再决定是否改代码。适用日志包括 stdout/stderr、构建输出、测试输出、
-崩溃转储、平台事件日志、游戏引擎日志、插件加载日志、外部命令输出、监控指标和 trace。
-
-如果没有日志，必须在 task tracking 记录“日志缺失/不足”，优先开启 debug/verbose、
-dry-run、最小复现或补最小诊断日志。Mod、插件和框架扩展优先使用宿主平台 logger；
-日志要能带上事件名、组件入口、关联 ID、退出码、耗时、fallback、重试和脱敏后的参数摘要。
-最终回复要说明依据的日志证据，以及未解决时下一步最该查看的具体日志或诊断命令。
-
-## 端到端问题归因门禁
-
-跨端数据、接口、插件、客户端、后端、脚本管道或多组件协作问题，不能把错误暴露端
-直接当成根因端。客户端获取数据时报错时，要同时检查插件上传数据、请求 payload、
-后端入参解析、业务处理、存储或缓存中间态、返回组装、客户端接收、客户端解析和输出处理。
-
-task tracking 要填写端到端归因矩阵和字段生命周期记录。每段都要写证据、当前判断、
-是否已排除和下一步验证。只有确认上游输入、中间态、返回组装和客户端解析的证据后，
-才能决定修复点；下游兜底不能掩盖真正根因。
-
-## 门禁 warning 自迭代
-
-门禁脚本发现本轮新增 warning 或 error 时，不能只修到通过。必须在 task tracking
-记录触发命令、warning 摘要、涉及文件、根因、修复前后数量、防复发动作和是否需要
-correction、规则、提示词或脚本升级。
-
-写 task tracking、correction、`.references` 或 README 前，先检查是否写了本机绝对路径、
-本次 checked files 是否都进 tracking、新建 `.references` 是否进已处理文件、普通说明行
-是否过长、敏感信息是否脱敏。目标是让同类 warning 复发次数下降，同时减少重复全文读取、
-上下文输入和临场排查成本。
-
-## 远程仓库
-
-首次使用远程仓库时，在本目录执行：
-
-```powershell
-git remote add origin git@github.com:your-name/ai-rules.git
-powershell -ExecutionPolicy Bypass -File .\sync-ai-rules.ps1
-```
-
-如果没有配置 remote，脚本只维护本地 Git 和同步状态，不会尝试推送。
-
-## 规则分层
-
-目标项目最终结构：
-
-```text
-AGENTS.md
-.codex/
-  rules/
-    common/
-      AGENTS.md
-    project/
-      AGENTS.md
-```
-
-- 根 `AGENTS.md` 只是入口，不承载完整规则正文。
-- `.codex/rules/common/` 由本仓库同步维护。
-- `.codex/rules/project/` 由目标项目维护，写项目特有规则。
-- 通用规则知道 project 规则位置，并要求每次任务先读取 project 入口。
-- 通用规则不得把 project 规则内容写回本仓库。
-
-## 托管范围
-
-纳入同步：
-
-- `AGENTS.md`，安装目标为 `.codex/rules/common/AGENTS.md`
-- `.codex/skills/agents-rule-maintainer/`
-- `.codex/skills/self-correction-planner/`
-- `scripts/agent_comm.py`
-- `scripts/agent_group_status.py`
-- `scripts/scan_corrections.py`
-- `scripts/validate_doc_task.py`
-- `scripts/validate_encoding.py`
-- `check-ai-rules-sync.ps1`
-
-不纳入同步：
-
-- 目标项目 `.codex/rules/project/`
-- 目标项目已有的项目特有 skills
-- `.codex/task-tracking/`
-- `.codex/pending-tasks/`
-- `.codex/agent-comm/`
-- `.codex/agent-groups/`
-- 某个项目的文档架构、学习路线、简历规则、源码快照和会话运行日志。
+修改 PowerShell 脚本后，还要用 PowerShell Parser 做语法检查，并在临时目录跑最小
+真实用例：嵌入仓库、写 config、运行每次会话检查、验证 warning/OK 输出符合预期。
