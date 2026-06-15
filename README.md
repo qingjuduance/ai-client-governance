@@ -9,7 +9,7 @@
 | 通用规则入口 | `.codex/ai-rules/AGENTS.md` |
 | 项目规则入口 | 目标项目 `.codex/rules/project/AGENTS.md` |
 | 机器清单 | `manifest.json` |
-| 嵌入脚本 | `install-ai-rules.ps1` |
+| 嵌入脚本 | `install-ai-rules.ps1`，一键嵌入并生成目标项目配置。 |
 | 会话检查 | `check-ai-rules-sync.ps1` |
 | 推荐嵌入方式 | Git submodule |
 | 默认同步策略 | 每次会话检查；最多 24 小时 fetch 一次；不自动 pull/push。 |
@@ -64,6 +64,14 @@ git submodule add <ai-rules-url> .codex/ai-rules
 git submodule update --init --recursive
 ```
 
+如果 `<ai-rules-url>` 是本机路径，尤其是相对路径或 `file://` URL，Git 可能默认
+禁止 file transport。手工执行时使用：
+
+```powershell
+git -c protocol.file.allow=always submodule add <local-ai-rules-path> .codex/ai-rules
+git submodule update --init --recursive
+```
+
 后续更新：
 
 ```powershell
@@ -89,7 +97,8 @@ git clone <ai-rules-url-or-local-path> .codex/ai-rules
 
 ### 脚本辅助嵌入
 
-本仓库提供一个脚本化入口，默认使用 Git submodule，不复制 managed paths：
+本仓库提供一个一键安装入口。常见流程是先把本仓库 clone 到本机，然后从
+本仓库目录运行安装脚本，并传入目标项目根路径：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File <ai-rules-path>\install-ai-rules.ps1 `
@@ -97,8 +106,59 @@ powershell -ExecutionPolicy Bypass -File <ai-rules-path>\install-ai-rules.ps1 `
   -RemoteUrl <ai-rules-url>
 ```
 
-脚本只做三件事：嵌入完整仓库、写目标项目薄入口、写 `.codex/ai-rules-config.json`。
-它不会把 `AGENTS.md`、scripts 或 skills 分散复制到目标项目根目录。
+如果省略 `-RemoteUrl`，脚本会优先读取当前 `ai-rules` 仓库的 `origin` URL；
+如果没有 remote，才退回使用本地仓库路径作为来源。脚本默认使用当前
+`ai-rules` 分支作为 submodule branch，也可以显式传入 `-Branch main`。
+
+安装前可先预演：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File <ai-rules-path>\install-ai-rules.ps1 `
+  -TargetProjectPath <target-project-path> `
+  -PlanOnly
+```
+
+或者使用 PowerShell 原生预演：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File <ai-rules-path>\install-ai-rules.ps1 `
+  -TargetProjectPath <target-project-path> `
+  -WhatIf
+```
+
+脚本默认完成：
+
+- 把完整 `ai-rules` 仓库嵌入到 `.codex/ai-rules/`，Git 项目默认用 submodule。
+- 写目标项目根 `AGENTS.md` 薄入口。
+- 仅在缺失时创建 `.codex/rules/project/AGENTS.md` 项目规则占位。
+- 写 `.codex/ai-rules-config.json`，记录 source URL、submodule path、branch
+  和同步策略。
+- 安装后运行 `.codex/ai-rules/check-ai-rules-sync.ps1 -NoFetch` 做本地一致性检查。
+
+已有文件和目录的处理策略：
+
+- `AGENTS.md` 已存在：默认备份到 `.codex/ai-rules-backups/<timestamp>/`
+  后重写薄入口；传 `-SkipRootEntry` 可跳过。
+- `.codex/ai-rules-config.json` 已存在：默认备份后重写，保持配置事实源最新。
+- `.codex/rules/project/AGENTS.md` 已存在：默认保留，不覆盖。
+- `.codex/ai-rules/` 已存在且是已注册 submodule：不重复添加，只继续配置检查。
+- `.codex/ai-rules/` 已存在但不是 Git 仓库：停止并提示用户手工处理。
+- `.codex/ai-rules/` 是 Git 仓库但未注册为 submodule：默认停止；确认要接管时，
+  重新运行并传 `-AdoptExistingGitRepo`。
+- 目标项目不是 Git 仓库且使用默认 submodule 模式：停止；可先 `git init`，
+  或显式传 `-Mode clone`。
+
+脚本不会自动 commit 或 push。`git submodule add` 会修改父项目的 `.gitmodules`
+和 gitlink，安装后仍要人工 review：
+
+```powershell
+git status
+git diff --cached
+git add .gitmodules .codex/ai-rules AGENTS.md `
+  .codex/ai-rules-config.json .codex/rules/project/AGENTS.md
+git commit -m "chore: embed ai-rules"
+```
+
 如果目标项目不是 Git 仓库，或明确不希望父仓库记录 ai-rules 提交，才传
 `-Mode clone` 使用 nested clone。
 
@@ -193,7 +253,7 @@ git push origin main
 还会复制 scripts 和 skills。这个模型已经降级为 legacy：
 
 - 新项目默认使用 `.codex/ai-rules/` 完整嵌入。
-- `.codex/rules/common/` 只作为迁移期间 fallback，不再作为通用规则事实源。
+- `.codex/rules/common/` 只作为历史迁移说明，不再作为读取 fallback 或通用规则事实源。
 - `manifest.json` schema 3 不再声明 `managed_paths`。
 - 如需迁移旧项目，先嵌入完整仓库，再把根 `AGENTS.md` 改为读取
   `.codex/ai-rules/AGENTS.md` 和 `.codex/rules/project/AGENTS.md`。

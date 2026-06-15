@@ -1,4 +1,4 @@
-[CmdletBinding()]
+[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = "Medium")]
 param(
     [Parameter(Mandatory = $true)]
     [string]$TargetProjectPath,
@@ -8,9 +8,12 @@ param(
     [ValidateSet("clone", "submodule")]
     [string]$Mode = "submodule",
     [string]$Branch,
+    [switch]$PlanOnly,
+    [switch]$AdoptExistingGitRepo,
     [switch]$NoBackup,
     [switch]$SkipRootEntry,
-    [switch]$SkipProjectPlaceholder
+    [switch]$SkipProjectPlaceholder,
+    [switch]$SkipSyncCheck
 )
 
 $ErrorActionPreference = "Stop"
@@ -36,19 +39,53 @@ function Write-Utf8NoBomFile {
     [System.IO.File]::WriteAllText($Path, $Content, $encoding)
 }
 
+function Invoke-InstallAction {
+    param(
+        [string]$Description,
+        [scriptblock]$Action
+    )
+
+    if ($PlanOnly) {
+        Write-Host "PLAN: $Description"
+        return $true
+    }
+    if ($PSCmdlet.ShouldProcess($TargetProjectPath, $Description)) {
+        & $Action
+        return $true
+    }
+    Write-Host "Skipped: $Description"
+    return $false
+}
+
+function Assert-UnderTargetProject {
+    param([string]$Path)
+
+    $full = [System.IO.Path]::GetFullPath($Path).TrimEnd("\", "/")
+    $root = [System.IO.Path]::GetFullPath($TargetProjectPath).TrimEnd("\", "/")
+    $rootWithSeparator = $root + [System.IO.Path]::DirectorySeparatorChar
+    if ($full -ne $root -and -not $full.StartsWith($rootWithSeparator, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Refusing to modify a path outside the target project: $Path"
+    }
+}
+
 function Backup-ExistingFile {
     param([string]$TargetPath, [string]$RelativeTarget, [string]$BackupRoot)
 
     if (-not (Test-Path -LiteralPath $TargetPath)) {
-        return
+        return $true
     }
+    Assert-UnderTargetProject -Path $TargetPath
     if ($NoBackup) {
-        Remove-Item -LiteralPath $TargetPath -Force
-        return
+        return Invoke-InstallAction -Description "Remove existing $RelativeTarget without backup" -Action {
+            Remove-Item -LiteralPath $TargetPath -Force
+        }
     }
     $backup = Join-Path $BackupRoot $RelativeTarget
-    New-Item -ItemType Directory -Path (Split-Path -Parent $backup) -Force | Out-Null
-    Move-Item -LiteralPath $TargetPath -Destination $backup -Force
+    Assert-UnderTargetProject -Path $backup
+    return Invoke-InstallAction -Description "Back up existing $RelativeTarget to $backup" -Action {
+        New-Item -ItemType Directory -Path (Split-Path -Parent $backup) -Force | Out-Null
+        Move-Item -LiteralPath $TargetPath -Destination $backup -Force
+    }
 }
 
 function Write-GeneratedFile {
@@ -62,20 +99,50 @@ function Write-GeneratedFile {
     $target = Join-ProjectPath -RelativePath $RelativePath
     if (Test-Path -LiteralPath $target) {
         if ($OnlyIfMissing) {
+            Write-Host "Keeping existing $RelativePath; placeholder was skipped."
             return
         }
         $existing = Get-Content -LiteralPath $target -Raw -Encoding UTF8
         if ($existing.TrimEnd() -eq $Content.TrimEnd()) {
+            Write-Host "$RelativePath is already up to date."
             return
         }
-        Backup-ExistingFile -TargetPath $target -RelativeTarget $RelativePath -BackupRoot $BackupRoot
+        $backupSucceeded = Backup-ExistingFile -TargetPath $target -RelativeTarget $RelativePath -BackupRoot $BackupRoot
+        if (-not $backupSucceeded) {
+            Write-Warning "Did not update $RelativePath because the existing file was not backed up or removed."
+            return
+        }
     }
 
-    New-Item -ItemType Directory -Path (Split-Path -Parent $target) -Force | Out-Null
-    Write-Utf8NoBomFile -Path $target -Content $Content
+    Assert-UnderTargetProject -Path $target
+    Invoke-InstallAction -Description "Write generated $RelativePath" -Action {
+        New-Item -ItemType Directory -Path (Split-Path -Parent $target) -Force | Out-Null
+        Write-Utf8NoBomFile -Path $target -Content $Content
+    } | Out-Null
 }
 
 function Invoke-Git {
+    param(
+        [string]$WorkingDirectory,
+        [string[]]$GitArgs,
+        [string[]]$GitOptions = @()
+    )
+
+    $oldPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $output = & git @GitOptions -C $WorkingDirectory @GitArgs 2>&1
+    $exitCode = $LASTEXITCODE
+    $ErrorActionPreference = $oldPreference
+    if ($exitCode -ne 0) {
+        $displayArgs = @($GitOptions + @("-C", $WorkingDirectory) + $GitArgs)
+        throw "git $($displayArgs -join ' ') failed with exit code $exitCode`n$($output -join "`n")"
+    }
+    if ($output) {
+        $output | Write-Host
+    }
+}
+
+function Invoke-GitText {
     param(
         [string]$WorkingDirectory,
         [string[]]$GitArgs
@@ -86,11 +153,9 @@ function Invoke-Git {
     $output = & git -C $WorkingDirectory @GitArgs 2>&1
     $exitCode = $LASTEXITCODE
     $ErrorActionPreference = $oldPreference
-    if ($exitCode -ne 0) {
-        throw "git -C $WorkingDirectory $($GitArgs -join ' ') failed with exit code $exitCode`n$($output -join "`n")"
-    }
-    if ($output) {
-        $output | Write-Host
+    return [pscustomobject]@{
+        ExitCode = $exitCode
+        Text = (($output -join "`n").Trim())
     }
 }
 
@@ -119,6 +184,75 @@ function Test-GitWorkTree {
     $exitCode = $LASTEXITCODE
     $ErrorActionPreference = $oldPreference
     return $exitCode -eq 0 -and (($output -join "").Trim() -eq "true")
+}
+
+function Test-GitRepoRoot {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return $false
+    }
+    $topLevel = Invoke-GitText -WorkingDirectory $Path -GitArgs @("rev-parse", "--show-toplevel")
+    if ($topLevel.ExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($topLevel.Text)) {
+        return $false
+    }
+    $expected = [System.IO.Path]::GetFullPath($Path).TrimEnd("\", "/")
+    $actual = [System.IO.Path]::GetFullPath($topLevel.Text).TrimEnd("\", "/")
+    return $expected -eq $actual
+}
+
+function Get-DefaultRulesSource {
+    if (-not [string]::IsNullOrWhiteSpace($RemoteUrl)) {
+        return $RemoteUrl
+    }
+
+    $remote = Invoke-GitText -WorkingDirectory $RulesRepoPath -GitArgs @("remote", "get-url", "origin")
+    if ($remote.ExitCode -eq 0 -and -not [string]::IsNullOrWhiteSpace($remote.Text)) {
+        return $remote.Text
+    }
+
+    return $RulesRepoPath
+}
+
+function Get-DefaultBranch {
+    if (-not [string]::IsNullOrWhiteSpace($Branch)) {
+        return $Branch
+    }
+
+    $currentBranch = Invoke-GitText -WorkingDirectory $RulesRepoPath -GitArgs @("branch", "--show-current")
+    if ($currentBranch.ExitCode -eq 0 -and -not [string]::IsNullOrWhiteSpace($currentBranch.Text)) {
+        return $currentBranch.Text
+    }
+
+    return $null
+}
+
+function Get-SubmoduleGitOptions {
+    param([string]$Source)
+
+    if ([string]::IsNullOrWhiteSpace($Source)) {
+        return @()
+    }
+    if ($Source.StartsWith("file:", [System.StringComparison]::OrdinalIgnoreCase)) {
+        return @("-c", "protocol.file.allow=always")
+    }
+    if ([System.IO.Path]::IsPathRooted($Source)) {
+        return @("-c", "protocol.file.allow=always")
+    }
+    if ($Source.StartsWith(".", [System.StringComparison]::OrdinalIgnoreCase) -or
+        $Source.StartsWith("~", [System.StringComparison]::OrdinalIgnoreCase) -or
+        $Source.StartsWith("/", [System.StringComparison]::OrdinalIgnoreCase) -or
+        $Source.StartsWith("\", [System.StringComparison]::OrdinalIgnoreCase) -or
+        $Source.Contains("\")) {
+        return @("-c", "protocol.file.allow=always")
+    }
+    if (-not ($Source -match "^[A-Za-z][A-Za-z0-9+.-]*://") -and
+        -not ($Source -match "^[^/\\@]+@[^/\\:]+:.+")) {
+        $targetRelative = Join-Path $TargetProjectPath $Source
+        if (Test-Path -LiteralPath $targetRelative) {
+            return @("-c", "protocol.file.allow=always")
+        }
+    }
+    return @()
 }
 
 function Get-RootAgentsContent {
@@ -185,54 +319,97 @@ $embedTarget = if ([System.IO.Path]::IsPathRooted($EmbedPath)) {
 else {
     Join-ProjectPath -RelativePath $EmbedPath
 }
+$embedTarget = [System.IO.Path]::GetFullPath($embedTarget)
+Assert-UnderTargetProject -Path $embedTarget
 $embedParent = Split-Path -Parent $embedTarget
-New-Item -ItemType Directory -Path $embedParent -Force | Out-Null
 
-$source = if (-not [string]::IsNullOrWhiteSpace($RemoteUrl)) { $RemoteUrl } else { $RulesRepoPath }
+$source = Get-DefaultRulesSource
+$effectiveBranch = Get-DefaultBranch
+$submoduleGitOptions = Get-SubmoduleGitOptions -Source $source
 $relativeEmbed = $EmbedPath.Replace("\", "/")
 
+Write-Host "AI rules install preflight"
+Write-Host "- Target project: $TargetProjectPath"
+Write-Host "- Rules repo path: $RulesRepoPath"
+Write-Host "- Source: $source"
+Write-Host "- Mode: $Mode"
+Write-Host "- Embed path: $relativeEmbed"
+if (-not [string]::IsNullOrWhiteSpace($effectiveBranch)) {
+    Write-Host "- Branch: $effectiveBranch"
+}
+if ($PlanOnly) {
+    Write-Host "- Plan only: no files or Git state will be changed."
+}
+
 if (Test-Path -LiteralPath $embedTarget) {
-    if (-not (Test-GitWorkTree -Path $embedTarget)) {
-        throw "Embed path exists but is not a Git work tree: $embedTarget"
+    if (-not (Test-GitRepoRoot -Path $embedTarget)) {
+        throw "Embed path exists but is not an ai-rules Git repository root: $embedTarget. Move it, remove it manually, or choose another -EmbedPath."
     }
     if ($Mode -eq "submodule") {
-        if (-not (Test-GitWorkTree -Path $TargetProjectPath)) {
-            throw "Submodule mode requires target project to be a Git work tree."
+        if (-not (Test-GitRepoRoot -Path $TargetProjectPath)) {
+            throw "Submodule mode requires target project path to be a Git repository root."
         }
         if (-not (Test-GitSubmoduleRegistered -WorkingDirectory $TargetProjectPath -RelativePath $relativeEmbed)) {
-            Invoke-Git -WorkingDirectory $TargetProjectPath -GitArgs @("submodule", "add", "--force", $source, $relativeEmbed)
+            if (-not $AdoptExistingGitRepo) {
+                throw "Embed path exists as a Git work tree but is not registered as a submodule: $relativeEmbed. Review it first, then rerun with -AdoptExistingGitRepo to register it."
+            }
+            $gitArgs = @("submodule", "add", "--force")
+            if (-not [string]::IsNullOrWhiteSpace($effectiveBranch)) {
+                $gitArgs += @("-b", $effectiveBranch)
+            }
+            $gitArgs += @($source, $relativeEmbed)
+            Invoke-InstallAction -Description "Register existing Git work tree as submodule at $relativeEmbed" -Action {
+                Invoke-Git -WorkingDirectory $TargetProjectPath -GitArgs $gitArgs -GitOptions $submoduleGitOptions
+            } | Out-Null
+        }
+        else {
+            Write-Host "Submodule already registered: $relativeEmbed"
         }
     }
     Write-Host "Embedded ai-rules repo already exists: $embedTarget"
 }
 elseif ($Mode -eq "submodule") {
-    if (-not (Test-GitWorkTree -Path $TargetProjectPath)) {
-        throw "Submodule mode requires target project to be a Git work tree."
+    if (-not (Test-GitRepoRoot -Path $TargetProjectPath)) {
+        throw "Submodule mode requires target project path to be a Git repository root."
     }
-    $args = @("submodule", "add")
-    if (-not [string]::IsNullOrWhiteSpace($Branch)) {
-        $args += @("-b", $Branch)
+    $targetStatus = Invoke-GitText -WorkingDirectory $TargetProjectPath -GitArgs @("-c", "core.quotepath=false", "status", "--porcelain")
+    if ($targetStatus.ExitCode -eq 0 -and -not [string]::IsNullOrWhiteSpace($targetStatus.Text)) {
+        Write-Warning "Target project already has uncommitted changes. This script will not commit or push; review repository status after install."
     }
-    $args += @($source, $relativeEmbed)
-    Invoke-Git -WorkingDirectory $TargetProjectPath -GitArgs $args
+    Invoke-InstallAction -Description "Create embed parent directory $embedParent" -Action {
+        New-Item -ItemType Directory -Path $embedParent -Force | Out-Null
+    } | Out-Null
+    $gitArgs = @("submodule", "add")
+    if (-not [string]::IsNullOrWhiteSpace($effectiveBranch)) {
+        $gitArgs += @("-b", $effectiveBranch)
+    }
+    $gitArgs += @($source, $relativeEmbed)
+    Invoke-InstallAction -Description "Add ai-rules as Git submodule at $relativeEmbed" -Action {
+        Invoke-Git -WorkingDirectory $TargetProjectPath -GitArgs $gitArgs -GitOptions $submoduleGitOptions
+    } | Out-Null
 }
 else {
-    $args = @("clone")
-    if (-not [string]::IsNullOrWhiteSpace($Branch)) {
-        $args += @("-b", $Branch)
+    Invoke-InstallAction -Description "Create embed parent directory $embedParent" -Action {
+        New-Item -ItemType Directory -Path $embedParent -Force | Out-Null
+    } | Out-Null
+    $gitArgs = @("clone")
+    if (-not [string]::IsNullOrWhiteSpace($effectiveBranch)) {
+        $gitArgs += @("-b", $effectiveBranch)
     }
-    $args += @($source, $embedTarget)
-    $oldPreference = $ErrorActionPreference
-    $ErrorActionPreference = "Continue"
-    $output = & git @args 2>&1
-    $exitCode = $LASTEXITCODE
-    $ErrorActionPreference = $oldPreference
-    if ($exitCode -ne 0) {
-        throw "git $($args -join ' ') failed with exit code $exitCode`n$($output -join "`n")"
-    }
-    if ($output) {
-        $output | Write-Host
-    }
+    $gitArgs += @($source, $embedTarget)
+    Invoke-InstallAction -Description "Clone ai-rules into $relativeEmbed" -Action {
+        $oldPreference = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        $output = & git @gitArgs 2>&1
+        $exitCode = $LASTEXITCODE
+        $ErrorActionPreference = $oldPreference
+        if ($exitCode -ne 0) {
+            throw "git $($gitArgs -join ' ') failed with exit code $exitCode`n$($output -join "`n")"
+        }
+        if ($output) {
+            $output | Write-Host
+        }
+    } | Out-Null
 }
 
 $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
@@ -246,12 +423,13 @@ if (-not $SkipProjectPlaceholder) {
 }
 
 $configDir = Join-Path $TargetProjectPath ".codex"
-New-Item -ItemType Directory -Path $configDir -Force | Out-Null
+$configSourceRepoUrl = $source
 $config = [ordered]@{
     schema_version = 3
     mode = if ($Mode -eq "submodule") { "git-submodule" } else { "nested-git-clone" }
     distributionMode = "embedded-git-repository"
     installedAt = (Get-Date).ToUniversalTime().ToString("o")
+    sourceRepoUrl = $configSourceRepoUrl
     sourceRepoPath = $RulesRepoPath
     embeddedRepoPath = $EmbedPath.Replace("\", "/")
     commonEntry = ".codex/ai-rules/AGENTS.md"
@@ -266,19 +444,61 @@ $config = [ordered]@{
         autoPush = $false
         remote = "origin"
     }
+    submodule = if ($Mode -eq "submodule") {
+        [ordered]@{
+            path = $EmbedPath.Replace("\", "/")
+            url = $source
+            branch = $effectiveBranch
+            parentTracksEmbeddedCommit = $true
+        }
+    } else {
+        $null
+    }
     boundaries = [ordered]@{
         commonRulesSource = ".codex/ai-rules/"
         projectRulesSource = ".codex/rules/project/"
         copyManagedPaths = $false
         parentTracksEmbeddedCommit = ($Mode -eq "submodule")
     }
+    installer = [ordered]@{
+        script = "install-ai-rules.ps1"
+        planOnly = [bool]$PlanOnly
+        rootEntry = if ($SkipRootEntry) { "skipped" } else { "generated-with-backup" }
+        projectPlaceholder = if ($SkipProjectPlaceholder) { "skipped" } else { "create-if-missing" }
+        existingGitRepoPolicy = if ($AdoptExistingGitRepo) { "adopt-when-requested" } else { "stop-unless-registered-submodule" }
+        postInstallSyncCheck = (-not $SkipSyncCheck)
+    }
 }
-Write-Utf8NoBomFile -Path (Join-Path $configDir "ai-rules-config.json") -Content ($config | ConvertTo-Json -Depth 8)
+Write-GeneratedFile -RelativePath ".codex\ai-rules-config.json" -Content ($config | ConvertTo-Json -Depth 8) -BackupRoot $backupRoot
 
-Write-Host "AI rules embedded into $TargetProjectPath"
-Write-Host "Embedded repo: $EmbedPath"
-Write-Host "Common entry: .codex/ai-rules/AGENTS.md"
-Write-Host "Project entry: .codex/rules/project/AGENTS.md"
-if (-not $NoBackup) {
-    Write-Host "Changed generated files, if any, were backed up under $backupRoot"
+if (-not $SkipSyncCheck) {
+    $syncScript = Join-Path $embedTarget "check-ai-rules-sync.ps1"
+    if ($PlanOnly -or $WhatIfPreference) {
+        Write-Host "PLAN: Run post-install sync check with -NoFetch."
+    }
+    elseif (Test-Path -LiteralPath $syncScript) {
+        Invoke-InstallAction -Description "Run post-install ai-rules sync check" -Action {
+            & $syncScript -TargetProjectPath $TargetProjectPath -NoFetch
+            if (-not $?) {
+                throw "Post-install sync check failed."
+            }
+        } | Out-Null
+    }
+    else {
+        Write-Warning "Post-install sync check skipped because $syncScript was not found."
+    }
+}
+
+if ($PlanOnly -or $WhatIfPreference) {
+    Write-Host "AI rules install plan completed for $TargetProjectPath"
+    Write-Host "No files or Git state were changed."
+}
+else {
+    Write-Host "AI rules embedded into $TargetProjectPath"
+    Write-Host "Embedded repo: $EmbedPath"
+    Write-Host "Common entry: .codex/ai-rules/AGENTS.md"
+    Write-Host "Project entry: .codex/rules/project/AGENTS.md"
+    if (-not $NoBackup) {
+        Write-Host "Changed generated files, if any, were backed up under $backupRoot"
+    }
 }

@@ -15,7 +15,7 @@
     "commonEntry": ".codex/ai-rules/AGENTS.md",
     "projectEntry": ".codex/rules/project/AGENTS.md",
     "legacyCommonEntry": ".codex/rules/common/AGENTS.md",
-    "legacyCommonPolicy": "compatibility-only"
+    "legacyCommonPolicy": "historical-migration-only-not-read-fallback"
   },
   "syncPolicy": {
     "checkEverySession": true,
@@ -71,6 +71,35 @@
     ".codex/ai-rules-config.json",
     ".codex/rules/project/AGENTS.md"
   ],
+  "installer": {
+    "script": "install-ai-rules.ps1",
+    "defaultMode": "git-submodule",
+    "fallbackMode": "nested-git-clone",
+    "supportsPlanOnly": true,
+    "supportsPowerShellWhatIf": true,
+    "infersSourceUrlFromOrigin": true,
+    "infersBranchFromRulesRepo": true,
+    "supportsLocalPathSubmoduleSource": true,
+    "supportsRelativeLocalPathSubmoduleSource": true,
+    "existingFilesPolicy": {
+      "rootAgents": "backup-then-rewrite-unless-skipped",
+      "config": "backup-then-rewrite",
+      "projectRules": "create-only-when-missing",
+      "existingRegisteredSubmodule": "keep-and-continue",
+      "existingUnregisteredGitRepo": "stop-unless-AdoptExistingGitRepo",
+      "existingNonGitEmbedPath": "stop-and-require-manual-review"
+    },
+    "postInstallSyncCheck": {
+      "default": true,
+      "command": ".codex/ai-rules/check-ai-rules-sync.ps1 -NoFetch",
+      "skipParameter": "SkipSyncCheck"
+    },
+    "gitBoundary": {
+      "autoCommit": false,
+      "autoPush": false,
+      "requiresHumanReview": true
+    }
+  },
   "targetProjectPreservedPaths": [
     ".codex/rules/project/",
     ".codex/task-tracking/",
