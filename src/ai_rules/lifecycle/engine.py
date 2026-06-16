@@ -24,7 +24,7 @@ from typing import Any
 
 from ai_rules.common.paths import PYTHON_PYCACHE_DIR, ai_rules_entrypoint
 from ai_rules.runtime import AgentExecutionContext, default_registry, requires_approval_for, requires_tracking_for
-from ai_rules.runtime.registry import MUTATING_TASK_TYPES, TASK_TYPE_KEYWORDS
+from ai_rules.runtime.registry import MUTATING_TASK_TYPES, NODE_EVENTS, TASK_TYPE_KEYWORDS
 
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -75,6 +75,7 @@ class Classification:
     task_types: list[str]
     task_size: str
     task_size_reasons: list[str]
+    runtime_event: str
     requires_tracking: bool
     requires_approval: bool
     required_hooks: list[str]
@@ -248,6 +249,7 @@ def required_hooks_and_gates(
     task_size: str,
     changed_paths: list[str],
     input_source: str,
+    event: str,
 ) -> tuple[list[str], list[str], bool, bool]:
     context = AgentExecutionContext(
         input_source=input_source,
@@ -255,6 +257,7 @@ def required_hooks_and_gates(
         task_size=task_size,
         changed_paths=tuple(changed_paths),
         final=False,
+        event=event,
     )
     registry = default_registry()
     hooks = registry.mechanism_labels_for_context(context)
@@ -286,13 +289,15 @@ def build_classification(args: argparse.Namespace, root: Path) -> tuple[InputRec
     )
     task_types = infer_task_types(message, changed_paths, explicit_types)
     task_size, reasons = estimate_task_size(message, task_types, changed_paths, args.input_source)
+    event = lifecycle_event(args)
     hooks, gates, requires_tracking, requires_approval = required_hooks_and_gates(
-        task_types, task_size, changed_paths, args.input_source
+        task_types, task_size, changed_paths, args.input_source, event
     )
     return input_record, Classification(
         task_types=task_types,
         task_size=task_size,
         task_size_reasons=reasons,
+        runtime_event=event,
         requires_tracking=requires_tracking,
         requires_approval=requires_approval,
         required_hooks=hooks,
@@ -318,6 +323,7 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--approved-label", help="Approval label, for example 批准：计划-生命周期状态机门禁.")
     parser.add_argument("--trace-id", help="Trace id. Default: generated or inferred from state file.")
     parser.add_argument("--state-file", help="Lifecycle state JSON path. Default: .codex/project/lifecycle/<trace>.json.")
+    parser.add_argument("--event", choices=sorted(NODE_EVENTS), help="Runtime event boundary. Default is inferred from lifecycle command.")
     parser.add_argument("--format", choices=("text", "json"), default="text", help="Output format.")
 
 
@@ -345,6 +351,20 @@ def parse_args() -> argparse.Namespace:
 
 def default_trace_id() -> str:
     return f"{DEFAULT_TRACE_PREFIX}-{datetime.now().strftime('%Y%m%d')}-{uuid.uuid4().hex[:8]}"
+
+
+def lifecycle_event(args: argparse.Namespace) -> str:
+    """Infer the runtime event boundary for this lifecycle command."""
+    if getattr(args, "event", None):
+        return args.event
+    command = getattr(args, "command", "")
+    if command == "classify":
+        return "user-message"
+    if command == "preflight":
+        return "write-intent" if getattr(args, "changed_path", None) or getattr(args, "task_type", None) else "plan-output"
+    if command == "finalize":
+        return "final-output"
+    return ""
 
 
 def state_path_for(args: argparse.Namespace, root: Path, trace_id: str) -> Path:
@@ -434,6 +454,7 @@ def final_gate_commands(args: argparse.Namespace, report: LifecycleReport) -> li
         task_size=report.classification.task_size,
         changed_paths=tuple(changed_paths),
         final=True,
+        event="final-output",
     )
     gate_steps = set(default_registry().gate_step_ids_for_context(final_context))
     if "doc-index" in gate_steps and not args.task_tracking:
@@ -463,6 +484,8 @@ def final_gate_commands(args: argparse.Namespace, report: LifecycleReport) -> li
             "--trace-id",
             report.trace_id,
             "--final",
+            "--event",
+            "final-output",
         ]
         for task_type in report.classification.task_types:
             gate_command.extend(["--task-type", task_type])
@@ -536,6 +559,7 @@ def format_text(report: LifecycleReport) -> str:
         f"Task types: {', '.join(c.task_types) if c.task_types else 'none'}",
         f"Task size: {c.task_size}",
         f"Task size reasons: {'; '.join(c.task_size_reasons)}",
+        f"Runtime event: {c.runtime_event or 'any'}",
         f"Requires tracking: {str(c.requires_tracking).lower()}",
         f"Requires approval: {str(c.requires_approval).lower()}",
         f"Registered mechanisms: {', '.join(c.required_hooks)}",

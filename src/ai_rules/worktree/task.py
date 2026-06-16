@@ -16,9 +16,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from ai_rules.worktree.coord import current_branch, current_head, detect_repo, git_text, safe_id
+from ai_rules.worktree.coord import GuardedState, StateStore, current_branch, current_head, detect_repo, git_text, safe_id
 
 DEFAULT_SELF_EXCLUDES = (".source-projects",)
+ACTIVE_COORD_STATUSES = {"active", "integrating", "waiting"}
 
 
 def git_run(args: list[str], cwd: Path, check: bool = True) -> subprocess.CompletedProcess:
@@ -94,6 +95,12 @@ def find_project_root(cwd: Path, explicit: str | None = None) -> Path:
             raise SystemExit(f"project root lacks .codex/project: {root}")
         return root
     current = cwd.resolve()
+    parts = current.parts
+    for index in range(len(parts) - 2):
+        if parts[index : index + 3] == (".codex", "project", ".worktree"):
+            host = Path(*parts[:index])
+            if (host / ".codex" / "project").exists():
+                return host
     for candidate in (current, *current.parents):
         if (candidate / ".codex" / "project").exists():
             return candidate
@@ -413,6 +420,195 @@ def build_status_snapshot(
     return snapshot
 
 
+def parse_coord_time(value: str | None) -> datetime | None:
+    """Parse a coord timestamp."""
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def coord_record_is_active(item: dict[str, Any]) -> bool:
+    """Return whether a coord session or lock is active at this instant."""
+    if item.get("status") not in ACTIVE_COORD_STATUSES:
+        return False
+    expires = parse_coord_time(str(item.get("lease_expires_at", "")))
+    return expires is None or expires > datetime.now(timezone.utc)
+
+
+def read_coord_state(repo_path: Path) -> dict[str, Any]:
+    """Read worktree-coord state for a Git repository."""
+    state_path = git_common_dir(repo_path) / "codex-runtime" / "worktree-coord" / "state.json"
+    if not state_path.exists():
+        return {"sessions": {}, "locks": [], "queue": [], "state_file": str(state_path)}
+    data = json.loads(state_path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise SystemExit(f"coord state must contain a JSON object: {state_path}")
+    data.setdefault("sessions", {})
+    data.setdefault("locks", [])
+    data.setdefault("queue", [])
+    data["state_file"] = str(state_path)
+    return data
+
+
+def live_worktree_maps(repo_path: Path) -> tuple[dict[str, dict[str, str]], dict[str, str]]:
+    """Return live worktrees indexed by path and branch."""
+    by_path: dict[str, dict[str, str]] = {}
+    branch_by_path: dict[str, str] = {}
+    for wt in parse_worktree_list(repo_path):
+        raw_path = wt.get("worktree", "")
+        if not raw_path:
+            continue
+        path = str(Path(raw_path).resolve())
+        branch = clean_branch_name(wt.get("branch", ""))
+        by_path[path] = wt
+        branch_by_path[path] = branch
+    return by_path, branch_by_path
+
+
+def task_worktree_paths(snapshot: dict[str, Any], repo_name: str) -> set[str]:
+    """Return task worktree absolute paths from a status snapshot."""
+    repo_record = snapshot.get(repo_name)
+    if not isinstance(repo_record, dict):
+        return set()
+    return {
+        str(Path(str(item.get("absolute_path", ""))).resolve())
+        for item in repo_record.get("task_worktrees", [])
+        if isinstance(item, dict) and item.get("absolute_path")
+    }
+
+
+def reconcile_repo_live_state(
+    *,
+    repo_name: str,
+    repo_path: Path,
+    snapshot: dict[str, Any],
+) -> dict[str, Any]:
+    """Compare coord metadata with Git live worktree state for one repository."""
+    coord_state = read_coord_state(repo_path)
+    live_by_path, branch_by_path = live_worktree_maps(repo_path)
+    task_paths = task_worktree_paths(snapshot, repo_name)
+    active_sessions = [
+        session
+        for session in coord_state.get("sessions", {}).values()
+        if isinstance(session, dict) and coord_record_is_active(session)
+    ]
+    active_session_ids = {str(session.get("session_id", "")) for session in active_sessions}
+    active_locks = [
+        lock
+        for lock in coord_state.get("locks", [])
+        if isinstance(lock, dict) and coord_record_is_active(lock)
+    ]
+    queue_open = [
+        item
+        for item in coord_state.get("queue", [])
+        if isinstance(item, dict) and item.get("status") in {"pending", "integrating", "blocked"}
+    ]
+    errors: list[dict[str, str]] = []
+    warnings: list[dict[str, str]] = []
+
+    for session in active_sessions:
+        session_id = str(session.get("session_id", ""))
+        raw_path = str(session.get("worktree", ""))
+        if not raw_path:
+            errors.append({"code": "active_session_missing_worktree_path", "item": session_id})
+            continue
+        path = str(Path(raw_path).resolve())
+        live = live_by_path.get(path)
+        if live is None:
+            errors.append({"code": "active_session_worktree_missing_from_git_live_state", "item": session_id, "path": path})
+            continue
+        expected_branch = str(session.get("branch", ""))
+        actual_branch = branch_by_path.get(path, "")
+        if expected_branch and actual_branch and expected_branch != actual_branch:
+            errors.append(
+                {
+                    "code": "active_session_branch_mismatch",
+                    "item": session_id,
+                    "expected": expected_branch,
+                    "actual": actual_branch,
+                    "path": path,
+                }
+            )
+
+    session_paths = {
+        str(Path(str(session.get("worktree", ""))).resolve())
+        for session in active_sessions
+        if session.get("worktree")
+    }
+    for path in sorted(task_paths):
+        if path not in session_paths:
+            warnings.append({"code": "task_worktree_without_active_coord_session", "path": path})
+
+    for lock in active_locks:
+        session_id = str(lock.get("session_id", ""))
+        if session_id and session_id not in active_session_ids:
+            warnings.append({"code": "active_lock_without_active_session", "item": str(lock.get("lock_id", "")), "session_id": session_id})
+
+    live_branches = set(branch_by_path.values())
+    for item in queue_open:
+        branch = str(item.get("branch", ""))
+        if branch and branch not in live_branches and not ref_exists(repo_path, branch):
+            warnings.append({"code": "queue_item_branch_not_found", "item": str(item.get("item_id", "")), "branch": branch})
+
+    return {
+        "repo": repo_name,
+        "repo_path": str(repo_path),
+        "coord_state_file": coord_state.get("state_file", ""),
+        "live_worktree_count": len(live_by_path),
+        "task_worktree_count": len(task_paths),
+        "active_session_count": len(active_sessions),
+        "active_lock_count": len(active_locks),
+        "open_queue_count": len(queue_open),
+        "errors": errors,
+        "warnings": warnings,
+    }
+
+
+def mark_missing_sessions_stale(repo_path: Path, report: dict[str, Any]) -> list[str]:
+    """Mark sessions whose worktree disappeared from Git live state."""
+    missing_session_ids = {
+        str(issue.get("item", ""))
+        for issue in report.get("errors", [])
+        if issue.get("code") == "active_session_worktree_missing_from_git_live_state" and issue.get("item")
+    }
+    if not missing_session_ids:
+        return []
+    store = StateStore(git_common_dir(repo_path))
+    repaired: list[str] = []
+    with GuardedState(store) as guarded:
+        state = guarded.read()
+        sessions = state.get("sessions", {})
+        for session_id in sorted(missing_session_ids):
+            session = sessions.get(session_id)
+            if not isinstance(session, dict):
+                continue
+            session["status"] = "stale_or_missing_worktree"
+            session["updated_at"] = now_iso()
+            session["reconcile_note"] = "Git live state no longer contains the recorded worktree path."
+            for lock in state.get("locks", []):
+                if isinstance(lock, dict) and lock.get("session_id") == session_id and lock.get("status") == "active":
+                    lock["status"] = "released_missing_worktree"
+                    lock["updated_at"] = now_iso()
+            repaired.append(session_id)
+        if repaired:
+            guarded.write(state)
+            for session_id in repaired:
+                guarded.append_event(
+                    {
+                        "event": "session.mark_missing_worktree_stale",
+                        "session_id": session_id,
+                        "source": "worktree-task reconcile --mark-missing-stale",
+                    }
+                )
+    return repaired
+
+
 def status_state_path(project_root: Path, output: str | None) -> Path:
     """Resolve the status snapshot output path."""
     path = Path(output).expanduser() if output else project_root / ".codex" / "project" / "state" / "worktrees.json"
@@ -630,6 +826,65 @@ def command_status(args: argparse.Namespace) -> int:
         print_status_text(snapshot, args.task_slug)
 
     return 0
+
+
+def command_reconcile(args: argparse.Namespace) -> int:
+    """Reconcile coord/session state against Git live worktree state."""
+    repo_root = find_project_root(Path.cwd(), args.project_root)
+    output = status_state_path(repo_root, args.write_state) if args.write_state is not None else None
+    ignored_paths = {output.resolve()} if output else set()
+    snapshot = build_status_snapshot(repo_root, args.target_ref, ignored_paths)
+    if output is not None:
+        snapshot["state_file"] = display_path(output, repo_root)
+        write_status_snapshot(output, snapshot)
+
+    repo_names = args.repo or ["self", "ai-rules"]
+    reports: list[dict[str, Any]] = []
+    for repo_name in repo_names:
+        repo_path = source_repo_for(repo_root, repo_name)
+        report = reconcile_repo_live_state(repo_name=repo_name, repo_path=repo_path, snapshot=snapshot)
+        if args.mark_missing_stale:
+            repaired = mark_missing_sessions_stale(repo_path, report)
+            report["repaired_sessions"] = repaired
+            if repaired:
+                report = reconcile_repo_live_state(repo_name=repo_name, repo_path=repo_path, snapshot=snapshot)
+                report["repaired_sessions"] = repaired
+        reports.append(report)
+
+    errors = [issue for report in reports for issue in report["errors"]]
+    warnings = [issue for report in reports for issue in report["warnings"]]
+    payload = {
+        "schema_version": 1,
+        "project_root": str(repo_root),
+        "target_ref": args.target_ref,
+        "reports": reports,
+        "errors": errors,
+        "warnings": warnings,
+        "state_file": display_path(output, repo_root) if output else "",
+    }
+
+    if args.format == "json":
+        print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+    else:
+        if output is not None:
+            print(f"Wrote worktree state: {output}")
+        print("Worktree live-state reconcile:")
+        for report in reports:
+            print(
+                f"  {report['repo']}: live={report['live_worktree_count']} "
+                f"task={report['task_worktree_count']} sessions={report['active_session_count']} "
+                f"locks={report['active_lock_count']} queue={report['open_queue_count']}"
+            )
+            if report.get("repaired_sessions"):
+                print(f"    repaired_sessions: {', '.join(report['repaired_sessions'])}")
+        print(f"  errors: {len(errors)}")
+        for issue in errors:
+            print(f"  - {issue}")
+        print(f"  warnings: {len(warnings)}")
+        for issue in warnings:
+            print(f"  - {issue}")
+
+    return 1 if errors or (args.strict and warnings) else 0
 
 
 def command_close(args: argparse.Namespace) -> int:
@@ -1012,7 +1267,25 @@ def build_parser() -> argparse.ArgumentParser:
         const="",
         help="Write full status snapshot. Default path: .codex/project/state/worktrees.json.",
     )
-    
+
+    reconcile = subparsers.add_parser("reconcile", help="Reconcile coord/session metadata against Git live worktree state.")
+    reconcile.add_argument("--project-root", help="Host project root containing .codex/project.")
+    reconcile.add_argument("--repo", action="append", choices=["self", "ai-rules"], help="Repository to reconcile. Default: both.")
+    reconcile.add_argument("--target-ref", default="main", help="Target ref used for merged status. Default: main.")
+    reconcile.add_argument("--strict", action="store_true", help="Fail on warnings as well as errors.")
+    reconcile.add_argument(
+        "--mark-missing-stale",
+        action="store_true",
+        help="Mark active coord sessions with missing Git worktrees as stale_or_missing_worktree and release their active locks.",
+    )
+    reconcile.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    reconcile.add_argument(
+        "--write-state",
+        nargs="?",
+        const="",
+        help="Write full status snapshot. Default path: .codex/project/state/worktrees.json.",
+    )
+
     # close
     close = subparsers.add_parser("close", help="Check worktree closeout status.")
     close.add_argument("--project-root", help="Host project root containing .codex/project.")
@@ -1086,6 +1359,8 @@ def main() -> int:
         return command_create(args)
     if args.command == "status":
         return command_status(args)
+    if args.command == "reconcile":
+        return command_reconcile(args)
     if args.command == "close":
         return command_close(args)
     if args.command == "queue":

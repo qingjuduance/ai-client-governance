@@ -701,6 +701,27 @@ def validate_applicability_gate(text: str, errors: list[Finding], tracking: str)
             add(errors, "error", f"applicability gate lacks {label}.", tracking)
 
 
+def validate_runtime_effectiveness_gate(text: str, errors: list[Finding], tracking: str) -> None:
+    if not contains_any(text, ["runtime", "生命周期", "节点", "gate-pool", "ComponentDefinition"]):
+        return
+    required_groups = [
+        ("runtime component visibility", ["runtime components", "组件", "节点可见"]),
+        ("gate-pool plan or execution", ["gate-pool", "门禁池", "dry-run"]),
+        ("completion test planning", ["completion-test", "完成测试", "测试计划"]),
+        ("dedupe or performance evidence", ["dedupe", "去重", "性能", "耗时", "只运行一次"]),
+    ]
+    for label, patterns in required_groups:
+        if not contains_any(text, patterns):
+            add(errors, "error", f"runtime architecture work must record {label}.", tracking)
+
+
+def validate_worktree_live_state_gate(text: str, errors: list[Finding], tracking: str) -> None:
+    if not contains_any(text, ["coord", "worktree-coord", "live-state", "live state", "session", "lock", "integration queue"]):
+        return
+    if not contains_any(text, ["worktree-task reconcile", "git worktree list", "live-state", "live state"]):
+        add(errors, "error", "worktree/coord work must record Git live-state reconciliation evidence.", tracking)
+
+
 def validate_worktree_evidence(text: str, errors: list[Finding], tracking: str) -> None:
     section = section_text(text, "Worktree 证据") or section_text(text, "当前 Git 状态")
     haystack = section if section.strip() else text
@@ -1232,6 +1253,8 @@ def validate_task_type(
         validate_script_capability_gate(text, errors, tracking)
         validate_context_compression_snapshot(text, errors, tracking)
         validate_python_cache_boundary(text, errors, tracking)
+        validate_runtime_effectiveness_gate(text, errors, tracking)
+        validate_worktree_live_state_gate(text, errors, tracking)
         if contains_any(text, ["scripts/", "scripts\\"]) and not contains_any(
             text,
             ["py_compile", "--help", "语法解析", "最小真实用例"],
@@ -1248,6 +1271,7 @@ def validate_task_type(
     elif task_type == "git":
         if not contains_any(text, ["git status", "工作区", "push", "推送边界"]):
             add(errors, "error", "git task requires status and push boundary evidence.", tracking)
+        validate_worktree_live_state_gate(text, errors, tracking)
     elif task_type == "frontend":
         if not contains_any(text, ["browser", "screenshot", "截图", "Playwright", "localhost"]):
             add(warnings, "warning", "frontend task should record browser/screenshot verification.", tracking)

@@ -328,11 +328,10 @@ def find_task(
     if trace_id:
         matches = [task for task in matches if task.get("trace_id") == trace_id]
     if task_tracking:
-        normalized_tracking = normalize(task_tracking)
         matches = [
             task
             for task in matches
-            if normalize(task.get("task_tracking", "")) == normalized_tracking
+            if task_tracking_matches(task.get("task_tracking", ""), task_tracking)
         ]
     if not trace_id and not task_tracking:
         return None
@@ -358,6 +357,23 @@ def find_task(
 
 def normalize(value: str | Path) -> str:
     return str(value).replace("\\", "/").lstrip("./")
+
+
+def normalize_tracking_path(value: str | Path) -> str:
+    text = str(value).replace("\\", "/").rstrip("/")
+    while text.startswith("./"):
+        text = text[2:]
+    return text
+
+
+def task_tracking_matches(stored: str, requested: str | Path) -> bool:
+    stored_normalized = normalize_tracking_path(stored)
+    requested_normalized = normalize_tracking_path(requested)
+    if normalize(stored_normalized) == normalize(requested_normalized):
+        return True
+    return requested_normalized.endswith(f"/{stored_normalized}") or stored_normalized.endswith(
+        f"/{requested_normalized}"
+    )
 
 
 def tasks_with_status(state: dict[str, Any], statuses: set[str]) -> list[dict[str, Any]]:
