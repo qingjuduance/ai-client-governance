@@ -17,7 +17,7 @@ from ai_rules.lifecycle import engine as lifecycle
 from ai_rules.records import scan_corrections, task_queue, tool_flow, tool_invocations
 from ai_rules.runtime import registry as runtime_registry
 from ai_rules.sync import check as sync_check
-from ai_rules.validation import encoding, selftest
+from ai_rules.validation import completion, encoding, selftest
 from ai_rules.worktree import coord as worktree_coord
 from ai_rules.worktree import task as worktree_task
 
@@ -26,6 +26,7 @@ COMMANDS: dict[str, tuple[str, Callable[[], int]]] = {
     "agent-comm": ("Manage agent communication bus.", agent_comm.main),
     "agent-groups": ("Report agent group status.", group_status.main),
     "architecture-guard": ("Check AI rules architecture boundaries.", architecture_guard.main),
+    "completion-test": ("Plan task completion tests from changed paths and task types.", completion.main),
     "context-extract": ("Extract safe slices from long context files.", context_extract.main),
     "doc-index": ("Build and check Markdown document reference indexes.", doc_index.main),
     "gate-pool": ("Run a traceable pool of gates.", gate_pool.main),

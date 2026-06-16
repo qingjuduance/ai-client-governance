@@ -4,9 +4,9 @@
 
 | 项目 | 说明 |
 |---|---|
-| 仓库定位 | 可嵌入到任意项目的、脱离具体模型和客户端的 AI 执行流程框架。 |
+| 仓库定位 | 可嵌入到任意项目的 AI 编程客户端治理插件层；不替代客户端 agent runtime。 |
 | 推荐嵌入位置 | 目标项目 `.codex/ai-rules/` |
-| 通用规则事实源 | `.codex/ai-rules/AGENTS.md`，文件名兼容 AGENTS 生态但内容是 agent-neutral 框架。 |
+| 通用规则事实源 | `.codex/ai-rules/AGENTS.md`，文件名兼容 AGENTS 生态但内容是 agent-neutral 治理契约。 |
 | 项目规则入口 | 目标项目 `.codex/project/rules/project/AGENTS.md` |
 | 入口适配器 | `AGENTS.md`、`CLAUDE.md`、`GEMINI.md`、Copilot/Cursor/Cline/Windsurf/Continue/Roo/Aider 等工具原生规则入口。 |
 | 机器清单 | `manifest.json` |
@@ -20,14 +20,18 @@
 | 默认同步策略 | 每次会话检查；最多 24 小时 fetch 一次；不自动 pull/push。 |
 | 回写方式 | 进入 `.codex/ai-rules/` 后使用普通 Git 命令提交和推送。 |
 
-这个仓库不是某个项目的 `.codex/rules/common/` 文件夹备份，而是一套完整的
-通用 AI 执行流程框架。目标项目应把本仓库作为一个独立 Git 仓库嵌入进来，
-Git 项目默认用 submodule 记录精确规则版本，让通用规则、入口 adapter、
-通用 skills、门禁脚本、README 和 manifest 保持完整上下文。
+这个仓库不是某个项目的 `.codex/rules/common/` 文件夹备份，也不是要替代
+Codex、Claude Code、Cursor、Cline、Windsurf、Continue 或其它 AI 编程客户端的
+底层 agent runtime。它的定位是：**建立在这些客户端已经具备对话上下文、工具调用、
+文件写入、终端执行、人类批准和会话恢复能力之上的治理插件层**。
+
+目标项目应把本仓库作为一个独立 Git 仓库嵌入进来，Git 项目默认用 submodule
+记录精确规则版本，让通用规则、入口 adapter、通用 skills、门禁脚本、README 和
+manifest 保持完整上下文。
 
 `AGENTS.md` 仍然保留，因为 Codex、Devin、Cursor 等生态已经支持它，也因为
 本仓库历史上用它作为通用规则事实源。但新的设计原则是：**文件名是适配器，
-流程框架才是事实源**。Claude Code 可以通过 `CLAUDE.md` 进入，Gemini CLI
+治理插件契约才是事实源**。Claude Code 可以通过 `CLAUDE.md` 进入，Gemini CLI
 可以通过 `GEMINI.md` 进入，Copilot、Cursor、Cline、Windsurf、Continue、
 Roo Code、Aider 等工具也可以通过各自原生入口指向同一套规则。
 
@@ -36,10 +40,10 @@ Roo Code、Aider 等工具也可以通过各自原生入口指向同一套规则
 - **完整 Git 边界**：通用规则有自己的 commit、branch、remote 和 history；
   Git submodule 让父项目只记录一个 gitlink commit，项目内修改通用规则时，
   可以直接在 `.codex/ai-rules/` 用 Git 回写。
-- **脱离模型和客户端**：核心生命周期、审批、worktree、联网核对、task tracking、
-  Git 边界和收口门禁不依赖 Codex、Claude、Gemini、Copilot 或任何单一 IDE。
-  各工具原生规则文件只作为薄 adapter，统一指向 `.codex/ai-rules/` 和
-  `.codex/project/` 的事实源。
+- **跨客户端治理插件层**：核心生命周期、审批、worktree、联网核对、task tracking、
+  Git 边界和收口门禁不绑定 Codex、Claude、Gemini、Copilot 或任何单一 IDE。
+  但它明确依赖宿主客户端提供 agent 执行能力；`ai-rules` 负责治理这些能力怎么被
+  使用，而不是重新实现一个 agent runtime。
 - **多入口 adapter 目录**：安装脚本可以在缺失时生成 `AGENTS.md`、`CLAUDE.md`、
   `GEMINI.md`、`.github/copilot-instructions.md`、`.cursor/rules/ai-rules.mdc`、
   `.clinerules/ai-rules.md`、`.windsurf/rules/ai-rules.md`、
@@ -58,7 +62,7 @@ Roo Code、Aider 等工具也可以通过各自原生入口指向同一套规则
   连续纠错或新要求叠加时把压缩快照写入 task tracking，避免手工绕过和恢复遗漏。
 - **用户要求可验收**：每条用户要求登记为 `REQ-*`，绑定处理状态、实现证据、
   验证证据和最终回复覆盖；`ai_rules.py task-gate` 会检查缺失项。
-- **框架化门禁模型**：`ai-rules` 是人和 AI 之间的执行框架。输入过滤器拆用户要求，
+- **插件化治理模型**：`ai-rules` 是人和 AI 之间的客户端治理插件。输入过滤器拆用户要求，
   处理拦截器管审批/worktree/联网核对，输出拦截器管最终回复和 worktree 完成提示，
   横切门禁管编码、Git、文档、账本和 trace flow。新增可确定约束时注册组件，
   不再只追加口头规则。
@@ -72,6 +76,31 @@ Roo Code、Aider 等工具也可以通过各自原生入口指向同一套规则
 每次准备把本仓库上传或推送到 GitHub 前，都要回看本 README 的“当前优势”和
 `manifest.json`，确认它们真实反映当前仓库能力。新增门禁、skill、脚本、
 入口 adapter 或嵌入策略后，README 需要同步更新，方便别人一眼看懂这个仓库的价值。
+
+## 核心定位：客户端治理插件层
+
+`ai-rules` 的设计前提是：现代 AI 编程客户端已经拥有 agent 执行环境。它们能读取
+上下文、调用工具、改文件、跑命令、请求用户批准、保持会话，并在一定程度上恢复任务。
+因此本仓库不再把自己设计成 LangGraph 式的底层流程引擎，也不把 LangGraph 当成当前
+Codex/Claude/Cursor 会话的强制执行层。
+
+`ai-rules` 补的是宿主客户端通常不会天然做好的治理能力：
+
+- 用户输入拆解、任务类型判断、验收标准提取和最终回复覆盖。
+- 修改型任务的审批、task tracking、worktree 隔离和 Git 边界。
+- 修改后的文档影响面、引用反查、完成测试计划和输出状态审计。
+- 多会话、多 worktree、coord/session/lock 与 Git live state 的对账。
+- 节点是否触发、是否去重、是否跳过、是否太慢的可观测证据。
+
+用 Spring 类比，宿主 AI 客户端更像应用运行环境，`ai-rules` 更像一组可嵌入的
+Starter、Interceptor、Validator 和 Actuator。`manifest.json` 和
+`runtime components` 注册表描述可扩展组件；`task-gate`、`gate-pool`、
+`worktree-task`、`doc-index` 等脚本提供可审计的半硬门禁；入口 adapter 把
+Codex、Claude、Cursor、Cline、Windsurf、Continue 等客户端带回同一套事实源。
+
+如果未来自建 agent runner，LangGraph 可以作为底层 workflow/checkpoint/human-in-the-loop
+执行器来承载这些节点；但在现有客户端里，LangGraph 不能直接拦截客户端内部行为。
+当前架构的优先级是把 `ai-rules` 做成跨客户端可移植的治理插件，而不是重造客户端。
 
 ## 多工具入口适配器
 
@@ -465,8 +494,20 @@ worktree，不删除主工作区文件，也不改变 Git 历史。
 ai-rules 两个仓库下每个任务 worktree 的路径、分支、`head_at_snapshot`、dirty 状态和
 是否已合并到目标分支。这个文件是可提交的审计快照，不是免运行的实时数据库；提交快照
 本身会推进主仓库 HEAD，所以 HEAD 字段必须按 `*_at_snapshot` 理解。后续 AI 会话必须
-优先读取这个快照，再重新运行同一个脚本或结合 `git worktree list --porcelain` 核对真实
-Git 状态，最终回复前也必须做一次 live status 校验。
+优先读取这个快照，再重新运行同一个脚本、`worktree-task reconcile --strict`
+或结合 `git worktree list --porcelain` 核对真实 Git 状态，最终回复前也必须做一次
+live status 校验。
+
+`reconcile` 是比 `status` 更严格的 live-state 对账节点：它读取 Git live worktree、
+coord session、active locks 和 integration queue。如果 coord 仍认为某个 session
+active，但 Git 已经没有对应 worktree，会直接失败。只有显式传
+`--mark-missing-stale` 时，它才会把这类 session 标记为
+`stale_or_missing_worktree` 并释放关联 active lock。
+
+```powershell
+python scripts\ai_rules.py worktree-task reconcile --strict
+python scripts\ai_rules.py worktree-task reconcile --repo ai-rules --mark-missing-stale
+```
 
 `remove` 默认只输出 dry-run 计划；只有显式传 `--execute` 才会调用
 `git worktree remove`，且默认拒绝移除 dirty worktree。固定脚本会把路径限制在宿主
@@ -480,6 +521,31 @@ DoD 的一部分。合并后必须先确认 task worktree clean 且 merged，再
 `worktree-task finalize --require-merged --require-no-task-worktrees --write-state`
 做 live gate；除非用户明确要求保留或存在取证/恢复需要，否则最终回复不能把残留
 `.codex/project/.worktree/<task-slug>/` 当成“已完成”。
+
+嵌入式 `ai-rules` 是宿主仓库的 submodule 时，合并 `ai-rules` 任务 worktree 还会改变
+宿主仓库记录的 gitlink。这个收口不能只在 `.codex/ai-rules/` 子仓库内完成：
+
+```powershell
+python .codex\ai-rules\scripts\ai_rules.py worktree-task status --write-state
+python .codex\ai-rules\scripts\ai_rules.py worktree-task host-closeout `
+  --repo ai-rules `
+  --task-slug <task-slug> `
+  --task-tracking .codex\project\records\task-tracking\<tracking>.md `
+  --require-task-tracking
+git add .codex\ai-rules .codex\project\state\worktrees.json `
+  .codex\project\records\task-tracking\<tracking>.md
+git commit -m "chore: record ai-rules worktree merge"
+python .codex\ai-rules\scripts\ai_rules.py worktree-task host-closeout `
+  --repo ai-rules `
+  --task-slug <task-slug> `
+  --task-tracking .codex\project\records\task-tracking\<tracking>.md `
+  --require-task-tracking `
+  --require-clean-host
+```
+
+`host-closeout` 会比较宿主 index 中 `.codex/ai-rules` 的 gitlink、嵌入仓库当前 HEAD、
+`.codex/project/state/worktrees.json` 记录的 ai-rules HEAD，以及相关 task tracking
+是否写到当前 HEAD。这样能防止“子仓库已合并，但宿主仓库还指向旧规则版本”的漏收口。
 
 手工 fallback 示例：
 
@@ -508,6 +574,7 @@ python scripts\ai_rules.py worktree-coord session register --title "task" --scop
 python scripts\ai_rules.py worktree-coord lock acquire --session-id <id> --scope "docs"
 python scripts\ai_rules.py worktree-coord queue add --session-id <id> --summary "integration item"
 python scripts\ai_rules.py worktree-coord validate
+python scripts\ai_rules.py worktree-task reconcile --strict
 ```
 
 脚本只登记 session、写锁和 integration queue，不自动 merge、rebase、commit
@@ -542,11 +609,16 @@ python scripts\ai_rules.py worktree-coord session register `
 `ai_rules.py tool-invocations` 写入 `.codex/project/logs/tool-invocations/*.jsonl`，并共享同一个
 `trace_id`。
 
-从框架角度看，门禁池类似一条可注册的执行链：
+从治理插件角度看，门禁池类似一条可注册的执行链：
 
 - 输入过滤器：先把用户原始输入拆成任务数和逐 REQ 表，逐行记录用户要求摘要、
   记录判定、联网/搜索判定、子 AI/验证判定和验收口径。
 - 处理拦截器：在改文件前检查审批、worktree、任务类型、联网核对和脚本能力。
+- 写入前 live-state 节点：在 `write-intent`、`resume`、`merge-cleanup` 和
+  `final-output` 边界运行 `worktree-task reconcile`，确认 coord/session/queue 没有
+  偏离 Git live worktree 事实。
+- 完成测试节点：根据 changed paths、任务类型和验收口径生成测试计划，避免只靠最终
+  回复口头声称完成。
 - 输出拦截器：最终回复前检查完成项、未完成项、未验证项、阻塞项、active pending、
   Git/worktree 状态、是否合并、是否提交、是否 push 和下一步用户确认。
 - 横切门禁：编码、文档引用、correction 扫描、工具调用账本和 trace flow。
@@ -554,10 +626,17 @@ python scripts\ai_rules.py worktree-coord session register `
 新增门禁时优先注册到 `task-gate`、`session-gate`、`gate-pool` 或 `lifecycle` 的
 相应位置，让它自动进入最终收口链路。
 
-`runtime components` 是执行链路的注册表，`gate-pool` 会读取匹配组件的
-`gate_step`，并把相同 `gate_step` 去重后执行。因此多个节点都要求 `doc-index`
-时，门禁池只会把所有 `--changed-path` 聚合起来运行一次，而不是按节点或按文件
-反复慢跑。
+`runtime components` 是治理节点注册表。这里保留 `runtime` 这个命令名，是为了表达
+`ai-rules` 插件内部的生命周期链路，不表示本仓库要替代宿主客户端的 agent runtime。
+每个节点声明 `events`、`condition`、
+`requires_facts`、`produces_facts`、`effect`、`fail_policy`、`gate_step`、
+`dedupe_key` 和 `performance_budget` 等字段。`skill` 只作为 capability plugin
+被 `input.filter.skill-router` 选中，不能跳过 `ai-rules` 的审批、worktree、
+测试和输出门禁。
+
+`gate-pool` 会读取匹配组件的 `gate_step`，并把相同 `gate_step` 去重后执行。
+因此多个节点都要求 `doc-index` 时，门禁池只会把所有 `--changed-path` 聚合起来运行一次，
+而不是按节点或按文件反复慢跑。
 
 文档联动节点属于 post-change 链路。修改功能、脚本、规则、skill、manifest、
 README 或入口 adapter 后，必须判断是否影响用户可读文档、命令说明、索引、
@@ -575,12 +654,18 @@ python scripts\ai_rules.py gate-pool `
   --task-type rules-script `
   --changed-path src\ai_rules\runtime\registry.py `
   --changed-path README.md `
+  --event final-output `
   --final `
   --dry-run
+
+python scripts\ai_rules.py completion-test `
+  --task-type rules-script `
+  --changed-path src\ai_rules\runtime\registry.py
 ```
 
-验收时至少看三件事：`runtime components` 能看到相关节点，`gate-pool --dry-run`
-能看到一次聚合后的 `ai_rules.py doc-index`，`tool-flow` 能看到最终门禁和报告。
+验收时至少看四件事：`runtime components` 能看到相关节点，`gate-pool --dry-run`
+能看到一次聚合后的 `ai_rules.py doc-index` 和 completion/worktree 节点，
+`completion-test` 能生成测试计划，`tool-flow` 能看到最终门禁和报告。
 如果链路没有触发、重复触发或明显拖慢任务，必须在 task tracking 记录原因并修正
 触发条件或 `gate_step` 去重策略。
 
@@ -633,6 +718,9 @@ python scripts\ai_rules.py tool-flow --trace-id <trace-id> --require-final-gate 
 - 用户下一步要决定的是合并、提交、推送、继续验证、保留取证还是放弃。
 
 `ai_rules.py task-gate` 会把这些当作输出拦截器检查，缺少时最终门禁失败。
+Git push 状态检查不是定时任务；它属于 `plan-output`、`status-output` 和
+`final-output` 的输出边界审计。默认只报告 dirty、ahead、behind、diverged、未 push
+或已 push 的事实，不自动执行 `git push`。
 
 ## Codex Token 用量统计
 

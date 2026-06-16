@@ -52,6 +52,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--task-tracking", required=True, help="Task tracking file.")
     parser.add_argument("--task-type", action="append", default=[], help="Task type for task/session gates.")
     parser.add_argument("--changed-path", action="append", default=[], help="Path changed by this task.")
+    parser.add_argument(
+        "--event",
+        choices=(
+            "user-message",
+            "plan-output",
+            "status-output",
+            "write-intent",
+            "after-change",
+            "completion-test",
+            "final-output",
+            "resume",
+            "merge-cleanup",
+            "session-start",
+            "state-audit",
+        ),
+        help="Runtime event boundary. Default: final-output when --final is set, otherwise after-change.",
+    )
     parser.add_argument("--trace-id", help="Trace id to reuse. Default: generated.")
     parser.add_argument("--top", type=int, default=30, help="Rows to show in reports.")
     parser.add_argument("--final", action="store_true", help="Include final task/session gates.")
@@ -72,6 +89,18 @@ def rel_or_abs(path: Path, root: Path) -> str:
         return path.resolve().as_posix()
 
 
+def host_project_root(root: Path) -> Path:
+    """Return the host project root when running inside .codex/project/.worktree."""
+    resolved = root.resolve()
+    parts = resolved.parts
+    for index in range(len(parts) - 2):
+        if parts[index : index + 3] == (".codex", "project", ".worktree"):
+            host = Path(*parts[:index])
+            if (host / ".codex" / "project").exists():
+                return host
+    return resolved
+
+
 def cli_command(py: str, entrypoint: Path, command: str, *args: str) -> list[str]:
     return [py, str(entrypoint), command, *args]
 
@@ -90,13 +119,14 @@ def task_type_args(task_types: list[str]) -> list[str]:
     return ["--task-types", *task_types] if task_types else []
 
 
-def registry_gate_steps(task_types: list[str], changed_paths: list[str], final: bool) -> set[str]:
+def registry_gate_steps(task_types: list[str], changed_paths: list[str], final: bool, event: str) -> set[str]:
     context = AgentExecutionContext(
         input_source="tool",
         task_types=tuple(task_types),
         task_size="medium" if changed_paths else "small",
         changed_paths=tuple(path.replace("\\", "/") for path in changed_paths),
         final=final,
+        event=event,
     )
     return set(default_registry().gate_step_ids_for_context(context))
 
@@ -112,9 +142,50 @@ def build_steps(root: Path, args: argparse.Namespace) -> list[GateStep]:
     text_paths = [path for path in existing_changed_paths if Path(path).suffix.lower() in TEXT_EXTENSIONS]
     python_paths = [path for path in existing_changed_paths if Path(path).suffix.lower() == ".py"]
     task_types = list(args.task_type or [])
-    gate_steps = registry_gate_steps(task_types, changed_paths, args.final)
+    event = args.event or ("final-output" if args.final else "after-change")
+    gate_steps = registry_gate_steps(task_types, changed_paths, args.final, event)
 
     steps: list[GateStep] = []
+    if "worktree-live-state" in gate_steps:
+        steps.append(
+            GateStep(
+                name="ai_rules.py worktree-task reconcile",
+                phase="coordination",
+                command=cli_command(
+                    py,
+                    entrypoint,
+                    "worktree-task",
+                    "reconcile",
+                    "--strict",
+                    "--write-state",
+                ),
+                final_gate=args.final,
+                reason="Coord/session state must match Git live worktree state at this runtime boundary.",
+            )
+        )
+    if "host-submodule-closeout" in gate_steps:
+        closeout_args = [
+            "worktree-task",
+            "host-closeout",
+            "--project-root",
+            str(host_project_root(root)),
+            "--repo",
+            "ai-rules",
+            "--require-task-tracking",
+        ]
+        if args.task_tracking:
+            closeout_args.extend(["--task-tracking", args.task_tracking])
+        if args.final:
+            closeout_args.append("--require-clean-host")
+        steps.append(
+            GateStep(
+                name="ai_rules.py worktree-task host-closeout",
+                phase="coordination",
+                command=cli_command(py, entrypoint, *closeout_args),
+                final_gate=args.final,
+                reason="Embedded ai-rules merges must update the host gitlink, task state, and task tracking.",
+            )
+        )
     if python_paths and "py-compile" in gate_steps:
         steps.append(
             GateStep(
@@ -207,7 +278,38 @@ def build_steps(root: Path, args: argparse.Namespace) -> list[GateStep]:
                 reason="Changed paths should not introduce whitespace errors.",
             )
         )
+    if changed_paths and "completion-test-plan" in gate_steps:
+        completion_args = [
+            "--root",
+            str(root),
+            "--task-tracking",
+            args.task_tracking,
+        ]
+        for task_type in task_types:
+            completion_args.extend(["--task-type", task_type])
+        for path in changed_paths:
+            completion_args.extend(["--changed-path", path])
+        steps.append(
+            GateStep(
+                name="ai_rules.py completion-test",
+                phase="completion",
+                command=cli_command(py, entrypoint, "completion-test", *completion_args),
+                final_gate=args.final,
+                reason="Plan completion tests from changed paths and task types.",
+            )
+        )
+    if "git-state-audit" in gate_steps:
+        steps.append(
+            GateStep(
+                name="git-state-audit",
+                phase="output",
+                command=["git", "-C", str(root), "status", "--short", "--branch"],
+                final_gate=args.final,
+                reason="Report Git state at the output boundary without pushing.",
+            )
+        )
     if args.final and "architecture-guard" in gate_steps:
+        architecture_root = host_project_root(root)
         steps.append(
             GateStep(
                 name="ai_rules.py architecture-guard",
@@ -217,11 +319,11 @@ def build_steps(root: Path, args: argparse.Namespace) -> list[GateStep]:
                     entrypoint,
                     "architecture-guard",
                     "--root",
-                    str(root),
+                    str(architecture_root),
                     "--strict",
                 ),
                 final_gate=True,
-                reason="Final .codex architecture boundary gate.",
+                reason="Final host-project .codex architecture boundary gate.",
             )
         )
     if args.final and "task-gate" in gate_steps:
@@ -243,6 +345,7 @@ def build_steps(root: Path, args: argparse.Namespace) -> list[GateStep]:
             )
         )
     if args.final and "session-gate" in gate_steps:
+        session_root = host_project_root(root)
         steps.append(
             GateStep(
                 name="ai_rules.py session-gate",
@@ -251,6 +354,8 @@ def build_steps(root: Path, args: argparse.Namespace) -> list[GateStep]:
                     py,
                     entrypoint,
                     "session-gate",
+                    "--root",
+                    str(session_root),
                     "--task-tracking",
                     args.task_tracking,
                     "--require-task-tracking",
@@ -262,6 +367,7 @@ def build_steps(root: Path, args: argparse.Namespace) -> list[GateStep]:
             )
         )
     if args.final and "task-queue" in gate_steps:
+        queue_root = host_project_root(root)
         steps.append(
             GateStep(
                 name="ai_rules.py task-queue",
@@ -271,7 +377,7 @@ def build_steps(root: Path, args: argparse.Namespace) -> list[GateStep]:
                     entrypoint,
                     "task-queue",
                     "--root",
-                    str(root),
+                    str(queue_root),
                     "validate",
                     "--current-task-tracking",
                     args.task_tracking,
@@ -287,6 +393,7 @@ def build_steps(root: Path, args: argparse.Namespace) -> list[GateStep]:
 
     trace_id = args.trace_id or ""
     if trace_id:
+        ledger_root = host_project_root(root)
         steps.append(
             GateStep(
                 name="ai_rules.py tool-invocations",
@@ -295,6 +402,8 @@ def build_steps(root: Path, args: argparse.Namespace) -> list[GateStep]:
                     py,
                     entrypoint,
                     "tool-invocations",
+                    "--root",
+                    str(ledger_root),
                     "report",
                     "--trace-id",
                     trace_id,
@@ -312,6 +421,8 @@ def build_steps(root: Path, args: argparse.Namespace) -> list[GateStep]:
                     py,
                     entrypoint,
                     "tool-flow",
+                    "--root",
+                    str(ledger_root),
                     "--trace-id",
                     trace_id,
                     "--top",
@@ -364,10 +475,13 @@ def run_record(
     summary: str,
     exit_code: int | None = None,
 ) -> int:
+    ledger_root = host_project_root(root)
     command = [
         sys.executable,
         str(entrypoint),
         "tool-invocations",
+        "--root",
+        str(ledger_root),
         "record",
         "--name",
         "ai_rules.py gate-pool",
@@ -393,7 +507,7 @@ def run_record(
     if exit_code is not None:
         command.extend(["--exit-code", str(exit_code)])
     env = os.environ.copy()
-    env["PYTHONPYCACHEPREFIX"] = str(root / PYTHON_PYCACHE_DIR)
+    env["PYTHONPYCACHEPREFIX"] = str(ledger_root / PYTHON_PYCACHE_DIR)
     env["PYTHONIOENCODING"] = "utf-8"
     env["PYTHONUTF8"] = "1"
     return subprocess.run(command, cwd=root, env=env).returncode
@@ -410,10 +524,13 @@ def run_step(
     task_types: list[str],
     attempt: int,
 ) -> int:
+    ledger_root = host_project_root(root)
     wrapper = [
         sys.executable,
         str(entrypoint),
         "tool-invocations",
+        "--root",
+        str(ledger_root),
         "run",
         "--name",
         step.name,
@@ -429,6 +546,8 @@ def run_step(
         "gate",
         "--attempt",
         str(attempt),
+        "--cwd",
+        str(root),
         "--summary",
         step.reason or step.name,
     ]
@@ -439,7 +558,7 @@ def run_step(
     wrapper.append("--")
     wrapper.extend(step.command)
     env = os.environ.copy()
-    env["PYTHONPYCACHEPREFIX"] = str(root / PYTHON_PYCACHE_DIR)
+    env["PYTHONPYCACHEPREFIX"] = str(ledger_root / PYTHON_PYCACHE_DIR)
     env["PYTHONIOENCODING"] = "utf-8"
     env["PYTHONUTF8"] = "1"
     return subprocess.run(wrapper, cwd=root, env=env).returncode

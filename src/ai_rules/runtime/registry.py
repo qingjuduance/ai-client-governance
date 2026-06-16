@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Spring-style component registry for the ai-rules agent governance runtime."""
+"""Spring-style component registry for the ai-rules client governance plugin."""
 
 from __future__ import annotations
 
@@ -19,6 +19,20 @@ COMPONENT_KINDS = {
 }
 
 FAIL_POLICIES = {"fail_closed", "warn_only", "requires_approval", "report_only"}
+NODE_EFFECTS = {"readonly", "state_write", "repo_write", "git_write", "network", "human_interrupt"}
+NODE_EVENTS = {
+    "user-message",
+    "plan-output",
+    "status-output",
+    "write-intent",
+    "after-change",
+    "completion-test",
+    "final-output",
+    "resume",
+    "merge-cleanup",
+    "session-start",
+    "state-audit",
+}
 
 PHASE_ORDER = {
     "input": 100,
@@ -27,6 +41,7 @@ PHASE_ORDER = {
     "session": 400,
     "post-change": 500,
     "validation": 600,
+    "completion": 650,
     "output": 700,
     "final-gate": 800,
     "report": 900,
@@ -40,6 +55,7 @@ class AgentExecutionContext:
     task_size: str = "small"
     changed_paths: tuple[str, ...] = ()
     final: bool = False
+    event: str = ""
 
 
 @dataclass(frozen=True)
@@ -67,6 +83,14 @@ class ComponentDefinition:
     path_prefixes: tuple[str, ...] = ()
     requires_changed_paths: bool = False
     final_only: bool = False
+    events: tuple[str, ...] = ()
+    condition: str = ""
+    requires_facts: tuple[str, ...] = ()
+    produces_facts: tuple[str, ...] = ()
+    effect: str = "readonly"
+    dedupe_key: str = ""
+    performance_budget: str = ""
+    dependencies: tuple[str, ...] = ()
     mechanism_label: str = ""
     gate_label: str = ""
     gate_step: str = ""
@@ -74,6 +98,8 @@ class ComponentDefinition:
 
     def matches(self, context: AgentExecutionContext) -> bool:
         if self.final_only and not context.final:
+            return False
+        if self.events and context.event and context.event not in self.events:
             return False
         if self.task_types and not set(self.task_types).intersection(context.task_types):
             return False
@@ -119,6 +145,11 @@ class ComponentRegistry:
                 raise ValueError(f"{component.id} has invalid kind: {component.kind}")
             if component.fail_policy not in FAIL_POLICIES:
                 raise ValueError(f"{component.id} has invalid fail_policy: {component.fail_policy}")
+            if component.effect not in NODE_EFFECTS:
+                raise ValueError(f"{component.id} has invalid effect: {component.effect}")
+            unknown_events = set(component.events) - NODE_EVENTS
+            if unknown_events:
+                raise ValueError(f"{component.id} references unknown events: {sorted(unknown_events)}")
             unknown = set(component.task_types) - set(self.task_types)
             if unknown:
                 raise ValueError(f"{component.id} references unknown task types: {sorted(unknown)}")
@@ -163,7 +194,7 @@ class ComponentRegistry:
         components = self.components if context is None else self.matching_components(context)
         return {
             "schema_version": 1,
-            "runtime": "ai-rules-agent-governance",
+            "runtime": "ai-rules-client-governance-plugin",
             "task_types": [asdict(item) for item in self.task_types.values()],
             "components": [asdict(item) for item in components],
         }
@@ -315,6 +346,14 @@ def component(
     path_prefixes: tuple[str, ...] = (),
     requires_changed_paths: bool = False,
     final_only: bool = False,
+    events: tuple[str, ...] = (),
+    condition: str = "",
+    requires_facts: tuple[str, ...] = (),
+    produces_facts: tuple[str, ...] = (),
+    effect: str = "readonly",
+    dedupe_key: str = "",
+    performance_budget: str = "",
+    dependencies: tuple[str, ...] = (),
     mechanism_label: str = "",
     gate_label: str = "",
     gate_step: str = "",
@@ -334,6 +373,14 @@ def component(
         path_prefixes=path_prefixes,
         requires_changed_paths=requires_changed_paths,
         final_only=final_only,
+        events=events,
+        condition=condition,
+        requires_facts=requires_facts,
+        produces_facts=produces_facts,
+        effect=effect,
+        dedupe_key=dedupe_key,
+        performance_budget=performance_budget,
+        dependencies=dependencies,
         mechanism_label=mechanism_label,
         gate_label=gate_label,
         gate_step=gate_step,
@@ -343,10 +390,72 @@ def component(
 
 def default_components() -> list[ComponentDefinition]:
     return [
-        component("input.filter.classify-source", "input-filter", "input", 100, "Classify input source and trust boundary."),
-        component("input.filter.decompose-requirements", "input-filter", "input", 110, "Split user input into stable REQ rows."),
-        component("input.filter.recordability-judgement", "input-filter", "input", 120, "Decide whether each requirement must be recorded."),
-        component("input.filter.network-search-judgement", "input-filter", "input", 130, "Decide whether external search or URL evidence is required."),
+        component(
+            "input.filter.classify-source",
+            "input-filter",
+            "input",
+            100,
+            "Classify input source and trust boundary.",
+            events=("user-message", "resume"),
+            requires_facts=("raw_input",),
+            produces_facts=("input_source", "trust_boundary"),
+            condition="Run for every new user, web, file, tool, agent, or history input.",
+        ),
+        component(
+            "input.filter.decompose-requirements",
+            "input-filter",
+            "input",
+            110,
+            "Split user input into stable REQ rows.",
+            events=("user-message",),
+            requires_facts=("raw_input",),
+            produces_facts=("requirement_rows",),
+            condition="Run when the input contains a user goal, correction, approval, or new constraint.",
+        ),
+        component(
+            "input.filter.recordability-judgement",
+            "input-filter",
+            "input",
+            120,
+            "Decide whether each requirement must be recorded.",
+            events=("user-message",),
+            requires_facts=("requirement_rows",),
+            produces_facts=("recordability_decisions",),
+            condition="Run after requirement decomposition and before task tracking decisions.",
+        ),
+        component(
+            "input.filter.network-search-judgement",
+            "input-filter",
+            "input",
+            130,
+            "Decide whether external search or URL evidence is required.",
+            events=("user-message",),
+            requires_facts=("requirement_rows",),
+            produces_facts=("search_required_decisions",),
+            condition="Run when user input or task type may depend on current or external facts.",
+        ),
+        component(
+            "input.filter.acceptance-extract",
+            "input-filter",
+            "input",
+            135,
+            "Extract user-visible acceptance criteria before execution.",
+            events=("user-message", "plan-output"),
+            requires_facts=("requirement_rows",),
+            produces_facts=("acceptance_criteria",),
+            condition="Run when the user asks for implementation, plan, redesign, correction, or completion.",
+        ),
+        component(
+            "input.filter.skill-router",
+            "input-filter",
+            "input",
+            145,
+            "Select candidate skills as capability plugins without bypassing governance gates.",
+            events=("user-message",),
+            requires_facts=("raw_input", "requirement_rows"),
+            produces_facts=("candidate_skills",),
+            condition="Run when repository, project, or global skills may match the user's request.",
+        ),
         component(
             "input.filter.citation-boundary",
             "input-filter",
@@ -391,6 +500,11 @@ def default_components() -> list[ComponentDefinition]:
             "Require explicit approval before mutating rules/scripts/docs/git-sensitive scopes.",
             task_types=("rules-script", "docs", "git", "resume", "correction", "multi-agent"),
             fail_policy="requires_approval",
+            events=("write-intent", "plan-output"),
+            requires_facts=("task_type", "changed_paths_or_write_intent", "approval_label"),
+            produces_facts=("approval_state",),
+            effect="human_interrupt",
+            condition="Block repo/state/Git writes unless an explicit labeled approval is present.",
         ),
         component(
             "preflight.gate.task-gate.rules-script",
@@ -422,6 +536,8 @@ def default_components() -> list[ComponentDefinition]:
             "Record external mature-practice checks for rules and script architecture changes.",
             task_types=("rules-script",),
             fail_policy="fail_closed",
+            effect="network",
+            condition="Run before rules/governance architecture changes unless authoritative local evidence is sufficient and recorded.",
         ),
         component(
             "preflight.interceptor.git-boundary",
@@ -431,6 +547,60 @@ def default_components() -> list[ComponentDefinition]:
             "Enforce stage, commit, push, worktree, and dirty-tree boundaries.",
             task_types=("git",),
             fail_policy="fail_closed",
+            events=("plan-output", "write-intent", "final-output"),
+            requires_facts=("git_status", "approval_state"),
+            produces_facts=("git_boundary_decision",),
+            condition="Run for Git stage, commit, push, worktree, dirty tree, or branch-state operations.",
+        ),
+        component(
+            "prewrite.gate.worktree-live-state",
+            "cross-cutting-gate",
+            "coordination",
+            320,
+            "Reconcile coord/session/queue records against Git live worktree state before writes, resume, merge cleanup, or final output.",
+            events=("write-intent", "resume", "merge-cleanup", "final-output"),
+            task_types=("code-debug", "correction", "rules-script", "docs", "git", "frontend", "resume", "multi-agent"),
+            gate_label="ai_rules.py worktree-task reconcile",
+            gate_step="worktree-live-state",
+            fail_policy="fail_closed",
+            requires_facts=("coord_state", "git_worktree_list"),
+            produces_facts=("worktree_reconcile_report",),
+            condition="Run when a task may write, recover, merge, clean up, or claim final worktree state.",
+            performance_budget="One git worktree list per repository and one coord state read per repository.",
+            dedupe_key="worktree-live-state:project-root",
+        ),
+        component(
+            "prewrite.interceptor.worktree-isolation",
+            "processing-interceptor",
+            "coordination",
+            330,
+            "Require task-level worktree isolation before repository writes.",
+            events=("write-intent",),
+            task_types=("code-debug", "correction", "rules-script", "docs", "git", "frontend", "resume", "multi-agent"),
+            fail_policy="fail_closed",
+            requires_facts=("approval_state", "worktree_reconcile_report"),
+            produces_facts=("worktree_isolation_decision",),
+            condition="Run after live-state reconciliation and before the first file or Git write.",
+        ),
+        component(
+            "coordination.gate.host-submodule-closeout",
+            "cross-cutting-gate",
+            "coordination",
+            340,
+            "Verify host repository gitlink, worktree state, and task tracking after embedded ai-rules merges.",
+            events=("merge-cleanup", "final-output"),
+            task_types=("git", "rules-script"),
+            gate_label="ai_rules.py worktree-task host-closeout",
+            gate_step="host-submodule-closeout",
+            fail_policy="fail_closed",
+            requires_facts=("git_status", "worktree_reconcile_report", "task_tracking"),
+            produces_facts=("host_submodule_closeout_report",),
+            condition=(
+                "Run when an ai-rules worktree merge or embedded submodule closeout is in scope; "
+                "the node checks the host gitlink plus task state/tracking, not only the child repository."
+            ),
+            performance_budget="One host git status, one gitlink lookup, one state JSON read, and targeted task tracking reads.",
+            dedupe_key="host-submodule-closeout:project-root:ai-rules",
         ),
         component(
             "coordination.interceptor.agent-brief",
@@ -460,22 +630,32 @@ def default_components() -> list[ComponentDefinition]:
             fail_policy="fail_closed",
         ),
         component(
-            "periodic.filter.sync-check",
+            "state.filter.sync-check",
             "processing-interceptor",
             "session",
             410,
-            "Run per-session embedded ai-rules sync checks.",
+            "Run per-session embedded ai-rules sync state checks.",
             task_types=("long-running",),
             fail_policy="warn_only",
+            events=("session-start", "status-output"),
+            requires_facts=("embedded_repo_state",),
+            produces_facts=("sync_check_report",),
+            condition="Run at session start or status output; this is not a timed scheduler.",
+            metadata={"previous_id": "periodic.filter.sync-check"},
         ),
         component(
-            "periodic.interceptor.state-audit",
+            "state.interceptor.session-audit",
             "processing-interceptor",
             "session",
             420,
-            "Audit long-running state before closeout or resume.",
+            "Audit long-running state before closeout, resume, or status output.",
             task_types=("long-running",),
             fail_policy="fail_closed",
+            events=("resume", "status-output", "final-output"),
+            requires_facts=("task_queue_state", "pending_records", "coord_state"),
+            produces_facts=("session_state_audit",),
+            condition="Run when recovering or reporting long-running state; this is not a timed scheduler.",
+            metadata={"previous_id": "periodic.interceptor.state-audit"},
         ),
         component(
             "post-change.interceptor.diff-check",
@@ -644,6 +824,38 @@ def default_components() -> list[ComponentDefinition]:
             fail_policy="fail_closed",
         ),
         component(
+            "completion.gate.test-plan",
+            "cross-cutting-gate",
+            "completion",
+            650,
+            "Plan task completion tests from changed paths, task types, and acceptance criteria.",
+            events=("completion-test", "final-output"),
+            requires_changed_paths=True,
+            gate_label="ai_rules.py completion-test",
+            gate_step="completion-test-plan",
+            fail_policy="fail_closed",
+            requires_facts=("changed_paths", "task_types", "acceptance_criteria"),
+            produces_facts=("completion_test_plan",),
+            condition="Run after changes and before final answer when implementation or docs claim completion.",
+            dedupe_key="completion-test-plan:changed-paths:task-types",
+            performance_budget="Read-only path classification plus optional task tracking evidence scan.",
+        ),
+        component(
+            "output.gate.git-state-audit",
+            "cross-cutting-gate",
+            "output",
+            695,
+            "Audit Git/worktree state at plan, status, and final output boundaries without pushing.",
+            events=("plan-output", "status-output", "final-output"),
+            gate_label="git status --short --branch",
+            gate_step="git-state-audit",
+            fail_policy="report_only",
+            requires_facts=("git_status", "worktree_reconcile_report"),
+            produces_facts=("git_state_audit",),
+            condition="Run before user-visible plans, status reports, and final conclusions.",
+            performance_budget="One git status --short --branch per relevant repository.",
+        ),
+        component(
             "output.interceptor.answer-quality",
             "output-interceptor",
             "output",
@@ -673,11 +885,11 @@ def default_components() -> list[ComponentDefinition]:
             "output-interceptor",
             "output",
             725,
-            "Report whether registered runtime nodes were visible, executed, de-duplicated, and efficient enough.",
+            "Report whether registered governance nodes were visible, executed, de-duplicated, and efficient enough.",
             task_types=("rules-script", "docs"),
             fail_policy="fail_closed",
             metadata={
-                "evidence": "runtime components, gate-pool plan, tool-flow trace, and task tracking validation notes",
+                "evidence": "runtime components registry, gate-pool plan, tool-flow trace, and task tracking validation notes",
             },
         ),
         component(
@@ -785,7 +997,7 @@ _DEFAULT_TASK_TYPE = TaskTypeDefinition(
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Inspect the ai-rules agent governance runtime registry.")
+    parser = argparse.ArgumentParser(description="Inspect the ai-rules client governance component registry.")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     components = subparsers.add_parser("components", help="List registered components, optionally filtered by context.")
@@ -794,6 +1006,7 @@ def parse_args() -> argparse.Namespace:
     components.add_argument("--task-size", choices=("small", "medium", "large"), default="small")
     components.add_argument("--changed-path", action="append", default=[])
     components.add_argument("--final", action="store_true")
+    components.add_argument("--event", choices=sorted(NODE_EVENTS), default="")
     components.add_argument("--kind", choices=sorted(COMPONENT_KINDS))
     components.add_argument("--format", choices=("text", "json"), default="text")
 
@@ -809,6 +1022,7 @@ def context_from_args(args: argparse.Namespace) -> AgentExecutionContext:
         task_size=args.task_size,
         changed_paths=tuple(normalize_cli_paths(args.changed_path)),
         final=bool(args.final),
+        event=args.event,
     )
 
 
@@ -838,12 +1052,13 @@ def render_components(registry: ComponentRegistry, context: AgentExecutionContex
             sort_keys=True,
         )
     lines = [
-        "AI Rules Runtime Components",
+        "AI Rules Governance Components",
         f"Input source: {context.input_source}",
         f"Task types: {', '.join(context.task_types) if context.task_types else 'none'}",
         f"Task size: {context.task_size}",
         f"Changed paths: {', '.join(context.changed_paths) if context.changed_paths else 'none'}",
         f"Final: {str(context.final).lower()}",
+        f"Event: {context.event or 'any'}",
         f"Components: {len(components)}",
     ]
     for item in components:
@@ -854,6 +1069,12 @@ def render_components(registry: ComponentRegistry, context: AgentExecutionContex
             labels.append(f"gate={item.gate_label}")
         if item.gate_step:
             labels.append(f"step={item.gate_step}")
+        if item.events:
+            labels.append(f"events={','.join(item.events)}")
+        if item.effect != "readonly":
+            labels.append(f"effect={item.effect}")
+        if item.dedupe_key:
+            labels.append(f"dedupe={item.dedupe_key}")
         suffix = f" ({'; '.join(labels)})" if labels else ""
         lines.append(f"- {item.id} [{item.kind} {item.phase} order={item.order} {item.fail_policy}]{suffix}")
     return "\n".join(lines)
