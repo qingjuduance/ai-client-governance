@@ -158,9 +158,39 @@ def merged_to_target(cwd: Path, branch: str, target_ref: str) -> bool | None:
     return result.returncode == 0
 
 
-def short_status(path: Path) -> str:
+def status_path_from_line(line: str) -> str:
+    """Extract the path portion from one git status --short line."""
+    value = line[3:].strip()
+    if " -> " in value:
+        value = value.split(" -> ", 1)[1].strip()
+    return value.strip('"').replace("\\", "/")
+
+
+def ignored_status_paths(cwd: Path, ignored_abs_paths: set[Path] | None) -> set[str]:
+    """Return ignored paths relative to cwd's repository root."""
+    if not ignored_abs_paths:
+        return set()
+    root_text = git_text(["rev-parse", "--show-toplevel"], cwd, allow_fail=True)
+    if not root_text:
+        return set()
+    root = Path(root_text).resolve()
+    ignored: set[str] = set()
+    for item in ignored_abs_paths:
+        try:
+            ignored.add(item.resolve().relative_to(root).as_posix())
+        except ValueError:
+            continue
+    return ignored
+
+
+def short_status(path: Path, ignored_abs_paths: set[Path] | None = None) -> str:
     """Return git status --short for a worktree."""
-    return git_run(["status", "--short"], path, check=False).stdout.strip()
+    output = git_run(["status", "--short"], path, check=False).stdout.strip()
+    ignored = ignored_status_paths(path, ignored_abs_paths)
+    if not output or not ignored:
+        return output
+    lines = [line for line in output.splitlines() if status_path_from_line(line) not in ignored]
+    return "\n".join(lines).strip()
 
 
 def last_commit_message(path: Path) -> str:
@@ -175,11 +205,12 @@ def build_worktree_record(
     source_repo: Path,
     project_root: Path,
     target_ref: str,
+    ignored_abs_paths: set[Path] | None = None,
 ) -> dict[str, Any]:
     """Build one auditable worktree status record."""
     path = Path(wt["worktree"]).resolve()
     branch = clean_branch_name(wt.get("branch", ""))
-    status_text = short_status(path)
+    status_text = short_status(path, ignored_abs_paths)
     merged = merged_to_target(source_repo, branch, target_ref)
     return {
         "repo": repo_name,
@@ -200,7 +231,11 @@ def build_worktree_record(
     }
 
 
-def build_status_snapshot(project_root: Path, target_ref: str) -> dict[str, Any]:
+def build_status_snapshot(
+    project_root: Path,
+    target_ref: str,
+    ignored_abs_paths: set[Path] | None = None,
+) -> dict[str, Any]:
     """Build a machine-readable status snapshot for all task worktrees."""
     repos = [
         ("self", project_root),
@@ -223,7 +258,7 @@ def build_status_snapshot(project_root: Path, target_ref: str) -> dict[str, Any]
     for repo_name, repo_path in repos:
         if not (repo_path / ".git").exists():
             continue
-        main_status = short_status(repo_path)
+        main_status = short_status(repo_path, ignored_abs_paths)
         repo_record: dict[str, Any] = {
             "main_worktree": display_path(repo_path, project_root),
             "main_branch": current_branch(repo_path),
@@ -249,6 +284,7 @@ def build_status_snapshot(project_root: Path, target_ref: str) -> dict[str, Any]
                     source_repo=repo_path,
                     project_root=project_root,
                     target_ref=target_ref,
+                    ignored_abs_paths=ignored_abs_paths,
                 )
             )
         snapshot[repo_name] = repo_record
@@ -424,10 +460,11 @@ def command_create(args: argparse.Namespace) -> int:
 def command_status(args: argparse.Namespace) -> int:
     """Show status of task worktrees."""
     repo_root = find_project_root(Path.cwd(), args.project_root)
-    snapshot = build_status_snapshot(repo_root, args.target_ref)
+    output = status_state_path(repo_root, args.write_state) if args.write_state is not None else None
+    ignored_paths = {output.resolve()} if output else set()
+    snapshot = build_status_snapshot(repo_root, args.target_ref, ignored_paths)
 
-    if args.write_state is not None:
-        output = status_state_path(repo_root, args.write_state)
+    if output is not None:
         snapshot["state_file"] = display_path(output, repo_root)
         write_status_snapshot(output, snapshot)
         if args.format != "json":
