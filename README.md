@@ -322,6 +322,7 @@ target-project/
 │   ├── gates/
 │   ├── lifecycle/
 │   ├── records/
+│   ├── runtime/
 │   ├── sync/
 │   ├── validation/
 │   └── worktree/
@@ -552,6 +553,36 @@ python scripts\ai_rules.py worktree-coord session register `
 
 新增门禁时优先注册到 `task-gate`、`session-gate`、`gate-pool` 或 `lifecycle` 的
 相应位置，让它自动进入最终收口链路。
+
+`runtime components` 是执行链路的注册表，`gate-pool` 会读取匹配组件的
+`gate_step`，并把相同 `gate_step` 去重后执行。因此多个节点都要求 `doc-index`
+时，门禁池只会把所有 `--changed-path` 聚合起来运行一次，而不是按节点或按文件
+反复慢跑。
+
+文档联动节点属于 post-change 链路。修改功能、脚本、规则、skill、manifest、
+README 或入口 adapter 后，必须判断是否影响用户可读文档、命令说明、索引、
+Markdown 链接或 `.references` 记录。影响到文档时先同步文档和引用；不影响时在
+task tracking 写明 no-impact 理由。对应的机器检查是：
+
+```powershell
+python scripts\ai_rules.py runtime components `
+  --task-type rules-script `
+  --changed-path src\ai_rules\runtime\registry.py `
+  --final
+
+python scripts\ai_rules.py gate-pool `
+  --task-tracking .codex\project\records\task-tracking\example.md `
+  --task-type rules-script `
+  --changed-path src\ai_rules\runtime\registry.py `
+  --changed-path README.md `
+  --final `
+  --dry-run
+```
+
+验收时至少看三件事：`runtime components` 能看到相关节点，`gate-pool --dry-run`
+能看到一次聚合后的 `ai_rules.py doc-index`，`tool-flow` 能看到最终门禁和报告。
+如果链路没有触发、重复触发或明显拖慢任务，必须在 task tracking 记录原因并修正
+触发条件或 `gate_step` 去重策略。
 
 用户输入中出现联网、搜索、核对、最新、资料、URL、引用等触发词时，输入过滤器必须
 把它登记成可追踪要求；后续要么记录联网证据，要么记录无需联网或阻塞原因。

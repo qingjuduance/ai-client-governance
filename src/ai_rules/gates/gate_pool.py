@@ -167,6 +167,25 @@ def build_steps(root: Path, args: argparse.Namespace) -> list[GateStep]:
                 reason="Markdown files changed.",
             )
         )
+    if changed_paths and "doc-index" in gate_steps:
+        doc_index_args = [
+            "check",
+            "--root",
+            str(root),
+            "--rebuild",
+            "--strict",
+        ]
+        for path in changed_paths:
+            doc_index_args.extend(["--changed-path", path])
+        steps.append(
+            GateStep(
+                name="ai_rules.py doc-index",
+                phase="post-change",
+                command=cli_command(py, entrypoint, "doc-index", *doc_index_args),
+                final_gate=args.final,
+                reason="Changed paths may affect docs, README, references, or backlinks; run once with all changed paths.",
+            )
+        )
     if "scan-corrections" in gate_steps and (
         "correction" in task_types or any(is_correction_path(path) for path in changed_paths)
     ):
