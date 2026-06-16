@@ -15,6 +15,7 @@ from ai_rules.io import context_extract
 from ai_rules import templates
 from ai_rules.lifecycle import engine as lifecycle
 from ai_rules.records import scan_corrections, task_queue, tool_flow, tool_invocations
+from ai_rules.runtime import registry as runtime_registry
 from ai_rules.sync import check as sync_check
 from ai_rules.validation import encoding, selftest
 from ai_rules.worktree import coord as worktree_coord
@@ -30,6 +31,7 @@ COMMANDS: dict[str, tuple[str, Callable[[], int]]] = {
     "gate-pool": ("Run a traceable pool of gates.", gate_pool.main),
     "lifecycle": ("Run lifecycle preflight/finalize/status.", lifecycle.main),
     "rule-audit": ("Audit rule-entry and README sections for tooling migration.", rule_tooling_audit.main),
+    "runtime": ("Inspect agent governance runtime components.", runtime_registry.main),
     "scan-corrections": ("Scan correction records.", scan_corrections.main),
     "session-gate": ("Validate session closeout evidence.", session_gate.main),
     "sync-check": ("Check embedded ai-rules synchronization state.", sync_check.main),

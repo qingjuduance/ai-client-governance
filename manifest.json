@@ -16,6 +16,39 @@
     "projectEntry": ".codex/project/rules/project/AGENTS.md",
     "adapterStrategy": "thin-native-entrypoints-import-or-point-to-common-and-project-facts"
   },
+  "runtimeArchitecture": {
+    "name": "ai-rules-agent-governance-runtime",
+    "concept": "Spring-style local runtime for governing how coding agents understand input, acquire approval, use worktrees, run gates, record state, and close out.",
+    "coreContext": "AgentExecutionContext",
+    "registryCommand": "python .codex/ai-rules/scripts/ai_rules.py runtime components",
+    "componentKinds": [
+      "input-filter",
+      "processing-interceptor",
+      "output-interceptor",
+      "cross-cutting-gate",
+      "reporter"
+    ],
+    "componentContract": [
+      "id",
+      "kind",
+      "phase",
+      "order",
+      "fail_policy",
+      "task_types",
+      "task_sizes",
+      "input_sources",
+      "path_suffixes",
+      "path_prefixes",
+      "gate_step"
+    ],
+    "failPolicies": [
+      "fail_closed",
+      "warn_only",
+      "requires_approval",
+      "report_only"
+    ],
+    "extensionPolicy": "Add deterministic behavior as registered runtime components before expanding prose rules."
+  },
   "agentEntryAdapters": [
     {
       "tool": "codex-agents-ecosystem",
@@ -149,6 +182,7 @@
     "commonRules": "AGENTS.md",
     "commonRulesSemantics": "agent-neutral workflow source exposed through AGENTS.md compatibility adapter",
     "pythonPackage": "src/ai_rules",
+    "runtime": "src/ai_rules/runtime",
     "skills": [
       ".codex/skills/agents-rule-maintainer",
       ".codex/skills/codex-token-usage",

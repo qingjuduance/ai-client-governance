@@ -23,6 +23,8 @@ from pathlib import Path
 from typing import Any
 
 from ai_rules.common.paths import PYTHON_PYCACHE_DIR, ai_rules_entrypoint
+from ai_rules.runtime import AgentExecutionContext, default_registry, requires_approval_for, requires_tracking_for
+from ai_rules.runtime.registry import MUTATING_TASK_TYPES, TASK_TYPE_KEYWORDS
 
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -48,81 +50,8 @@ TEXT_EXTENSIONS = {
     ".yml",
 }
 
-TASK_KEYWORDS: dict[str, list[str]] = {
-    "code-debug": [
-        "bug",
-        "debug",
-        "error",
-        "exception",
-        "log",
-        "traceback",
-        "报错",
-        "调试",
-        "日志",
-        "异常",
-    ],
-    "correction": ["correction", "漏", "错", "纠错", "修正", "没按", "遗漏"],
-    "rules-script": [
-        "AGENTS",
-        "CLAUDE.md",
-        "GEMINI.md",
-        "CONVENTIONS.md",
-        "copilot-instructions",
-        ".cursor/rules",
-        ".clinerules",
-        ".windsurf/rules",
-        ".continue/rules",
-        ".roo/rules",
-        "adapter",
-        "SKILL",
-        "ai-rules",
-        "gate",
-        "hook",
-        "lifecycle",
-        "pipeline",
-        "script",
-        "state machine",
-        "workflow",
-        "callback",
-        "wrapper",
-        "生命周期",
-        "流水线",
-        "状态机",
-        "中间层",
-        "回调",
-        "包装器",
-        "规则",
-        "脚本",
-        "门禁",
-    ],
-    "docs": [
-        "README",
-        "docs",
-        "markdown",
-        "reference",
-        "文档",
-        "索引",
-        "引用",
-        "链接",
-    ],
-    "git": ["commit", "push", "stage", "stash", "git", "提交", "推送", "暂存"],
-    "frontend": ["browser", "frontend", "localhost", "playwright", "ui", "页面", "浏览器"],
-    "resume": ["PDF", "resumes/", "resumes\\", "简历", "导出"],
-    "multi-agent": ["agent", "sub-agent", "主从", "子 AI", "子AI", "智能体"],
-    "long-running": ["pending", "恢复", "继续", "长任务", "未完成", "定时", "周期"],
-}
-
-MUTATING_TYPES = {
-    "code-debug",
-    "correction",
-    "rules-script",
-    "docs",
-    "git",
-    "frontend",
-    "resume",
-    "multi-agent",
-    "long-running",
-}
+TASK_KEYWORDS = TASK_TYPE_KEYWORDS
+MUTATING_TYPES = MUTATING_TASK_TYPES
 
 
 @dataclass
@@ -320,63 +249,18 @@ def required_hooks_and_gates(
     changed_paths: list[str],
     input_source: str,
 ) -> tuple[list[str], list[str], bool, bool]:
-    hooks: list[str] = [
-        "input.filter.classify-source",
-        "input.filter.decompose-requirements",
-        "input.filter.recordability-judgement",
-        "input.filter.network-search-judgement",
-        "output.interceptor.answer-quality",
-        "output.interceptor.user-satisfaction",
-        "output.interceptor.finalize-closeout",
-    ]
-    gates: list[str] = []
-
-    if input_source == "web":
-        hooks.append("input.filter.citation-boundary")
-    if task_size in {"medium", "large"}:
-        hooks.extend(["preflight.interceptor.task-tracking", "preflight.interceptor.task-size"])
-        gates.append("ai_rules.py task-gate:user-input-and-requirements")
-    if changed_paths:
-        hooks.append("post-change.interceptor.diff-check")
-        gates.append("encoding-or-whitespace-check")
-    if any(Path(path).suffix.lower() == ".py" for path in changed_paths):
-        gates.append("py_compile")
-    if "rules-script" in task_types:
-        hooks.extend(["preflight.interceptor.approval", "preflight.interceptor.external-practice-check"])
-        gates.extend(["ai_rules.py task-gate", "ai_rules.py session-gate"])
-    if "docs" in task_types or any(Path(path).suffix.lower() == ".md" for path in changed_paths):
-        hooks.extend([
-            "post-change.interceptor.doc-index-bubble",
-            "post-change.interceptor.reference-check",
-            "output.interceptor.document-sync",
-        ])
-        gates.extend(["ai_rules.py doc-index", "ai_rules.py validate-doc"])
-    if "git" in task_types:
-        hooks.append("preflight.interceptor.git-boundary")
-        gates.append("git status")
-    if "multi-agent" in task_types:
-        hooks.extend(["coordination.interceptor.agent-brief", "coordination.interceptor.agent-acceptance-matrix"])
-        gates.append("ai_rules.py task-gate:multi-agent-acceptance-matrix")
-    if "resume" in task_types:
-        hooks.append("post-change.interceptor.resume-export")
-        gates.append("PDF export/layout check")
-    if "long-running" in task_types:
-        hooks.extend([
-            "session.interceptor.pending-recovery",
-            "periodic.filter.sync-check",
-            "periodic.interceptor.state-audit",
-        ])
-        gates.append("ai_rules.py session-gate")
-
-    requires_tracking = task_size in {"medium", "large"} or any(
-        task_type in {"rules-script", "docs", "git", "resume", "correction", "long-running"}
-        for task_type in task_types
+    context = AgentExecutionContext(
+        input_source=input_source,
+        task_types=tuple(task_types),
+        task_size=task_size,
+        changed_paths=tuple(changed_paths),
+        final=False,
     )
-    requires_approval = bool(changed_paths) or any(
-        task_type in {"rules-script", "docs", "git", "resume", "correction", "multi-agent"}
-        for task_type in task_types
-    )
-
+    registry = default_registry()
+    hooks = registry.mechanism_labels_for_context(context)
+    gates = registry.gate_labels_for_context(context)
+    requires_tracking = requires_tracking_for(task_types, task_size)
+    requires_approval = requires_approval_for(task_types, changed_paths=changed_paths)
     return unique(hooks), unique(gates), requires_tracking, requires_approval
 
 

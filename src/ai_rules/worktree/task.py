@@ -366,7 +366,12 @@ def build_status_snapshot(
             "require_live_status_rerun_before_final_reply": True,
             "queue_before_merge_command": "python .codex/ai-rules/scripts/ai_rules.py worktree-task queue",
             "merge_command": "python .codex/ai-rules/scripts/ai_rules.py worktree-task merge --execute",
+            "worktree_cleanup_command": "python .codex/ai-rules/scripts/ai_rules.py worktree-task remove --execute",
             "pre_finalize_gate_command": "python .codex/ai-rules/scripts/ai_rules.py worktree-task finalize",
+            "full_cleanup_finalize_gate_command": (
+                "python .codex/ai-rules/scripts/ai_rules.py worktree-task finalize "
+                "--require-merged --require-no-task-worktrees"
+            ),
             "branch_cleanup_command": "python .codex/ai-rules/scripts/ai_rules.py worktree-task cleanup-branch --execute",
         },
     }
@@ -668,7 +673,11 @@ def command_close(args: argparse.Namespace) -> int:
     print(f"| 是否合并回源仓库 | {merged_label} |")
     print(f"| 是否 stage/commit | {'已提交' if not is_dirty else '未提交或有新改动'} |")
     print(f"| 是否 push | 脚本不自动判断远端 push；需结合 `git status --branch` 和远端分支确认 |")
-    print(f"| 下一步/用户需确认 | {'可以按需要移除 worktree' if not is_dirty and is_merged else '需要用户确认是否合并/提交/push'} |")
+    if not is_dirty and is_merged:
+        next_step = "合并/收口任务应移除 worktree；如保留需记录原因"
+    else:
+        next_step = "需要用户确认是否合并/提交/push"
+    print(f"| 下一步/用户需确认 | {next_step} |")
 
     if args.session_id:
         close_cmd = [
@@ -796,6 +805,15 @@ def command_merge(args: argparse.Namespace) -> int:
 
     print(result.stdout.strip())
     print(f"Merged {branch} into {args.target_ref}")
+    print("Next cleanup after verifying the merge:")
+    print(
+        "  python .codex/ai-rules/scripts/ai_rules.py worktree-task remove "
+        f"--repo {args.repo} --task-slug {args.task_slug} --execute"
+    )
+    print(
+        "  python .codex/ai-rules/scripts/ai_rules.py worktree-task cleanup-branch "
+        f"--repo {args.repo} --task-slug {args.task_slug} --execute"
+    )
 
     if args.queue_item:
         mark_cmd = [

@@ -19,6 +19,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from ai_rules.common.paths import PYTHON_PYCACHE_DIR, ai_rules_entrypoint, is_correction_path
+from ai_rules.runtime import AgentExecutionContext, default_registry
 
 
 TEXT_EXTENSIONS = {
@@ -89,6 +90,17 @@ def task_type_args(task_types: list[str]) -> list[str]:
     return ["--task-types", *task_types] if task_types else []
 
 
+def registry_gate_steps(task_types: list[str], changed_paths: list[str], final: bool) -> set[str]:
+    context = AgentExecutionContext(
+        input_source="tool",
+        task_types=tuple(task_types),
+        task_size="medium" if changed_paths else "small",
+        changed_paths=tuple(path.replace("\\", "/") for path in changed_paths),
+        final=final,
+    )
+    return set(default_registry().gate_step_ids_for_context(context))
+
+
 def build_steps(root: Path, args: argparse.Namespace) -> list[GateStep]:
     entrypoint = ai_rules_entrypoint()
     py = sys.executable
@@ -100,9 +112,10 @@ def build_steps(root: Path, args: argparse.Namespace) -> list[GateStep]:
     text_paths = [path for path in existing_changed_paths if Path(path).suffix.lower() in TEXT_EXTENSIONS]
     python_paths = [path for path in existing_changed_paths if Path(path).suffix.lower() == ".py"]
     task_types = list(args.task_type or [])
+    gate_steps = registry_gate_steps(task_types, changed_paths, args.final)
 
     steps: list[GateStep] = []
-    if python_paths:
+    if python_paths and "py-compile" in gate_steps:
         steps.append(
             GateStep(
                 name="py-compile",
@@ -111,7 +124,7 @@ def build_steps(root: Path, args: argparse.Namespace) -> list[GateStep]:
                 reason="Python files changed.",
             )
         )
-    if text_paths:
+    if text_paths and "validate-encoding" in gate_steps:
         steps.append(
             GateStep(
                 name="ai_rules.py validate-encoding",
@@ -129,7 +142,7 @@ def build_steps(root: Path, args: argparse.Namespace) -> list[GateStep]:
                 reason="Text files changed.",
             )
         )
-    if markdown_paths:
+    if markdown_paths and "validate-doc" in gate_steps:
         validate_doc_args = [
             "--root",
             str(root),
@@ -154,7 +167,9 @@ def build_steps(root: Path, args: argparse.Namespace) -> list[GateStep]:
                 reason="Markdown files changed.",
             )
         )
-    if "correction" in task_types or any(is_correction_path(path) for path in changed_paths):
+    if "scan-corrections" in gate_steps and (
+        "correction" in task_types or any(is_correction_path(path) for path in changed_paths)
+    ):
         steps.append(
             GateStep(
                 name="ai_rules.py scan-corrections",
@@ -164,7 +179,7 @@ def build_steps(root: Path, args: argparse.Namespace) -> list[GateStep]:
                 reason="Correction records are in scope.",
             )
         )
-    if changed_paths:
+    if changed_paths and "git-diff-check" in gate_steps:
         steps.append(
             GateStep(
                 name="git-diff-check",
@@ -173,7 +188,7 @@ def build_steps(root: Path, args: argparse.Namespace) -> list[GateStep]:
                 reason="Changed paths should not introduce whitespace errors.",
             )
         )
-    if args.final:
+    if args.final and "architecture-guard" in gate_steps:
         steps.append(
             GateStep(
                 name="ai_rules.py architecture-guard",
@@ -190,6 +205,7 @@ def build_steps(root: Path, args: argparse.Namespace) -> list[GateStep]:
                 reason="Final .codex architecture boundary gate.",
             )
         )
+    if args.final and "task-gate" in gate_steps:
         steps.append(
             GateStep(
                 name="ai_rules.py task-gate",
@@ -207,6 +223,7 @@ def build_steps(root: Path, args: argparse.Namespace) -> list[GateStep]:
                 reason="Final task-type evidence gate.",
             )
         )
+    if args.final and "session-gate" in gate_steps:
         steps.append(
             GateStep(
                 name="ai_rules.py session-gate",
@@ -225,6 +242,7 @@ def build_steps(root: Path, args: argparse.Namespace) -> list[GateStep]:
                 reason="Final session closure gate.",
             )
         )
+    if args.final and "task-queue" in gate_steps:
         steps.append(
             GateStep(
                 name="ai_rules.py task-queue",
