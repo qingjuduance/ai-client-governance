@@ -440,7 +440,18 @@ python .codex\ai-rules\scripts\ai_rules.py worktree-task create `
 python .codex\ai-rules\scripts\ai_rules.py worktree-task status --write-state
 python .codex\ai-rules\scripts\ai_rules.py worktree-task status --format json
 python .codex\ai-rules\scripts\ai_rules.py worktree-task close --repo ai-rules --task-slug worktree-task-script
-python .codex\ai-rules\scripts\ai_rules.py worktree-task remove --repo ai-rules --task-slug worktree-task-script
+python .codex\ai-rules\scripts\ai_rules.py worktree-task remove `
+  --repo ai-rules `
+  --task-slug worktree-task-script `
+  --execute
+python .codex\ai-rules\scripts\ai_rules.py worktree-task cleanup-branch `
+  --repo ai-rules `
+  --task-slug worktree-task-script `
+  --execute
+python .codex\ai-rules\scripts\ai_rules.py worktree-task finalize `
+  --require-merged `
+  --require-no-task-worktrees `
+  --write-state
 ```
 
 创建 `self` 仓库任务 worktree 时，脚本默认用 sparse-checkout 排除
@@ -460,6 +471,14 @@ Git 状态，最终回复前也必须做一次 live status 校验。
 `git worktree remove`，且默认拒绝移除 dirty worktree。固定脚本会把路径限制在宿主
 项目 `.codex/project/.worktree/<task-slug>/`，创建时可自动登记
 `worktree-coord` session 和写锁。
+
+当用户要求合并、收口或清理所有 worktree 时，清理目录不是可选的后续建议，而是本轮
+DoD 的一部分。合并后必须先确认 task worktree clean 且 merged，再执行
+`worktree-task remove --execute` 删除任务 worktree 目录；如还要清理本地任务分支，
+先移除 worktree，再执行 `worktree-task cleanup-branch --execute`。最终用
+`worktree-task finalize --require-merged --require-no-task-worktrees --write-state`
+做 live gate；除非用户明确要求保留或存在取证/恢复需要，否则最终回复不能把残留
+`.codex/project/.worktree/<task-slug>/` 当成“已完成”。
 
 手工 fallback 示例：
 
@@ -579,7 +598,8 @@ python scripts\ai_rules.py tool-flow --trace-id <trace-id> --require-final-gate 
 - 是否已经合并回源仓库；未合并时写明等待用户确认。
 - 是否 stage/commit；未提交时写明没有本地 commit。
 - 是否 push；未推送时写明远端未变。
-- 用户下一步要决定的是合并、提交、推送、继续验证还是放弃。
+- 是否已移除任务 worktree 目录、是否已清理本地任务分支；如果保留，写明原因。
+- 用户下一步要决定的是合并、提交、推送、继续验证、保留取证还是放弃。
 
 `ai_rules.py task-gate` 会把这些当作输出拦截器检查，缺少时最终门禁失败。
 
