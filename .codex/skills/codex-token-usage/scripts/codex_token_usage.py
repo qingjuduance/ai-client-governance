@@ -38,6 +38,16 @@ LABELS = {
         "net_usage": "Net usage",
         "cache_hit_rate": "Cache hit rate",
         "daily_average_total": "Daily average total",
+        "cost": "Cost",
+        "cost_item": "Cost item",
+        "amount": "Amount",
+        "api_cost_estimate": "API cost estimate",
+        "price_per_million": "Price per 1M tokens",
+        "estimated_total_cost": "Estimated total",
+        "cost_non_cached_input": "Non-cached input",
+        "cost_cached_input": "Cached input",
+        "cost_output": "Output",
+        "cost_unpriced": "Total-only tokens",
         "peak_day": "Peak day",
         "busiest_week": "Busiest week",
         "no_events": "No token_count events were found in this range.",
@@ -50,6 +60,8 @@ LABELS = {
         "net_note": "Non-cached input + output",
         "cache_rate_note": "Cached input / input",
         "daily_average_note": "Total / calendar days in range",
+        "cost_note": "API estimate only; subscription plans may bill differently",
+        "unpriced_note": "Only total_tokens was available, charged at the unpriced token rate",
     },
     "zh": {
         "range": "范围",
@@ -69,6 +81,16 @@ LABELS = {
         "net_usage": "净用量",
         "cache_hit_rate": "缓存命中率",
         "daily_average_total": "日均总量",
+        "cost": "估算费用",
+        "cost_item": "费用项",
+        "amount": "金额",
+        "api_cost_estimate": "API 费用估算",
+        "price_per_million": "每 100 万 tokens 价格",
+        "estimated_total_cost": "估算合计",
+        "cost_non_cached_input": "非缓存 Input",
+        "cost_cached_input": "Cached input",
+        "cost_output": "Output",
+        "cost_unpriced": "仅 total 的 tokens",
         "peak_day": "最多的一天",
         "busiest_week": "最多的一周",
         "no_events": "这个时间范围内没有找到 token_count 事件。",
@@ -81,8 +103,16 @@ LABELS = {
         "net_note": "非缓存 Input + Output",
         "cache_rate_note": "Cached input / Input",
         "daily_average_note": "总量 / 统计范围日历天数",
+        "cost_note": "仅按 API 价格估算；订阅套餐的真实账单可能不同",
+        "unpriced_note": "只有 total_tokens，没有 input/output 拆分，按未拆分 token 价格估算",
     },
 }
+
+
+DEFAULT_INPUT_PRICE = 5.00
+DEFAULT_CACHED_INPUT_PRICE = 0.50
+DEFAULT_OUTPUT_PRICE = 30.00
+PRICE_UNIT = 1_000_000
 
 
 @dataclass(frozen=True)
@@ -96,6 +126,25 @@ class TokenEvent:
     output_tokens: int
     reasoning_output_tokens: int
     total_tokens: int
+
+
+@dataclass(frozen=True)
+class CostConfig:
+    currency: str
+    input_price: float
+    cached_input_price: float
+    output_price: float
+    unpriced_token_price: float
+
+
+def non_negative_float(value: str) -> float:
+    try:
+        parsed = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be a number") from exc
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("must be greater than or equal to 0")
+    return parsed
 
 
 def parse_args() -> argparse.Namespace:
@@ -147,6 +196,43 @@ def parse_args() -> argparse.Namespace:
         "--show-daily",
         action="store_true",
         help="Include a daily total table in Markdown output.",
+    )
+    parser.add_argument(
+        "--show-cost",
+        action="store_true",
+        help="Include an API cost estimate in Markdown and JSON output.",
+    )
+    parser.add_argument(
+        "--input-price",
+        type=non_negative_float,
+        default=DEFAULT_INPUT_PRICE,
+        help="Input price per 1M non-cached input tokens. Default: 5.00.",
+    )
+    parser.add_argument(
+        "--cached-input-price",
+        type=non_negative_float,
+        default=DEFAULT_CACHED_INPUT_PRICE,
+        help="Cached input price per 1M cached input tokens. Default: 0.50.",
+    )
+    parser.add_argument(
+        "--output-price",
+        type=non_negative_float,
+        default=DEFAULT_OUTPUT_PRICE,
+        help="Output price per 1M output tokens. Default: 30.00.",
+    )
+    parser.add_argument(
+        "--unpriced-token-price",
+        type=non_negative_float,
+        default=None,
+        help=(
+            "Price per 1M tokens for token_count events that only expose total_tokens. "
+            "Defaults to --input-price."
+        ),
+    )
+    parser.add_argument(
+        "--currency",
+        default="USD",
+        help="Currency label for cost estimates. Default: USD.",
     )
     return parser.parse_args()
 
@@ -372,6 +458,10 @@ def summarize(events: list[TokenEvent], days: int | None = None) -> dict:
     total = sum(event.total_tokens for event in events)
     non_cached_input = max(input_tokens - cached_input, 0)
     net_usage = non_cached_input + output
+    unpriced_total_only = sum(
+        max(event.total_tokens - event.input_tokens - event.output_tokens, 0)
+        for event in events
+    )
     return {
         "events": len(events),
         "sessions": len({event.session for event in events}),
@@ -382,9 +472,69 @@ def summarize(events: list[TokenEvent], days: int | None = None) -> dict:
         "reasoning_output": reasoning,
         "non_cached_input": non_cached_input,
         "net_usage": net_usage,
+        "unpriced_total_only": unpriced_total_only,
         "cache_hit_rate": (cached_input / input_tokens) if input_tokens else 0.0,
         "daily_average_total": (total / days) if days else None,
     }
+
+
+def build_cost_config(args: argparse.Namespace) -> CostConfig:
+    return CostConfig(
+        currency=args.currency,
+        input_price=args.input_price,
+        cached_input_price=args.cached_input_price,
+        output_price=args.output_price,
+        unpriced_token_price=(
+            args.input_price
+            if args.unpriced_token_price is None
+            else args.unpriced_token_price
+        ),
+    )
+
+
+def estimate_cost(summary: dict, config: CostConfig) -> dict:
+    non_cached_input = summary["non_cached_input"]
+    cached_input = summary["cached_input"]
+    output = summary["output"]
+    unpriced = summary["unpriced_total_only"]
+    input_cost = non_cached_input * config.input_price / PRICE_UNIT
+    cached_input_cost = cached_input * config.cached_input_price / PRICE_UNIT
+    output_cost = output * config.output_price / PRICE_UNIT
+    unpriced_cost = unpriced * config.unpriced_token_price / PRICE_UNIT
+    return {
+        "currency": config.currency,
+        "price_unit_tokens": PRICE_UNIT,
+        "prices_per_million_tokens": {
+            "input": config.input_price,
+            "cached_input": config.cached_input_price,
+            "output": config.output_price,
+            "unpriced_total_only": config.unpriced_token_price,
+        },
+        "tokens": {
+            "non_cached_input": non_cached_input,
+            "cached_input": cached_input,
+            "output": output,
+            "unpriced_total_only": unpriced,
+        },
+        "input_cost": input_cost,
+        "cached_input_cost": cached_input_cost,
+        "output_cost": output_cost,
+        "unpriced_total_only_cost": unpriced_cost,
+        "total_cost": input_cost + cached_input_cost + output_cost + unpriced_cost,
+        "note": "API estimate only; subscription plans may bill differently.",
+    }
+
+
+def attach_cost_estimates(report: dict, config: CostConfig) -> None:
+    report["summary"]["cost_estimate"] = estimate_cost(report["summary"], config)
+    report["cost_estimate"] = report["summary"]["cost_estimate"]
+    for key in ("peak_day", "busiest_week"):
+        row = report.get(key)
+        if row:
+            row["summary"]["cost_estimate"] = estimate_cost(row["summary"], config)
+    for key in ("daily", "weekly"):
+        for row in report.get(key, []):
+            row["summary"]["cost_estimate"] = estimate_cost(row["summary"], config)
 
 
 def group_events(events: list[TokenEvent], key_func):
@@ -472,6 +622,18 @@ def format_percent(value: float) -> str:
     return f"{value * 100:.2f}%"
 
 
+def format_money(value: float, currency: str) -> str:
+    if currency.upper() == "USD":
+        return f"${value:,.2f}"
+    return f"{value:,.2f} {currency}"
+
+
+def format_price(value: float, currency: str) -> str:
+    if currency.upper() == "USD":
+        return f"${value:,.2f}"
+    return f"{value:,.2f} {currency}"
+
+
 def metric_rows(summary: dict, labels: dict) -> list[tuple[str, str, str]]:
     return [
         (labels["total"], format_number(summary["total"]), labels["total_note"]),
@@ -506,7 +668,59 @@ def metric_rows(summary: dict, labels: dict) -> list[tuple[str, str, str]]:
     ]
 
 
-def print_markdown(report: dict, language: str, show_daily: bool) -> None:
+def cost_rows(cost: dict, labels: dict) -> list[tuple[str, str, str]]:
+    currency = cost["currency"]
+    prices = cost["prices_per_million_tokens"]
+    tokens = cost["tokens"]
+    rows = [
+        (
+            labels["cost_non_cached_input"],
+            format_money(cost["input_cost"], currency),
+            (
+                f"{format_number(tokens['non_cached_input'])} tokens x "
+                f"{format_price(prices['input'], currency)} / 1M"
+            ),
+        ),
+        (
+            labels["cost_cached_input"],
+            format_money(cost["cached_input_cost"], currency),
+            (
+                f"{format_number(tokens['cached_input'])} tokens x "
+                f"{format_price(prices['cached_input'], currency)} / 1M"
+            ),
+        ),
+        (
+            labels["cost_output"],
+            format_money(cost["output_cost"], currency),
+            (
+                f"{format_number(tokens['output'])} tokens x "
+                f"{format_price(prices['output'], currency)} / 1M"
+            ),
+        ),
+    ]
+    if tokens["unpriced_total_only"]:
+        rows.append(
+            (
+                labels["cost_unpriced"],
+                format_money(cost["unpriced_total_only_cost"], currency),
+                (
+                    f"{format_number(tokens['unpriced_total_only'])} tokens x "
+                    f"{format_price(prices['unpriced_total_only'], currency)} / 1M; "
+                    f"{labels['unpriced_note']}"
+                ),
+            )
+        )
+    rows.append(
+        (
+            labels["estimated_total_cost"],
+            format_money(cost["total_cost"], currency),
+            labels["cost_note"],
+        )
+    )
+    return rows
+
+
+def print_markdown(report: dict, language: str, show_daily: bool, show_cost: bool) -> None:
     labels = LABELS[language]
     summary = report["summary"]
     print(f"{labels['range']}: {report['start']} to {report['end']}")
@@ -525,6 +739,22 @@ def print_markdown(report: dict, language: str, show_daily: bool) -> None:
         print(labels["no_events"])
         return
 
+    if show_cost:
+        cost = summary["cost_estimate"]
+        prices = cost["prices_per_million_tokens"]
+        currency = cost["currency"]
+        print()
+        print(
+            f"{labels['api_cost_estimate']}: "
+            f"Input {format_price(prices['input'], currency)}/1M, "
+            f"Cached input {format_price(prices['cached_input'], currency)}/1M, "
+            f"Output {format_price(prices['output'], currency)}/1M."
+        )
+        print(f"| {labels['cost_item']} | {labels['amount']} | {labels['notes']} |")
+        print("|---|---:|---|")
+        for item, amount, note in cost_rows(cost, labels):
+            print(f"| {item} | {amount} | {note} |")
+
     if report["peak_day"]:
         peak = report["peak_day"]
         print()
@@ -541,14 +771,28 @@ def print_markdown(report: dict, language: str, show_daily: bool) -> None:
 
     if show_daily and report["daily"]:
         print()
-        print(f"| Date | {labels['total']} | {labels['events']} | {labels['sessions']} |")
-        print("|---|---:|---:|---:|")
+        if show_cost:
+            print(
+                f"| Date | {labels['total']} | {labels['cost']} | "
+                f"{labels['events']} | {labels['sessions']} |"
+            )
+            print("|---|---:|---:|---:|---:|")
+        else:
+            print(f"| Date | {labels['total']} | {labels['events']} | {labels['sessions']} |")
+            print("|---|---:|---:|---:|")
         for row in report["daily"]:
             row_summary = row["summary"]
-            print(
-                f"| {row['date']} | {format_number(row_summary['total'])} | "
-                f"{row_summary['events']:,} | {row_summary['sessions']:,} |"
-            )
+            if show_cost:
+                print(
+                    f"| {row['date']} | {format_number(row_summary['total'])} | "
+                    f"{format_money(row_summary['cost_estimate']['total_cost'], row_summary['cost_estimate']['currency'])} | "
+                    f"{row_summary['events']:,} | {row_summary['sessions']:,} |"
+                )
+            else:
+                print(
+                    f"| {row['date']} | {format_number(row_summary['total'])} | "
+                    f"{row_summary['events']:,} | {row_summary['sessions']:,} |"
+                )
 
 
 def main() -> int:
@@ -573,10 +817,12 @@ def main() -> int:
         invalid_lines=invalid_lines,
         include_archived=args.include_archived,
     )
+    if args.show_cost:
+        attach_cost_estimates(report, build_cost_config(args))
     if args.format == "json":
         print(json.dumps(json_ready(report), ensure_ascii=False, indent=2))
     else:
-        print_markdown(report, args.language, args.show_daily)
+        print_markdown(report, args.language, args.show_daily, args.show_cost)
     return 0
 
 
