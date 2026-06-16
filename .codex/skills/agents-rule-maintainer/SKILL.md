@@ -19,7 +19,7 @@ Read in this order:
 
 1. Current user request and any scope limits.
 2. Repository `AGENTS.md`, then nearer directory instructions if relevant.
-3. Existing `.codex/corrections/` entries and task tracking only when the
+3. Existing `.codex/project/records/corrections/` entries and task tracking only when the
    request asks to promote or audit them.
 4. The target rule section, nearby overlapping rules, and validation scripts or
    README files that already govern the same workflow.
@@ -93,7 +93,7 @@ tracking before claiming the design is complete:
 - Quantitative source: which script, ledger, report, or section is the fact
   source, and which text counts are only weak evidence.
 
-Prefer moving this gate into `codex_task_gate.py` or another read-only script
+Prefer moving this gate into `ai_rules.py task-gate` or another read-only command
 when the check is deterministic. Keep judgement-heavy tradeoffs in this skill.
 
 ## Thin Entry And Tooling Migration
@@ -115,7 +115,7 @@ before editing:
 Before deleting large prose blocks, run the local read-only audit when available:
 
 ```bash
-python scripts/rule_tooling_audit.py --paths AGENTS.md README.md --format markdown
+python .codex/ai-rules/scripts/ai_rules.py rule-audit --paths AGENTS.md README.md --format markdown
 ```
 
 Record the generated migration matrix in task tracking, then edit in small,
@@ -134,13 +134,13 @@ why anything was not promoted. Keep this writeback inside the approved scope.
 After editing a skill, run:
 
 ```bash
-python <skill-creator>/scripts/quick_validate.py .codex/skills/agents-rule-maintainer
+python <skill-creator>/scripts/quick_validate.py .codex/ai-rules/.codex/skills/agents-rule-maintainer
 ```
 
 For AGENTS rule edits, also run targeted text checks such as:
 
 ```bash
-rg -n "old-rule-text|new-rule-text" AGENTS.md .codex/corrections .codex/task-tracking
+rg -n "old-rule-text|new-rule-text" AGENTS.md .codex/project/records/corrections .codex/project/records/task-tracking
 ```
 
 Report changed files, validation commands, trigger scenarios, and remaining risk

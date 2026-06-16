@@ -7,15 +7,12 @@
     "targetPath": ".codex/ai-rules",
     "defaultMethod": "git-submodule",
     "preferredMethod": "git-submodule",
-    "fallbackMethod": "nested-git-clone",
-    "copyManagedPaths": false
+    "fallbackMethod": "nested-git-clone"
   },
   "rulesLayout": {
     "rootEntryTarget": "AGENTS.md",
     "commonEntry": ".codex/ai-rules/AGENTS.md",
-    "projectEntry": ".codex/rules/project/AGENTS.md",
-    "legacyCommonEntry": ".codex/rules/common/AGENTS.md",
-    "legacyCommonPolicy": "historical-migration-only-not-read-fallback"
+    "projectEntry": ".codex/project/rules/project/AGENTS.md"
   },
   "syncPolicy": {
     "checkEverySession": true,
@@ -36,32 +33,42 @@
     "workingDirectory": ".codex/ai-rules",
     "requireUserApprovalForPush": true,
     "forbiddenSources": [
-      ".codex/rules/project/",
-      ".codex/task-tracking/",
-      ".codex/pending-tasks/",
-      ".codex/corrections/",
-      ".codex/tool-invocations/",
-      ".codex/project-status/",
+      ".codex/project/rules/project/",
+      ".codex/project/skills/",
+      ".codex/project/records/task-tracking/",
+      ".codex/project/records/pending-tasks/",
+      ".codex/project/records/corrections/",
+      ".codex/project/logs/tool-invocations/",
+      ".codex/project/records/project-status/",
       "project-specific-documents"
     ]
   },
+  "targetProjectOwnership": {
+    "priorityOrder": [
+      "native-project-assets",
+      "project-specialization",
+      "ai-rules-common"
+    ],
+    "rootAgents": "native-project-owned",
+    "nativeProjectSkills": "native-project-owned",
+    "projectRules": "project-specialization-owned",
+    "projectSkills": "project-specialization-owned",
+    "commonRules": "ai-rules-owned",
+    "commonSkills": "ai-rules-owned",
+    "existingProjectContentPolicy": "preserve-and-report",
+    "skillConflictPolicy": "prefer-native-then-project-then-ai-rules-and-report-duplicate",
+    "nativeProjectContentWritePolicy": "read-index-report-only-unless-user-explicitly-approves"
+  },
   "repoContents": {
     "commonRules": "AGENTS.md",
+    "pythonPackage": "src/ai_rules",
     "skills": [
       ".codex/skills/agents-rule-maintainer",
+      ".codex/skills/codex-token-usage",
       ".codex/skills/self-correction-planner"
     ],
     "scripts": [
-      "scripts/agent_comm.py",
-      "scripts/agent_group_status.py",
-      "scripts/codex_session_gate.py",
-      "scripts/codex_task_gate.py",
-      "scripts/codex_tool_invocations.py",
-      "scripts/codex_tool_flow.py",
-      "scripts/rule_tooling_audit.py",
-      "scripts/scan_corrections.py",
-      "scripts/validate_doc_task.py",
-      "scripts/validate_encoding.py",
+      "scripts/ai_rules.py",
       "check-ai-rules-sync.ps1",
       "install-ai-rules.ps1"
     ]
@@ -69,7 +76,7 @@
   "targetProjectGeneratedFiles": [
     "AGENTS.md",
     ".codex/ai-rules-config.json",
-    ".codex/rules/project/AGENTS.md"
+    ".codex/project/rules/project/AGENTS.md"
   ],
   "installer": {
     "script": "install-ai-rules.ps1",
@@ -82,9 +89,11 @@
     "supportsLocalPathSubmoduleSource": true,
     "supportsRelativeLocalPathSubmoduleSource": true,
     "existingFilesPolicy": {
-      "rootAgents": "backup-then-rewrite-unless-skipped",
+      "rootAgents": "create-only-when-missing; rewrite-only-with-ForceRootEntry",
       "config": "backup-then-rewrite",
       "projectRules": "create-only-when-missing",
+      "nativeProjectSkills": "preserve-existing; never-modify-without-explicit-user-approval",
+      "projectSkills": "create-or-update-project-specializations-only; never-install-common-skills-into-project",
       "existingRegisteredSubmodule": "keep-and-continue",
       "existingUnregisteredGitRepo": "stop-unless-AdoptExistingGitRepo",
       "existingNonGitEmbedPath": "stop-and-require-manual-review"
@@ -101,21 +110,31 @@
     }
   },
   "targetProjectPreservedPaths": [
-    ".codex/rules/project/",
+    ".codex/project/rules/project/",
+    ".codex/project/skills/",
+    ".codex/project/records/task-tracking/",
+    ".codex/project/records/pending-tasks/",
+    ".codex/project/records/corrections/",
+    ".codex/project/records/project-status/",
+    ".codex/project/agents/",
+    ".codex/project/logs/",
+    ".codex/project/state/",
+    ".codex/project/tools/",
+    ".codex/project/cache/",
+    ".codex/project/tmp/"
+  ],
+  "targetProjectLegacyPathsDoNotGenerate": [
+    ".codex/rules/",
+    ".codex/skills/",
     ".codex/task-tracking/",
     ".codex/pending-tasks/",
+    ".codex/corrections/",
     ".codex/agent-comm/",
     ".codex/agent-groups/",
     ".codex/tool-invocations/",
     ".codex/project-status/"
   ],
-  "legacyCompatibility": {
-    "schemaVersion2ManagedPaths": "deprecated",
-    "commonRulesCopyTarget": ".codex/rules/common/AGENTS.md",
-    "scriptsCopyTarget": "scripts/",
-    "skillsCopyTarget": ".codex/skills/",
-    "migration": "Embed this repository at .codex/ai-rules and update the project root AGENTS.md to read the embedded AGENTS.md first."
-  },
+  "legacyPathPolicy": "do-not-generate; report-and-migrate-forward-when-in-current-scope",
   "githubReadmeGate": {
     "beforePush": true,
     "requireCurrentAdvantages": true,

@@ -15,9 +15,8 @@ import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from ai_rules.common.paths import CORRECTIONS_INDEX, PENDING_INDEX, PYTHON_PYCACHE_DIR
 
-PENDING_INDEX = Path(".codex") / "pending-tasks" / "index.md"
-CORRECTIONS_INDEX = Path(".codex") / "corrections" / "index.md"
 LOOP_HEADING = "执行闭环门禁"
 REQUIRED_LOOP_LABELS = ["主任务", "插入任务", "返回动作", "当前状态", "下一步"]
 BRANCH_HEADING = "主任务分支状态门禁"
@@ -115,7 +114,7 @@ def parse_args() -> argparse.Namespace:
         "--task-types",
         nargs="*",
         default=None,
-        help="Optional task types to validate with scripts/codex_task_gate.py.",
+        help="Optional task types to validate with ai_rules.py task-gate.",
     )
     parser.add_argument(
         "--require-task-gate",
@@ -460,15 +459,11 @@ def validate_task_gate(
         add(errors, "error", "Task gate requested but no --task-tracking was provided.")
         return
 
-    script_dir = Path(__file__).resolve().parent
-    if str(script_dir) not in sys.path:
-        sys.path.insert(0, str(script_dir))
-
     pycache_supported = hasattr(sys, "pycache_prefix")
     previous_pycache_prefix = getattr(sys, "pycache_prefix", None)
     try:
         if pycache_supported:
-            pycache_prefix = root / ".codex" / "cache" / "python-pycache"
+            pycache_prefix = root / PYTHON_PYCACHE_DIR
             pycache_prefix.mkdir(parents=True, exist_ok=True)
             sys.pycache_prefix = str(pycache_prefix)
         else:
@@ -477,9 +472,9 @@ def validate_task_gate(
                 "warning",
                 "Python runtime does not expose sys.pycache_prefix; imported task gate may use default pycache.",
             )
-        from codex_task_gate import build_report as build_task_gate_report
+        from ai_rules.gates.task_gate import build_report as build_task_gate_report
     except Exception as exc:  # pragma: no cover - defensive import report
-        add(errors, "error", f"Unable to import codex_task_gate.py: {exc}")
+        add(errors, "error", f"Unable to import ai_rules.gates.task_gate: {exc}")
         return
     finally:
         if pycache_supported:
@@ -651,3 +646,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

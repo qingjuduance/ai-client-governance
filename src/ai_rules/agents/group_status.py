@@ -16,8 +16,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from ai_rules.common.paths import AGENT_GROUP_STATUS
 
-DEFAULT_STATUS_FILE = Path(".codex") / "agent-groups" / "current-status.json"
+DEFAULT_STATUS_FILE = AGENT_GROUP_STATUS
 
 
 def parse_args() -> argparse.Namespace:
@@ -311,3 +312,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

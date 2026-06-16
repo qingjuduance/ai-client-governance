@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only report for .codex/corrections records.
+"""Read-only report for .codex/project/records/corrections records.
 
 The script scans independent correction records and the derived index, then
 reports status counts, error-type groups, upgrade candidates, observation
@@ -16,8 +16,9 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Iterable
 
+from ai_rules.common.paths import CORRECTIONS_DIR
 
-CORRECTION_DIR = Path(".codex") / "corrections"
+CORRECTION_DIR = CORRECTIONS_DIR
 INDEX_FILE = "index.md"
 README_FILE = "README.md"
 
@@ -354,7 +355,7 @@ def has_inconsistencies(report: ScanReport) -> bool:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Scan .codex/corrections and print a read-only report."
+        description="Scan .codex/project/records/corrections and print a read-only report."
     )
     parser.add_argument(
         "--root",
@@ -391,3 +392,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

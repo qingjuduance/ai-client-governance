@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Render Codex tool invocation flow from the local JSONL ledger.
 
-The script is read-only. It turns .codex/tool-invocations/*.jsonl records into
-a time-sequence flow today, and it can use optional parent fields when the
-ledger grows trace/tree support later.
+The script is read-only. It turns .codex/project/logs/tool-invocations/*.jsonl
+records into a time-sequence flow today, and it can use optional parent fields
+when the ledger grows trace/tree support later.
 """
 
 from __future__ import annotations
@@ -17,16 +17,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from ai_rules.common.paths import TOOL_INVOCATIONS_DIR
 
-DEFAULT_LEDGER_DIR = Path(".codex") / "tool-invocations"
+DEFAULT_LEDGER_DIR = TOOL_INVOCATIONS_DIR
 SUCCESS_STATUSES = {"success", "succeeded", "passed", "ok"}
 FAILURE_STATUSES = {"failed", "error", "invalid"}
 FINAL_GATE_NAMES = {
-    "codex_session_gate.py",
-    "codex_task_gate.py",
-    "validate_doc_task.py",
-    "validate_encoding.py",
-    "scan_corrections.py",
+    "ai_rules.py session-gate",
+    "ai_rules.py task-gate",
+    "ai_rules.py validate-doc",
+    "ai_rules.py validate-encoding",
+    "ai_rules.py scan-corrections",
 }
 
 
@@ -74,9 +75,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--root", default=".", help="Repository root.")
     parser.add_argument(
         "--ledger-dir",
-        help="Ledger directory. Defaults to .codex/tool-invocations under root.",
+        help="Ledger directory. Defaults to .codex/project/logs/tool-invocations under root.",
     )
     parser.add_argument("--task-tracking", help="Filter by task tracking substring.")
+    parser.add_argument("--trace-id", help="Filter by trace id.")
     parser.add_argument("--since", help="Only include invocations after this date/time.")
     parser.add_argument("--until", help="Only include invocations before this date/time.")
     parser.add_argument("--top", type=int, default=80, help="Maximum invocations to render.")
@@ -99,7 +101,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--require-report",
         action="store_true",
-        help="Exit non-zero when no invocation records a codex_tool_invocations.py report.",
+        help="Exit non-zero when no invocation records an ai_rules.py tool-invocations report.",
+    )
+    parser.add_argument(
+        "--require-trace",
+        action="store_true",
+        help="Exit non-zero when matched invocations lack trace_id fields.",
     )
     parser.add_argument(
         "--fail-on-warning",
@@ -215,6 +222,7 @@ def collapse_invocations(events: list[dict[str, Any]]) -> list[Invocation]:
 def filter_invocations(
     invocations: list[Invocation],
     task_tracking: str | None,
+    trace_id: str | None,
     since: datetime | None,
     until: datetime | None,
 ) -> list[Invocation]:
@@ -230,6 +238,8 @@ def filter_invocations(
             item_tracking = item.task_tracking.replace("\\", "/")
             if normalized_tracking not in item_tracking:
                 continue
+        if trace_id and item.trace_id != trace_id:
+            continue
         result.append(item)
     return result
 
@@ -246,7 +256,11 @@ def is_failure(item: Invocation) -> bool:
 
 def records_report(item: Invocation) -> bool:
     command = item.command.lower()
-    return item.name == "codex_tool_invocations.py" and " report" in f" {command}"
+    haystack = f"{item.name} {command}"
+    return bool("ai_rules.py" in haystack and "tool-invocations" in haystack and re.search(
+        r"(^|\s)report(\s|$)",
+        command,
+    ))
 
 
 def issue(level: str, message: str, invocation_id: str = "") -> FlowIssue:
@@ -258,6 +272,7 @@ def analyze_flow(
     require_final_gate: bool,
     require_task_session_order: bool,
     require_report: bool,
+    require_trace: bool,
 ) -> list[FlowIssue]:
     issues: list[FlowIssue] = []
     if not invocations:
@@ -273,7 +288,17 @@ def analyze_flow(
     report_count = len(report_indexes)
     if report_count == 0:
         level = "error" if require_report else "warning"
-        issues.append(issue(level, "No recorded codex_tool_invocations.py report invocation found."))
+        issues.append(issue(level, "No recorded ai_rules.py tool-invocations report invocation found."))
+
+    trace_missing = [item for item in invocations if not item.trace_id]
+    if require_trace and trace_missing:
+        issues.append(
+            issue(
+                "error",
+                f"{len(trace_missing)} invocation(s) lack trace_id; gate-pool runs must record one trace.",
+                trace_missing[0].invocation_id,
+            )
+        )
 
     last_success_by_name: dict[str, int] = {}
     for index, item in enumerate(invocations):
@@ -298,12 +323,12 @@ def analyze_flow(
     successful_task_gate_indexes = [
         index
         for index, item in enumerate(invocations)
-        if item.name == "codex_task_gate.py" and is_success(item)
+        if item.name == "ai_rules.py task-gate" and is_success(item)
     ]
     successful_session_gate_indexes = [
         index
         for index, item in enumerate(invocations)
-        if item.name == "codex_session_gate.py" and is_success(item)
+        if item.name == "ai_rules.py session-gate" and is_success(item)
     ]
     if successful_session_gate_indexes:
         first_session = successful_session_gate_indexes[0]
@@ -437,6 +462,7 @@ def build_report(args: argparse.Namespace) -> FlowReport:
     invocations = filter_invocations(
         invocations,
         args.task_tracking,
+        args.trace_id,
         parse_dt(args.since),
         parse_dt(args.until),
     )
@@ -446,6 +472,7 @@ def build_report(args: argparse.Namespace) -> FlowReport:
         args.require_final_gate,
         args.require_task_session_order,
         args.require_report,
+        args.require_trace,
     )
     return FlowReport(
         root=root.as_posix(),
@@ -562,3 +589,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

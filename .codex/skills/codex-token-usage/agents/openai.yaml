@@ -1,0 +1,4 @@
+interface:
+  display_name: "Codex Token Usage"
+  short_description: "Summarize local Codex token usage"
+  default_prompt: "Use $codex-token-usage to summarize my Codex token usage for the last 30 days."

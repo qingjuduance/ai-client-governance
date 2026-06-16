@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Record and report Codex maintenance script invocations.
 
-The ledger is local project state under .codex/tool-invocations/*.jsonl. This
-script intentionally avoids external dependencies and never edits rules,
+The ledger is local project state under .codex/project/logs/tool-invocations/*.jsonl.
+This script intentionally avoids external dependencies and never edits rules,
 tracking, corrections, or Git state.
 """
 
@@ -22,15 +22,18 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from ai_rules.common.paths import PYTHON_PYCACHE_DIR, TOOL_INVOCATIONS_DIR
 
-DEFAULT_LEDGER_DIR = Path(".codex") / "tool-invocations"
-SCHEMA_VERSION = 1
+DEFAULT_LEDGER_DIR = TOOL_INVOCATIONS_DIR
+SCHEMA_VERSION = 2
 FINAL_GATE_NAMES = {
-    "codex_session_gate.py",
-    "codex_task_gate.py",
-    "validate_doc_task.py",
-    "validate_encoding.py",
-    "scan_corrections.py",
+    "ai_rules.py session-gate",
+    "ai_rules.py task-gate",
+    "ai_rules.py validate-doc",
+    "ai_rules.py validate-encoding",
+    "ai_rules.py scan-corrections",
+    "ai_rules.py architecture-guard",
+    "ai_rules.py task-queue",
 }
 
 
@@ -42,6 +45,7 @@ class Invocation:
     timestamp: str
     command: str
     task_tracking: str
+    trace_id: str
     exit_code: int | None
     final_gate: bool
     summary: str
@@ -70,6 +74,22 @@ def parse_dt(value: str | None) -> datetime | None:
 
 def ensure_list(value: list[str] | None) -> list[str]:
     return value if value is not None else []
+
+
+def env_default(value: str | None, env_name: str) -> str:
+    return value or os.environ.get(env_name, "")
+
+
+def env_default_int(value: int | None, env_name: str) -> int | None:
+    if value is not None:
+        return value
+    raw = os.environ.get(env_name, "")
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
 
 
 def command_to_string(command: list[str] | str | None) -> str:
@@ -137,6 +157,12 @@ def make_event(
     ended_at: str | None = None,
     duration_ms: int | None = None,
     summary: str = "",
+    trace_id: str = "",
+    parent_invocation_id: str = "",
+    task_node_id: str = "",
+    parent_task_node_id: str = "",
+    event_type: str = "",
+    attempt: int | None = None,
 ) -> dict[str, Any]:
     timestamp = ended_at or started_at or now_iso()
     return {
@@ -155,8 +181,14 @@ def make_event(
         "phase": phase,
         "final_gate": final_gate,
         "summary": summary,
+        "trace_id": trace_id,
+        "parent_invocation_id": parent_invocation_id,
+        "task_node_id": task_node_id,
+        "parent_task_node_id": parent_task_node_id,
+        "event_type": event_type,
+        "attempt": attempt,
         "cwd": os.getcwd(),
-        "source": "codex_tool_invocations.py",
+        "source": "ai_rules.py tool-invocations",
     }
 
 
@@ -228,6 +260,7 @@ def collapse_invocations(events: list[dict[str, Any]]) -> list[Invocation]:
                 timestamp=str(chosen.get("timestamp") or ""),
                 command=str(chosen.get("command") or ""),
                 task_tracking=str(chosen.get("task_tracking") or ""),
+                trace_id=str(chosen.get("trace_id") or ""),
                 exit_code=chosen.get("exit_code"),
                 final_gate=bool(chosen.get("final_gate")),
                 summary=str(chosen.get("summary") or ""),
@@ -240,6 +273,7 @@ def collapse_invocations(events: list[dict[str, Any]]) -> list[Invocation]:
 def filter_invocations(
     invocations: list[Invocation],
     task_tracking: str | None,
+    trace_id: str | None,
     since: datetime | None,
     until: datetime | None,
 ) -> list[Invocation]:
@@ -256,6 +290,8 @@ def filter_invocations(
             item_tracking = item.task_tracking.replace("\\", "/")
             if normalized_tracking not in item_tracking:
                 continue
+        if trace_id and item.trace_id != trace_id:
+            continue
         result.append(item)
     return result
 
@@ -349,8 +385,10 @@ def command_record(args: argparse.Namespace) -> int:
     command = args.command or ""
     name = args.name or infer_name(command)
     timestamp = args.ended_at or args.started_at or now_iso()
+    invocation_id = args.invocation_id or str(uuid.uuid4())
+    trace_id = env_default(args.trace_id, "CODEX_TRACE_ID") or invocation_id
     event = make_event(
-        invocation_id=args.invocation_id or str(uuid.uuid4()),
+        invocation_id=invocation_id,
         name=name,
         command=command,
         status=args.status,
@@ -363,6 +401,12 @@ def command_record(args: argparse.Namespace) -> int:
         ended_at=args.ended_at or timestamp,
         duration_ms=args.duration_ms,
         summary=args.summary or "",
+        trace_id=trace_id,
+        parent_invocation_id=env_default(args.parent_invocation_id, "CODEX_PARENT_INVOCATION_ID"),
+        task_node_id=env_default(args.task_node_id, "CODEX_TASK_NODE_ID"),
+        parent_task_node_id=env_default(args.parent_task_node_id, "CODEX_PARENT_TASK_NODE_ID"),
+        event_type=env_default(args.event_type, "CODEX_EVENT_TYPE"),
+        attempt=env_default_int(args.attempt, "CODEX_ATTEMPT"),
     )
     path = append_event(root, args.ledger_dir, event)
     print(f"recorded {name} status={args.status} ledger={path}")
@@ -380,6 +424,12 @@ def command_run(args: argparse.Namespace) -> int:
 
     name = args.name or infer_name(command)
     invocation_id = str(uuid.uuid4())
+    trace_id = env_default(args.trace_id, "CODEX_TRACE_ID") or invocation_id
+    parent_invocation_id = env_default(args.parent_invocation_id, "CODEX_PARENT_INVOCATION_ID")
+    task_node_id = env_default(args.task_node_id, "CODEX_TASK_NODE_ID")
+    parent_task_node_id = env_default(args.parent_task_node_id, "CODEX_PARENT_TASK_NODE_ID")
+    event_type = env_default(args.event_type, "CODEX_EVENT_TYPE")
+    attempt = env_default_int(args.attempt, "CODEX_ATTEMPT")
     started_at = now_iso()
     start_event = make_event(
         invocation_id=invocation_id,
@@ -392,11 +442,25 @@ def command_run(args: argparse.Namespace) -> int:
         final_gate=is_final_gate(name, args.final_gate),
         started_at=started_at,
         summary=args.summary or "",
+        trace_id=trace_id,
+        parent_invocation_id=parent_invocation_id,
+        task_node_id=task_node_id,
+        parent_task_node_id=parent_task_node_id,
+        event_type=event_type,
+        attempt=attempt,
     )
     append_event(root, args.ledger_dir, start_event)
 
     start = time.monotonic()
-    completed = subprocess.run(command, cwd=args.cwd or None)
+    child_env = os.environ.copy()
+    child_env["CODEX_TRACE_ID"] = trace_id
+    child_env["CODEX_PARENT_INVOCATION_ID"] = invocation_id
+    child_env["PYTHONPYCACHEPREFIX"] = str(root / PYTHON_PYCACHE_DIR)
+    child_env["PYTHONIOENCODING"] = "utf-8"
+    child_env["PYTHONUTF8"] = "1"
+    if task_node_id:
+        child_env["CODEX_PARENT_TASK_NODE_ID"] = task_node_id
+    completed = subprocess.run(command, cwd=args.cwd or None, env=child_env)
     ended_at = now_iso()
     duration_ms = int((time.monotonic() - start) * 1000)
     status = "succeeded" if completed.returncode == 0 else "failed"
@@ -414,6 +478,12 @@ def command_run(args: argparse.Namespace) -> int:
         ended_at=ended_at,
         duration_ms=duration_ms,
         summary=args.summary or "",
+        trace_id=trace_id,
+        parent_invocation_id=parent_invocation_id,
+        task_node_id=task_node_id,
+        parent_task_node_id=parent_task_node_id,
+        event_type=event_type,
+        attempt=attempt,
     )
     path = append_event(root, args.ledger_dir, end_event)
     print(f"recorded {name} status={status} exit={completed.returncode} ledger={path}")
@@ -427,6 +497,7 @@ def command_report(args: argparse.Namespace) -> int:
     invocations = filter_invocations(
         invocations,
         args.task_tracking,
+        args.trace_id,
         parse_dt(args.since),
         parse_dt(args.until),
     )
@@ -451,7 +522,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--root", default=".", help="Repository root.")
     parser.add_argument(
         "--ledger-dir",
-        help="Ledger directory. Defaults to .codex/tool-invocations under root.",
+        help="Ledger directory. Defaults to .codex/project/logs/tool-invocations under root.",
     )
     subparsers = parser.add_subparsers(dest="command_name", required=True)
 
@@ -465,6 +536,12 @@ def build_parser() -> argparse.ArgumentParser:
     record.add_argument("--phase", help="Task phase, e.g. planning or final-gate.")
     record.add_argument("--summary", help="Short result summary.")
     record.add_argument("--final-gate", action="store_true", help="Mark as final gate evidence.")
+    record.add_argument("--trace-id", help="Trace id shared by related invocations.")
+    record.add_argument("--parent-invocation-id", help="Parent invocation id for tree flow reports.")
+    record.add_argument("--task-node-id", help="Task tree node id associated with this invocation.")
+    record.add_argument("--parent-task-node-id", help="Parent task tree node id.")
+    record.add_argument("--event-type", help="Event type, e.g. gate-pool, gate, report, validation.")
+    record.add_argument("--attempt", type=int, help="Retry attempt number for this invocation.")
     record.add_argument("--started-at", help="ISO start timestamp.")
     record.add_argument("--ended-at", help="ISO end timestamp.")
     record.add_argument("--duration-ms", type=int, help="Duration in milliseconds.")
@@ -478,6 +555,12 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--phase", help="Task phase, e.g. planning or final-gate.")
     run.add_argument("--summary", help="Short result summary.")
     run.add_argument("--final-gate", action="store_true", help="Mark as final gate evidence.")
+    run.add_argument("--trace-id", help="Trace id shared by related invocations.")
+    run.add_argument("--parent-invocation-id", help="Parent invocation id for tree flow reports.")
+    run.add_argument("--task-node-id", help="Task tree node id associated with this invocation.")
+    run.add_argument("--parent-task-node-id", help="Parent task tree node id.")
+    run.add_argument("--event-type", help="Event type, e.g. gate-pool, gate, report, validation.")
+    run.add_argument("--attempt", type=int, help="Retry attempt number for this invocation.")
     run.add_argument("--cwd", help="Working directory for the command.")
     run.add_argument("command", nargs=argparse.REMAINDER)
     run.set_defaults(func=command_run)
@@ -486,6 +569,7 @@ def build_parser() -> argparse.ArgumentParser:
     report.add_argument("--since", help="Only include events after this date/time.")
     report.add_argument("--until", help="Only include events before this date/time.")
     report.add_argument("--task-tracking", help="Filter by task tracking substring.")
+    report.add_argument("--trace-id", help="Filter by trace id.")
     report.add_argument("--top", type=int, default=10, help="Number of rows to show.")
     report.add_argument(
         "--format",
@@ -511,3 +595,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

@@ -18,6 +18,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Iterable
 
+from ai_rules.common.paths import is_correction_path, is_pending_path, is_task_tracking_path
+
 
 MANDATORY_TRACKING_HEADINGS = [
     "已处理文件",
@@ -197,22 +199,26 @@ def is_questions_file(rel: str) -> bool:
     return "/questions/" in f"/{rel}"
 
 
-def is_tracking_or_correction(rel: str) -> bool:
-    return rel.startswith(".codex/task-tracking/") or rel.startswith(
-        ".codex/corrections/"
-    )
+def is_tracking_or_correction(rel: str, explicit_tracking_rel: str | None = None) -> bool:
+    return rel == explicit_tracking_rel or is_task_tracking_path(rel) or is_correction_path(rel)
 
 
-def can_record_external_evidence_path(rel: str) -> bool:
+def can_record_external_evidence_path(rel: str, explicit_tracking_rel: str | None = None) -> bool:
     return (
-        rel.startswith(".codex/task-tracking/")
-        or rel.startswith(".codex/pending-tasks/")
-        or rel.startswith(".codex/corrections/")
+        rel == explicit_tracking_rel
+        or is_task_tracking_path(rel)
+        or is_pending_path(rel)
+        or is_correction_path(rel)
     )
 
 
-def is_external_evidence_path_line(rel: str, lines: list[str], index: int) -> bool:
-    if not can_record_external_evidence_path(rel):
+def is_external_evidence_path_line(
+    rel: str,
+    lines: list[str],
+    index: int,
+    explicit_tracking_rel: str | None = None,
+) -> bool:
+    if not can_record_external_evidence_path(rel, explicit_tracking_rel):
         return False
 
     start = max(0, index - 3)
@@ -259,6 +265,7 @@ def check_markdown_file(
     errors: list[Finding],
     warnings: list[Finding],
     notes: list[Finding],
+    explicit_tracking_rel: str | None = None,
 ) -> None:
     rel = rel_path(path, root)
     try:
@@ -274,7 +281,7 @@ def check_markdown_file(
     lines = text.splitlines()
     for index, line in enumerate(lines):
         line_no = index + 1
-        external_evidence_path = is_external_evidence_path_line(rel, lines, index)
+        external_evidence_path = is_external_evidence_path_line(rel, lines, index, explicit_tracking_rel)
         if ABSOLUTE_PATH_RE.search(line):
             if external_evidence_path:
                 add_finding(
@@ -287,7 +294,7 @@ def check_markdown_file(
                     line_no,
                 )
             else:
-                level = "warning" if is_tracking_or_correction(rel) else "error"
+                level = "warning" if is_tracking_or_correction(rel, explicit_tracking_rel) else "error"
                 add_finding(
                     errors,
                     warnings,
@@ -476,14 +483,16 @@ def build_report(args: argparse.Namespace) -> Report:
             "no Markdown files selected",
         )
 
-    for path in markdown_files:
-        check_markdown_file(path, root, selected, errors, warnings, notes)
-
     tracking_path = (
         resolve_from_root(root, args.task_tracking).resolve()
         if args.task_tracking
         else None
     )
+    explicit_tracking_rel = rel_path(tracking_path, root) if tracking_path else None
+
+    for path in markdown_files:
+        check_markdown_file(path, root, selected, errors, warnings, notes, explicit_tracking_rel)
+
     tracking_rel = check_task_tracking(
         tracking_path,
         root,
@@ -551,3 +560,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

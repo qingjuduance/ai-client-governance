@@ -12,6 +12,7 @@ param(
     [switch]$AdoptExistingGitRepo,
     [switch]$NoBackup,
     [switch]$SkipRootEntry,
+    [switch]$ForceRootEntry,
     [switch]$SkipProjectPlaceholder,
     [switch]$SkipSyncCheck
 )
@@ -99,7 +100,7 @@ function Write-GeneratedFile {
     $target = Join-ProjectPath -RelativePath $RelativePath
     if (Test-Path -LiteralPath $target) {
         if ($OnlyIfMissing) {
-            Write-Host "Keeping existing $RelativePath; placeholder was skipped."
+            Write-Host "Keeping existing $RelativePath; generated file was skipped."
             return
         }
         $existing = Get-Content -LiteralPath $target -Raw -Encoding UTF8
@@ -264,7 +265,7 @@ function Get-RootAgentsContent {
         'This file is a thin entrypoint. Before working in this project, read:',
         '',
         '1. `.codex/ai-rules/AGENTS.md`',
-        '2. `.codex/rules/project/AGENTS.md`',
+        '2. `.codex/project/rules/project/AGENTS.md`',
         '',
         'If `.codex/ai-rules/` is missing, read `.codex/ai-rules-config.json`,',
         'locate the configured ai-rules repository, embed it at `.codex/ai-rules/`,',
@@ -283,7 +284,10 @@ function Get-RootAgentsContent {
         '- `.codex/ai-rules/` is the embedded common rules Git repository.',
         '- Git projects should register it as a submodule so the parent project',
         '  records the exact ai-rules commit.',
-        '- `.codex/rules/project/` belongs to this project only.',
+        '- Priority order: native project assets > `.codex/project/` specializations > `.codex/ai-rules/` common rules.',
+        '- `.codex/project/rules/project/` belongs to this project only.',
+        '- Existing project-owned `AGENTS.md`, native project skills, and original local rules stay authoritative;',
+        '  ai-rules may add missing integration notes but must not silently overwrite them.',
         '- Do not write project-specific rules back to the common ai-rules repo.',
         '- Before each new session, run `.codex/ai-rules/check-ai-rules-sync.ps1`',
         '  or an equivalent wrapper and warn until the embedded repo is synchronized.'
@@ -416,10 +420,15 @@ $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $backupRoot = Join-Path $TargetProjectPath ".codex\ai-rules-backups\$timestamp"
 
 if (-not $SkipRootEntry) {
-    Write-GeneratedFile -RelativePath "AGENTS.md" -Content (Get-RootAgentsContent) -BackupRoot $backupRoot
+    if ($ForceRootEntry) {
+        Write-GeneratedFile -RelativePath "AGENTS.md" -Content (Get-RootAgentsContent) -BackupRoot $backupRoot
+    }
+    else {
+        Write-GeneratedFile -RelativePath "AGENTS.md" -Content (Get-RootAgentsContent) -BackupRoot $backupRoot -OnlyIfMissing
+    }
 }
 if (-not $SkipProjectPlaceholder) {
-    Write-GeneratedFile -RelativePath ".codex\rules\project\AGENTS.md" -Content (Get-ProjectRulesPlaceholder) -BackupRoot $backupRoot -OnlyIfMissing
+    Write-GeneratedFile -RelativePath ".codex\project\rules\project\AGENTS.md" -Content (Get-ProjectRulesPlaceholder) -BackupRoot $backupRoot -OnlyIfMissing
 }
 
 $configDir = Join-Path $TargetProjectPath ".codex"
@@ -433,8 +442,7 @@ $config = [ordered]@{
     sourceRepoPath = $RulesRepoPath
     embeddedRepoPath = $EmbedPath.Replace("\", "/")
     commonEntry = ".codex/ai-rules/AGENTS.md"
-    projectEntry = ".codex/rules/project/AGENTS.md"
-    legacyCommonEntry = ".codex/rules/common/AGENTS.md"
+    projectEntry = ".codex/project/rules/project/AGENTS.md"
     syncPolicy = [ordered]@{
         checkEverySession = $true
         fetchIntervalHours = 24
@@ -456,14 +464,20 @@ $config = [ordered]@{
     }
     boundaries = [ordered]@{
         commonRulesSource = ".codex/ai-rules/"
-        projectRulesSource = ".codex/rules/project/"
-        copyManagedPaths = $false
+        priorityOrder = @("native-project-assets", "project-specialization", "ai-rules-common")
+        nativeProjectAssets = @("AGENTS.md", ".codex/skills/")
+        nativeProjectWritePolicy = "read-index-report-only unless the user explicitly approves native asset edits"
+        projectRulesSource = ".codex/project/rules/project/"
+        commonSkillsSource = ".codex/ai-rules/.codex/skills/"
+        projectSkillsSource = ".codex/project/skills/"
+        rootAgentsPolicy = "project-owned; create-if-missing; rewrite only with -ForceRootEntry"
+        skillConflictPolicy = "native project skill wins, then project specialization, then ai-rules common; duplicate names require review"
         parentTracksEmbeddedCommit = ($Mode -eq "submodule")
     }
     installer = [ordered]@{
         script = "install-ai-rules.ps1"
         planOnly = [bool]$PlanOnly
-        rootEntry = if ($SkipRootEntry) { "skipped" } else { "generated-with-backup" }
+        rootEntry = if ($SkipRootEntry) { "skipped" } elseif ($ForceRootEntry) { "force-generated-with-backup" } else { "create-if-missing-preserve-existing" }
         projectPlaceholder = if ($SkipProjectPlaceholder) { "skipped" } else { "create-if-missing" }
         existingGitRepoPolicy = if ($AdoptExistingGitRepo) { "adopt-when-requested" } else { "stop-unless-registered-submodule" }
         postInstallSyncCheck = (-not $SkipSyncCheck)
@@ -497,7 +511,7 @@ else {
     Write-Host "AI rules embedded into $TargetProjectPath"
     Write-Host "Embedded repo: $EmbedPath"
     Write-Host "Common entry: .codex/ai-rules/AGENTS.md"
-    Write-Host "Project entry: .codex/rules/project/AGENTS.md"
+    Write-Host "Project entry: .codex/project/rules/project/AGENTS.md"
     if (-not $NoBackup) {
         Write-Host "Changed generated files, if any, were backed up under $backupRoot"
     }

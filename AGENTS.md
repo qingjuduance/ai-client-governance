@@ -1,1025 +1,211 @@
 # AI 通用协作规则
 
-## 规则分层与读取顺序
+本文件只保留跨项目不可绕过的协作边界和入口。可由程序检查、生成或汇总的细节，
+优先放入 `src/ai_rules/` 包、`scripts/ai_rules.py` 统一入口、通用 skill 或 README。
 
-- 通用规则只保存跨项目可复用的 AI 协作流程、审批、任务拆分、Git 边界、
-  会话恢复、子 AI 协作、日志与可观测性、修正文档、脚本维护和规则同步机制。
-- 通用规则不得保存某个项目的特殊业务、文档体系、简历、学习路线、源码快照、
-  私有目录结构或领域写作规则。
-- 每个项目必须把本 `ai-rules` 仓库作为完整 Git 仓库嵌入，推荐位置为
-  `.codex/ai-rules/`；目标项目是 Git 仓库时默认登记为 Git submodule，
-  让父仓库记录精确 gitlink commit。嵌入仓库内的 `AGENTS.md` 是通用规则事实源。
-- 每个项目必须把项目特有规则放在 `.codex/rules/project/`，默认入口为
-  `.codex/rules/project/AGENTS.md`。
-- `.codex/rules/common/` 是旧复制模型的兼容路径，不再作为通用规则事实源；
-  新项目不得依赖 managed paths 复制 common 规则、scripts 或 skills。
-- 项目根 `AGENTS.md` 应保持为薄入口，读取顺序为：
-  1. 根 `AGENTS.md` 的入口说明。
-  2. `.codex/ai-rules/AGENTS.md` 的通用规则。
-  3. `.codex/rules/project/AGENTS.md` 和同目录下其它项目规则。
-- 如果 `.codex/ai-rules/` 缺失，先读取 `.codex/ai-rules-config.json`
-  或用户提供的 `ai-rules` 仓库路径，再按该仓库 `README.md` 和 `manifest.json`
-  把完整仓库嵌入到 `.codex/ai-rules/`；嵌入前不要把旧 common 副本当成最新规则。
-- 项目根 `AGENTS.md` 的薄入口必须写明编码要求：在 Windows/PowerShell 中读取
-  common/project 规则文件时，要先在本次命令作用域设置 UTF-8 控制台编码，并使用
-  `Get-Content -Encoding UTF8` 或 `Get-Content -Raw -Encoding UTF8`；不得裸用
-  `Get-Content` 读取含中文或其它非 ASCII 内容的规则文档。
-- 如果通用规则和项目特有规则冲突，先遵守系统和开发者指令，再遵守项目根
-  `AGENTS.md`，然后按“更具体规则优先”处理；项目特有规则只覆盖项目范围内的
-  目录、文档、脚本和交付要求，不能改写通用安全边界。
+## 读取顺序与规则分层
 
-## 项目特有规则管理
+- 目标项目根 `AGENTS.md` 是项目入口，必须先读。
+- 通用规则事实源是嵌入式 `.codex/ai-rules/AGENTS.md`。
+- 项目特有规则入口是 `.codex/project/rules/project/AGENTS.md`。
+- `.codex/rules/common/`、根 `scripts/`、顶层 `.codex/skills/` 的旧复制模型
+  不再作为通用规则 fallback。
+- 资产优先级固定为：
+  1. 目标项目原生资产。
+  2. `.codex/project/` 项目特化层。
+  3. `.codex/ai-rules/` 通用层。
+- 通用规则不得保存项目业务、学习路线、简历规则、源码快照或本地交付细节。
+- 项目规则不能放宽通用安全边界、审批流程、Git 边界和恢复现场要求。
+- Windows/PowerShell 读取中文规则文件时，设置本次进程 UTF-8 编码，并使用
+  `Get-Content -Raw -Encoding UTF8`；长文件优先用
+  `python .codex/ai-rules/scripts/ai_rules.py context-extract` 摘录。
 
-- 通用规则负责发现和管理项目特有规则，但不把项目规则内容写回通用仓库。
-- 开始任何项目任务前，先检查 `.codex/rules/project/AGENTS.md` 是否存在。
-  如果存在，必须读取；如果不存在，在 task tracking 中记录“项目特有规则缺失”，
-  并按用户需求决定是否创建。
-- 项目特有规则可以拆成多个 Markdown 文件，但 `.codex/rules/project/AGENTS.md`
-  必须作为索引，说明每个文件的适用范围和读取时机。
-- 修改项目特有规则前，仍要走本通用规则的审批、任务量评估、task tracking、
-  验证和 Git 边界；不能因为它是项目本地规则就绕过流程。
-- 安装或更新通用规则时，只能嵌入或更新 `.codex/ai-rules/` 这个完整 Git 仓库、
-  项目根薄入口 `AGENTS.md` 和 `.codex/ai-rules-config.json`；不得用 managed
-  paths 覆盖目标项目中的 common/scripts/skills 副本。
-- 如果项目特有规则入口不存在，嵌入脚本可以创建 `.codex/rules/project/`
-  和一个最小占位入口；占位入口创建后即归目标项目维护，后续刷新不得覆盖。
-- 如果项目特有规则已经存在，安装脚本只能在根入口中保留或新增对它的读取说明，
-  不能删除、合并或重排项目规则正文。
+## 会话同步
 
-## AI 规则仓库会话同步
+- 新会话必须运行 `.codex/ai-rules/check-ai-rules-sync.ps1` 或等价 wrapper。
+- 跨系统事实逻辑优先来自
+  `python .codex/ai-rules/scripts/ai_rules.py sync-check`。
+- 每次会话都检查 `.codex/ai-rules/` 是否存在、是否为 Git 仓库、是否 dirty、
+  是否 ahead/behind/diverged。
+- 24 小时规则只限制 `git fetch` 频率；本地不一致必须每次提示到同步完成。
+- 同步检查不得自动 `pull` 或 `push`。
 
-- 如果当前项目嵌入了本规则仓库，开启新的 Codex 会话后，必须先运行
-  `.codex/ai-rules/check-ai-rules-sync.ps1`，或项目根目录下等价 wrapper。
-- 同步检查不是系统定时任务；它只在新会话启动或用户明确要求检查时触发。
-- 每次会话都必须检查 `.codex/ai-rules/` 是否存在、是否为 Git 仓库、
-  是否有本地 dirty 改动，以及本地 HEAD 与 upstream 是否 ahead、behind
-  或 diverged。
-- 24 小时规则只限制远端 `git fetch` 频率：距离上次 fetch 超过 24 小时时才 fetch；
-  但本地不一致、缺失嵌入、dirty、ahead、behind 或 diverged 必须每次会话都提示，
-  直到同步完成。
-- 会话检查不得自动 `git pull` 或 `git push`。需要更新或回写通用规则时，
-  进入 `.codex/ai-rules/` 后使用普通 Git 命令，并按审批和 Git 边界处理。
-- 发生冲突、diverged 或 dirty 状态时必须停止自动处理并保留现场，不得自动覆盖
-  任一方规则。
+## 审批与任务队列
 
-## 协作审批流程
+- 修改文件、移动文件、运行会改变仓库状态的脚本、批量处理、导出、stage、commit
+  或 push 前，必须给出带标签的计划并获得明确批准。
+- 批准标签必须可读，例如 `计划-AGENTS薄入口迁移`；多计划时普通“批准”不够明确。
+- 用户回复 `批准：全部` 只批准当前请求批准消息列出的计划。
+- 用户消息先进入任务队列 `candidate` 或 `awaiting_approval`，不能直接成为 `active`。
+- 只有显式批准并进入 `ready` 的任务才能 `start-next` 成为 `active`。
+- 队列事实源是 `.codex/project/state/task-queue.json`，入口是：
+  `python .codex/ai-rules/scripts/ai_rules.py task-queue ...`。
+- 一次只允许一个 active task；插入任务完成后必须返回原主任务或记录阻塞。
 
-- 开始修改文件、移动文件、运行会改变仓库状态的脚本、批量处理、导出、提交或推送前，
-  必须先给出带编号的处理计划、预计修改文件、验证方式和风险边界，
-  等待用户按标签明确批准。
-- 只读定位、读取 README/AGENTS、复用会话缓存、创建或更新 task tracking
-  属于形成计划和审计链路所需准备动作；准备完成后，正式修改前仍要请求批准。
-- 请求批准时使用稳定、语义明确的标签，例如 `计划-规则分层迁移`、
-  `计划-提交恢复机制`；禁止使用只有序号且看不出范围的 `计划A`、`计划B`。
-- 请求批准消息末尾必须单独写一行 Markdown 三级标题，格式类似：
-  `### 请回复：批准：计划-规则分层迁移 / 批准：全部`。
-- 用户回复 `批准：全部` 时，只批准当前这条请求批准消息列出的全部计划，
-  不自动批准历史消息中已过期、被替换或未重新列出的计划。
-- 如果只有一个计划，用户只回复普通“批准”，可以按该计划执行，并在 task tracking
-  记录判断依据；如果有多个计划，必须追问批准哪个计划或是否全部批准。
+## 强制 Worktree
 
-## 任务量评估与任务树
+- 所有修改型任务不论大小，正式改文件、移动文件、格式化、导出、运行写仓库脚本
+  或提交前，必须先创建任务级 `git worktree` 和独立分支。
+- 只读定位、读取规则、同步检查、状态检查、计划输出不要求 worktree；一旦要落盘，
+  先进入 worktree。
+- 任务 worktree 默认放在宿主项目 `.codex/project/.worktree/<task-slug>/`。
+- 修改嵌入式 `.codex/ai-rules/` 时，从 ai-rules 仓库执行 `git worktree add`，
+  目标路径仍放到宿主项目 `.codex/project/.worktree/<task-slug>/`。
+- task tracking 必须记录源仓库、worktree 路径、分支、基准提交和 `git status`。
+- 如果工具限制、路径冲突、分支冲突、权限或 Git 状态异常导致无法创建 worktree，
+  必须停止修改并向用户确认处理方式，不能退回主工作区直接改。
+- 跨 worktree 的 session、锁和 integration queue 使用
+  `python .codex/ai-rules/scripts/ai_rules.py worktree-coord ...`。
 
-- 每个执行任务在改文件、批量读取后准备正式处理、运行状态改变脚本、启动导出或验证前，
-  必须先做任务量评估。
-- 评估至少覆盖：预计修改文件数、具体对象数、目录跨度、是否需要联网或源码核对、
-  引用记录同步、pending/corrections 同步、Git 收口、多轮验证和子 AI 协作。
-- 小任务可以由主对话直接执行；只要命中大任务触发条件，就先建立任务树和智能体组。
-- 大任务触发条件包括：写作、实现或资料整理对象超过 3 个；检查、审核或验证对象
-  超过 5 个；跨多个职责目录；需要同步 README、引用记录、pending、corrections、
-  状态看板和验证；或任务已在 pending 中登记为执行中、待验证、阻塞或可恢复。
-- 任务树不是扁平清单。根节点和中间节点负责拆分、调度、整合和验收；
-  真正写正文、改代码、迁移文件、跑验证的只能是叶子节点。
-- 子 AI 是否启动由任务量评估、任务树、写范围耦合度和验证风险决定；不应额外要求
-  用户重复点名“启用子 AI”后才执行本仓库已要求的多智能体分工。
-- 如果工具或上层环境限制不能创建子 AI，仍要用任务树登记分工、风险和补救验证方式。
+## ai-rules 框架与生命周期组件
 
-## 会话文件缓存与搜索优先级
+- `ai-rules` 是人和 AI 之间的执行框架，不只是规则文档。新增可确定的约束时，
+  优先注册为输入过滤器、处理拦截器、输出拦截器、横切门禁或报告组件，而不是只追加散文。
+- 输入过滤器负责拆分用户输入、识别要求数量、绑定逐 REQ 行和任务类型，并判断每条
+  要求是否必须落盘、是否触发联网/搜索、是否触发子 AI 或黑盒验证。
+- 处理拦截器负责审批、worktree、联网核对、task tracking、脚本能力适配和状态机。
+- 输出拦截器负责最终回复覆盖、worktree 完成状态、未合并/未提交/未 push 边界和下一步提示。
+- 横切门禁负责编码、文档引用、Git 边界、脚本账本、trace flow 和 correction 扫描。
+- 非纯只读小问答，优先运行生命周期 preflight：
+  `python .codex/ai-rules/scripts/ai_rules.py lifecycle preflight ...`。
+- 收口前优先运行 lifecycle finalize，并根据任务类型触发已注册门禁：
+  `python .codex/ai-rules/scripts/ai_rules.py lifecycle finalize ...`。
+- 生命周期把输入来源区分为 `user`、`web`、`file`、`tool`、`agent`、`history`。
+- 联网输入必须记录 URL 或资料路径；不能把外部资料和用户指令混作同一事实。
+- 脚本判断与人工判断不一致时，在 task tracking 记录采用、修正或阻塞原因。
 
-- 当前不是刚启动的会话时，优先复用本会话已经读取、定位、解释或修改过的文件列表。
-- 新会话或用户说“继续未完成任务”时，默认先读取 `.codex/pending-tasks/index.md`
-  的当前活跃任务和命中的单个 pending 文件；只按该 pending 的最小恢复读取清单继续。
-- 每份 task tracking 必须维护会话链路和缓存索引，记录本次涉及文件、用途和关键结论。
-- 沿会话链复用旧缓存时，不默认全文读取历史 tracking；只抽取会话链路、缓存索引、
-  已处理文件、最终结论等命中段。
-- 回答、修改或引用前仍需确认当前文件内容没有变化；缓存只作为搜索优先级依据。
+## Task Tracking 与恢复现场
 
-## 执行闭环与会话门禁
-
-- 每次收到用户消息后，正式行动前先判断消息类型：继续当前主任务、新任务、
-  插入纠错/规则升级、状态询问或取消/暂停。只要 `.codex/pending-tasks/index.md`
-  仍有活跃任务，且用户没有明确取消或改为新主任务，就不能把原主任务当作已结束。
-- 如果在主任务执行中插入了纠错、规则维护、工具修复、解释说明或状态追问，
-  必须在当前 task tracking 写入 `## 执行闭环门禁`，至少记录：
-  主任务、插入任务、返回动作、当前状态和下一步。
-- 插入任务完成后，必须回到被中断的主任务继续执行；如果不能继续，
-  必须把阻塞原因、等待的用户动作或外部条件写入 pending 和 task tracking。
-  不能只完成用户最新指出的纠错就结束，也不能把“当前纠错完成”误报成
-  “主任务完成”。
-- 如果 active pending 或当前 tracking 明确包含多个并行子目标、支线或验收分支，
-  必须在当前 task tracking 写入 `## 主任务分支状态门禁`，用表格至少记录
-  `分支`、`状态`、`证据`、`下一步`。`codex_session_gate.py` 会在活跃 pending
-  直接关联的 tracking 中检查该表，防止恢复时只继续最近一个支线而漏掉其它分支。
-- 如果新增或处理 correction，收口前要同时核对：correction 是否落盘、
-  `index.md` 是否同步、当前 tracking 是否写了返回动作、pending 下一步是否仍准确。
-- 最终回复前，只要仓库中存在 `scripts/codex_session_gate.py`，且当前有活跃 pending
-  或本轮发生过插入纠错/规则维护，必须运行：
-
-```powershell
-python scripts\codex_session_gate.py --task-tracking <tracking.md> --require-task-tracking
-```
-
-- `codex_session_gate.py` 是只读门禁，只报告 active pending、tracking 执行闭环、
-  correction 状态和缺失项；它不得自动修改 AGENTS、pending、tracking 或 corrections。
-  如果脚本失败，必须先修复 tracking/pending/correction 或明确记录阻塞原因，
-  不得带着失败门禁发送完成态最终回复。
-- 如果目标项目尚未安装 `codex_session_gate.py`，必须按同等字段做人工门禁；
-  后续同步通用规则时应安装该脚本。
-- 最终回复必须同时说明：本轮插入任务是否完成、原主任务当前状态、下一步返回动作、
-  以及是否仍有 active pending。不能只汇报最新纠错或规则更新。
-
-## 任务类型门禁路由
-
-- 每次准备执行或收口前，必须先选择本轮实际命中的任务类型；同一轮可以有多个类型。
-  任务类型至少包括：`code-debug`、`correction`、`rules-script`、`docs`、`git`、
-  `frontend`、`resume`、`multi-agent`、`long-running`。
-- 任务类型不是装饰性标签。只要选中某类任务，就必须在 task tracking 的
-  `## 任务类型门禁` 写清任务类型、必选门禁、证据位置和状态；没有证据时写
-  `阻塞` 或 `不适用`，并说明理由。
-- `codex_task_gate.py` 可以根据 tracking 中的高置信证据推断任务类型，例如
-  UE4SS 日志、Lua/Mod 运行日志、门禁脚本、corrections 路径、pending 恢复现场等。
-  如果脚本推断出额外任务类型，必须按推断类型补齐证据，不能靠少选
-  `--task-types` 绕过日志、纠错或规则脚本门禁。
-- 任务类型到必选门禁的默认路由如下：
-
-| 任务类型 | 触发场景 | 必选证据 |
-|---|---|---|
-| `code-debug` | 代码、Mod、插件、脚本、构建、运行、故障排查 | 日志或诊断来源、复现命令、关键日志摘要、验证用日志 pattern、失败或未验证证据。 |
-| `correction` | 用户指出漏做、错做、流程失效、要求纠偏 | 独立 correction 文件、严重程度、影响面审计、`index.md` 回写、当前 tracking 回写、是否升级到规则/脚本/skill 的判断。 |
-| `rules-script` | 新增或修改规则、脚本、skill、自动化、门禁 | 批准标签、联网核对记录、来源 correction 或 tracking、验证命令、安装/同步范围和失败处理。 |
-| `docs` | 新文档、重构、README/索引/引用维护 | 影响面扫描、引用和循环检查、`validate_doc_task.py` 或等价检查、DoD。 |
-| `git` | stage、commit、push、分支操作 | `git status`、暂存范围、提交/推送边界、无关脏改动处理。 |
-| `frontend` | 页面、交互、视觉、浏览器验证 | 本地 URL、浏览器或截图验证、移动/桌面视口、关键交互结果。 |
-| `resume` | 简历 Markdown/CSS/照片/PDF 导出 | 导出命令、PDF 页数、顶部/底部留白、照片和表格检查。 |
-| `multi-agent` | 子 AI、任务树、通信总线、并发写入 | agent brief、状态看板、锁或写范围、关闭和残留任务。 |
-| `long-running` | pending、恢复现场、跨会话继续 | pending 入口、最小恢复读取清单、当前下一步、禁止误动范围。 |
-
-- 设计或修改规则、脚本、门禁、文档机制、验证策略、工具链和自动化时，
-  `rules-script` 默认要求联网核对外部成熟做法。可采用官方文档、规范、源码仓库、
-  权威手册或维护者文档；如果确实无法联网或没有权威来源，必须在
-  `联网核对记录` 写清风险边界。不能只在最终回复里口头说“参考了成熟做法”。
-- 处理用户纠错时，`correction` 与被纠错任务类型同时生效。例如代码调试中被用户指出
-  日志没看，必须同时满足 `code-debug` 的日志证据和 `correction` 的修正文档证据。
-- 最终回复前，只要仓库中存在 `scripts/codex_task_gate.py`，且本轮涉及代码调试、
-  用户纠错、规则/脚本/skill 修改、文档重构、Git、前端、简历、多智能体或 pending，
-  必须运行对应任务类型门禁；存在 active pending 或插入纠错时，还要由
-  `codex_session_gate.py` 串联执行：
-
-```powershell
-python scripts\codex_task_gate.py `
-  --task-tracking <tracking.md> `
-  --task-types correction rules-script `
-  --require-task-types
-python scripts\codex_session_gate.py `
-  --task-tracking <tracking.md> `
-  --require-task-tracking `
-  --require-task-gate `
-  --task-types correction rules-script
-```
-
-- `codex_task_gate.py` 是只读门禁，只检查 task tracking 中是否存在对应证据；
-  它不得自动修改 AGENTS、README、pending、corrections、脚本或 Git 状态。
-  如果门禁失败，先补证据、修正任务类型或记录阻塞原因，不得带着失败结果收口。
-- 如果本轮是插入纠错或规则维护，并使用了不同于 active pending 链接文件的
-  独立 task tracking，可以在确认该 tracking 已记录 active pending ID、返回动作
-  和下一步后，给 `codex_session_gate.py` 增加 `--allow-inserted-task-tracking`。
-
-## 检索与工具效果统计
-
-- 每次使用会话缓存、文档定位、本地 skill、脚本、导出工具或批量检查工具后，
-  必须在 task tracking 中维护“检索与工具效果统计”。
-- 统计至少记录是否复用缓存、新增读取文件数、`rg` 查询次数、关键查询词、
-  命中范围、候选文件数、最终命中文件和是否扩大搜索。
-- 如果本轮运行了维护脚本、门禁脚本、导出脚本或批量检查脚本，必须同步记录
-  脚本调用账本摘要：真实调用次数、最近调用时间、失败次数、最后一次门禁调用
-  和排行来源。只有来自 `.codex/tool-invocations/*.jsonl` 的记录才能写成
-  “机器账本统计”；从 Markdown 文本临时检索出的次数只能写成“文本出现次数”。
-- 没有真实 token 统计时，不得写“已节省 token”这类确定结论，只能用文件数、
-  行数、brief 长度等代理指标说明降低上下文输入量。
-
-## 脚本调用账本与外部项目状态
-
-- 本仓库维护脚本调用账本工具 `scripts/codex_tool_invocations.py`，支持
-  `record`、`run` 和 `report`。账本默认写入 `.codex/tool-invocations/YYYY-MM.jsonl`，
-  只记录本地过程证据，不自动修改 AGENTS、README、pending、corrections、
-  task tracking 或 Git 状态。
-- 运行维护脚本、门禁脚本、导出脚本或批量检查脚本时，优先用
-  `python scripts/codex_tool_invocations.py run -- ...` 包裹真实命令；
-  如果命令已经运行完，必须用 `record` 补记脚本名、命令、tracking、任务类型、
-  阶段、退出码、状态和摘要。
-- 涉及最终收口门禁时，脚本调用记录必须标记 `--final-gate`，或使用
-  `codex_session_gate.py`、`codex_task_gate.py`、`validate_doc_task.py`、
-  `validate_encoding.py`、`scan_corrections.py` 这类默认门禁脚本名。
-- 最终回复前，只要本轮涉及脚本、门禁、导出或批量检查，必须运行
-  `python scripts/codex_tool_invocations.py report` 或等价报告，并在 task tracking
-  写清本轮脚本调用排行、最近调用、失败次数和最后一次门禁调用。
-- `.codex/tool-invocations/` 是目标项目本地运行账本，不属于通用规则仓库同步内容；
-  不得把不同项目的调用账本写回 ai-rules。
-- 处理当前仓库之外的外部项目、游戏目录、插件、本地服务、源码快照或构建目录时，
-  只要发生修改、运行、调试、验证、安装依赖、生成产物或长期 pending，
-  必须维护项目状态记录，默认放在 `.codex/project-status/<slug>.md`。
-- 外部项目状态记录至少写明：真实路径、项目/组件名、当前状态、已改文件、
-  日志路径或诊断命令、验证结果、下一步、禁止误动范围和最近更新时间。
-- 只阅读外部项目或外部资料、没有修改/运行/验证/长期 pending 时，可以只在
-  task tracking 记录引用来源，不强制创建 `.codex/project-status/` 文件。
-
-## 通用质量目标与新增能力门禁
-
-- 设计、新增或大幅修改功能、规则、脚本、自动化、流程、模板、文档机制、
-  验证策略或协作方式前，必须先按通用质量目标检查，而不是只在出错后补救。
-- 通用质量目标包括：自我迭代升级、系统化、流程化、内容准确化、可量化、
-  减少错误和复发、降低 token/context 输入量、减少无效上下文、提升执行速度。
-- 设计阶段必须说明本次新增能力解决哪个重复问题、会沉淀到规则、脚本、
-  模板、检查清单、skill 还是 task tracking；不能只写一次性口头承诺。
-- 每个质量目标都要尽量落成可检查指标。可用代理指标包括：
-  warning/error 数量变化、复发次数、验证命令通过数、人工步骤减少数、
-  读取文件数、`rg` 查询数、必读文件清单长度、brief 行数、脚本化检查项数、
-  恢复读取清单长度、未确认推断数量和剩余观察项。
-- 没有真实 token 统计时，不能声称精确节省 token；只能说明通过减少全文读取、
-  限定必读文件、复用缓存、压缩 brief 或脚本化检查来降低上下文输入量。
-- 新增能力收口时，必须在 task tracking 的“通用质量目标记录”中写清：
-  已满足的目标、量化证据、不适用原因、仍需观察的复发点和下一次预防动作。
-- 新增或改造规则、脚本、skill、门禁、队列、令牌桶、daemon 或后台监控时，
-  必须在 task tracking 写 `## 适用范围门禁`：适用范围、排除范围、实用性、
-  效率、扩展性和量化事实源；可确定检查项优先交给只读脚本验证。
-- 如果新增能力本身用于防错、提速或降上下文，但没有给出可验证指标或后续观察点，
-  不能在最终回复里笼统宣称“更系统”“更快”“更省 token”或“减少错误”。
-- 如果用户指出某项标准没有写入要求文档，必须优先判断它是否属于通用质量目标；
-  若属于，应补入通用规则、README、DoD 或 task tracking 模板，而不是只写到
-  corrections。
-
-## 任务收口规则沉淀门禁
-
-- 每个任务在最终回复前，必须做“规则沉淀判断”，不能只完成用户点名的那个操作。
-  只要用户提出新要求、纠错、反复强调某种做法、指出遗漏、要求以后都这样处理，
-  或本轮形成了新的流程、脚本、模板、验证方式、协作方式，都要触发该判断。
-- 规则沉淀判断必须回答三问：
-  1. 这是否只是当前任务的一次性处理，不需要长期规则。
-  2. 这是否只适用于当前项目，应写入 `.codex/rules/project/` 或项目 README。
-  3. 这是否跨项目通用，应写入 `ai-rules` 的 common 规则、README、模板、
-     skill 或脚本。
-- 判断落点必须明确写成其中之一：不沉淀、通用规则、项目特有规则、README/索引、
-  task tracking 模板、DoD、correction、pending、skill、脚本或检查清单。
-  不能只写“以后注意”。
-- 跨项目通用、重复出现、影响安全边界、审批流程、验证质量、Git 操作、
-  编码处理、上下文成本、子 AI 协作、日志排查、问题归因或规则同步的要求，
-  默认优先进入通用规则候选；如果不进入，必须写清具体理由和替代防线。
-- 只和当前仓库业务、文档体系、学习路线、简历、源码快照、私有目录结构、
-  领域写作风格或本地交付物有关的要求，默认进入项目特有规则候选，
-  不写回通用仓库。
-- 不沉淀的情况必须写明原因，例如一次性偏好、临时绕过、已有规则覆盖、
-  证据不足、等待复发观察或只适用于本次数据。
-- 如果用户指出“你只做了点，没有考虑是否写入要求文档”或同类问题，
-  必须记录到 corrections，并优先补齐本门禁、对应 README 入口、task tracking
-  模板和 DoD，而不是只在当前回复道歉。
-- 最终回复必须说明本轮规则沉淀判断的结论：已写入哪里、暂不沉淀的理由、
-  或仍需观察的条件。没有完成该判断时，不得宣称任务完全收口。
-
-## 现成方案优先检索
-
-- 做功能开发、插件、脚本、自动化、CLI、数据处理、项目改造或工具类任务前，
-  先评估是否已有可复用的现成工具、开源库、插件、模板、命令行工具或官方示例。
-- 检索优先级是先联网搜索，再结合本地上下文核对。技术问题优先看官方文档、
-  项目官网、源码仓库、发行页、权威讨论和维护状态。
-- 形成执行计划时必须写出“现成方案检索结果”：查了哪些关键词或来源，
-  找到了哪些候选，最终采用、改造、参考或放弃的原因。
-- 设计或修改规则、流程、脚本门禁、文档架构、知识正文、验证策略、
-  安装同步机制或编码处理方案前，也必须先联网核对外部成熟做法。
-- 联网核对优先使用官方文档、规范、源码仓库、项目维护文档和权威手册；
-  可以参考博客或问答整理思路，但正式规则和结论不能只依赖二手资料。
-- task tracking 必须记录“联网核对记录”：搜索关键词或直接打开的来源、
-  采用了哪些结论、哪些资料只作参考未采用、无法联网或无法找到权威资料时的
-  风险边界。
-- 如果用户指出“为什么没有联网查”“有没有成熟方法”等问题，必须把该问题记录到
-  corrections，并优先补齐联网核对门禁，而不是只在当前回复里口头说明。
-
-## 日志优先与可观测性门禁
-
-- 处理代码项目、Mod 项目、插件、脚本、工具链、构建、运行、调试或故障排查任务时，
-  在猜测改代码前必须先定位可用日志和诊断输出。
-- 适用范围包括但不限于：游戏 Mod、黑神话悟空 Mod、编辑器插件、CLI、
-  构建脚本、本地服务、后台任务、数据处理脚本、测试失败和运行环境异常。
-- 开始排查时先确认日志来源：应用日志、stdout/stderr、构建输出、测试输出、
-  崩溃转储、平台事件日志、插件加载日志、游戏引擎日志、外部命令输出、
-  监控指标或 trace/span。没有日志时必须明确记录“日志缺失/不足”。
-- 如果日志不足以定位问题，优先开启已有详细日志、debug/verbose 模式、
-  dry-run、诊断命令或最小复现命令；仍不足时，在风险可控的最小范围内先补
-  诊断日志或结构化错误输出，再做大范围代码修改。
-- 新增日志时应覆盖操作阶段、关键输入、配置键或资源路径、依赖版本、
-  外部命令及退出码、耗时、异常类型和堆栈、fallback 分支、重试次数、
-  模块或函数名、事件名、关键对象 ID、目标对象数量和路径类别。
-  避免只写“执行失败”“进入方法”这类无定位价值的日志。
-- 日志级别要能区分 trace/debug/info/warn/error 或项目已有等价级别；
-  对可恢复异常、用户输入问题、依赖不可用和程序缺陷要给出不同级别和上下文。
-- Mod、插件、游戏、编辑器和框架扩展任务要优先使用宿主平台 logger、
-  引擎日志、插件日志或框架 logging API；只有没有合适宿主日志入口时，
-  才使用 `print`、`console.log`、`System.out` 等临时输出，并在收口时说明。
-- 日志字段尽量携带可串联上下文的关联 ID，例如 request_id、task_id、trace_id、
-  span_id、build_id、plugin_id、mod_id、session_id 或项目已有等价字段。
-- 不得把密钥、token、密码、私有凭据、真实账号、内部地址、证书正文或完整敏感配置
-  写入日志、task tracking 或最终回复；必须脱敏，只记录键名、类别和定位所需摘要。
-- 写入用户输入、外部响应、文件内容、命令参数或配置片段前，必须清洗换行、
-  控制字符和可能破坏 JSON/结构化日志的内容，避免日志注入、伪造日志行或泄露隐私。
-- 每次相关任务的 task tracking 必须记录“日志与可观测性记录”：日志路径或来源、
-  复现命令、触发时间、版本或构建号、运行环境、关键日志摘要、错误码或退出码、
-  堆栈或异常类型、组件入口、事件名、关联 ID、输出介质、耗时、重试、fallback、
-  定位结论、缺失日志、已补日志点、验证用日志 pattern 和仍需继续查看的日志。
-- 最终回复必须说明本轮依据了哪些日志证据；如果尚未解决，要写明下一步最该看的
-  具体日志或诊断命令，不能只说“继续排查”。
-
-## 端到端问题归因门禁
-
-- 处理跨端数据、接口、插件、客户端、后端、脚本管道或多组件协作问题时，
-  不得把“错误暴露的位置”直接当成“根因发生的位置”。
-- 开始改代码前，必须先列出端到端数据链路。常见链路至少按以下阶段拆分：
-  输入采集端、上传或传输层、后端入参解析、业务处理、存储或缓存中间态、
-  返回组装、客户端接收、客户端解析、客户端渲染或输出处理。
-- 客户端获取数据时报错时，必须同时检查上游输入和下游输出：插件上传数据、
-  请求 payload、后端 controller 或 handler 入参、DTO/实体映射、数据库或缓存记录、
-  返回 DTO、HTTP 状态和响应体、客户端解析与展示逻辑。未验证上游输入前，
-  不得只修改后端返回；未验证客户端解析前，也不得只认定后端返回错误。
-- 每段归因都必须有证据：日志、trace_id/request_id、请求/响应脱敏样本、
-  字段映射、数据库或缓存脱敏快照、断点或最小复现、单元/集成测试、
-  抓包摘要、浏览器/插件控制台日志或服务端访问日志。
-- 必须区分五类结论：已确认根因、已排除、证据不足、需要继续采样、
-  暂时无法验证。证据不足时，只能提出下一步验证命令或日志点，不能直接改归因端。
-- 数据归因时要记录字段生命周期：字段从哪里产生、传输名是什么、后端如何解析、
-  中间态如何存储、返回时是否改名或转换、客户端如何读取和输出。
-- 如果发现问题在上游输入或中间态，修复点应优先落在最早产生错误数据的阶段；
-  下游兼容或兜底可以作为防护，但不能掩盖真正根因。
-- 最终回复必须说明：错误暴露端、当前确认的根因端、已排除的链路段、
-  关键证据和下一步仍需验证的链路段。
-
-## 会话操作账本与恢复现场
-
-- 每次处理用户提出的具体要求时，必须创建或更新一份 task tracking，用来记录
-  本次任务范围、文件状态、操作账本和检查结果。
-- task tracking 默认放在 `.codex/task-tracking/`，文件名包含日期和任务关键词。
-- tracking 至少包含：需求概述、计划文件清单、已查看文件缓存、已处理文件、
-  未处理文件、无需处理文件、检查不通过文件、最终结论。
-- tracking 还必须维护恢复现场：原始请求、最新指令、批准标签、已执行操作、
-  未执行操作、运行命令、验证命令、最近安全停止点、下一步动作、当前 Git 状态、
-  子 AI 状态、禁止误动范围和最小恢复读取清单。
-- task tracking 建议使用以下通用结构，项目可在 project 规则中追加本地小节，
-  但不得删除恢复现场和验证记录：
-
-```markdown
-# YYYY-MM-DD-任务关键词
-
-## 本次需求概述
-
-- 原始用户请求：
-- 最新用户指令：
-- 批准标签：
-- 当前状态：
-
-## 会话链路
-
-- 上一任务跟踪文档：
-- 本次复用的旧缓存文件：
-- 本次新增缓存文件：
-
-## 缓存索引
-
-| 文件路径 | 用途 | 关键结论 |
-|---|---|---|
-
-## 执行闭环门禁
-
-| 项 | 记录 |
-|---|---|
-| 主任务 |  |
-| 插入任务 |  |
-| 返回动作 |  |
-| 当前状态 |  |
-| 下一步 |  |
-| session gate |  |
+- 中/大任务、修改型任务、规则/脚本/skill、文档、Git、简历、long-running、
+  multi-agent 或 correction 任务必须有 task tracking。
+- task tracking 放在 `.codex/project/records/task-tracking/`。
+- pending 恢复入口放在 `.codex/project/records/pending-tasks/`。
+- correction 记录放在 `.codex/project/records/corrections/`。
+- 运行态、日志和账本放在 `.codex/project/state/`、`.codex/project/logs/`
+  和 `.codex/project/tmp/`，不写回通用仓库。
+- task tracking 至少记录：用户输入拆解、用户要求、触发日志、任务类型、worktree 证据、
+  Worktree 完成记录、影响面、操作账本、验证记录、DoD、Git 状态和恢复现场。
+- 多分支任务必须记录 `## 主任务分支状态门禁`，覆盖每个分支的状态、证据和下一步。
+- 模板由程序输出：
+  `python .codex/ai-rules/scripts/ai_rules.py templates task-tracking`。
 
 ## 任务类型门禁
 
-| 任务类型 | 必选门禁 | 证据位置 | 状态 |
-|---|---|---|---|
-|  |  |  |  |
-
-## 任务量评估
-
-- 预计修改文件数：
-- 具体对象数：
-- 目录跨度：
-- 是否需要联网/源码核对：
-- 是否需要引用记录、pending、corrections 或状态看板同步：
-- 是否需要 Git 收口或多轮验证：
-- 任务规模结论：
-- 子 AI 决策：
-
-## 联网核对记录
-
-| 来源或关键词 | 用途 | 采用结论 | 未采用或风险边界 |
-|---|---|---|---|
-|  |  |  |  |
-
-## 通用质量目标记录
-
-| 质量目标 | 记录 |
-|---|---|
-| 自我迭代升级 |  |
-| 系统化 |  |
-| 流程化 |  |
-| 内容准确化依据 |  |
-| 可量化指标 |  |
-| 错误减少或复发观察 |  |
-| token/context 降本方式 |  |
-| 上下文最小化方式 |  |
-| 提速方式 |  |
-| 不适用目标及原因 |  |
-| 后续观察点 |  |
-
-## 规则沉淀判断记录
-
-| 项目 | 记录 |
-|---|---|
-| 用户新增要求或纠错 |  |
-| 是否只是一次性处理 |  |
-| 是否应进入项目特有规则 |  |
-| 是否应进入通用规则 |  |
-| 规则、README、skill、脚本或模板落点 |  |
-| 不沉淀或暂缓沉淀原因 |  |
-| 需要同步的要求文档 |  |
-| 需要同步的 corrections 或 tracking |  |
-| 复发观察指标或触发阈值 |  |
-| 本轮处理结论 |  |
-
-## 日志与可观测性记录
-
-| 项目 | 记录 |
-|---|---|
-| 是否适用 |  |
-| 日志来源或路径 |  |
-| 复现或生成日志命令 |  |
-| 时间、版本、构建号和环境 |  |
-| 组件、入口、事件名和关联 ID |  |
-| 运行参数脱敏摘要、目标数量和路径类别 |  |
-| 日志输出介质 |  |
-| 关键日志摘要 |  |
-| 错误级别、错误码、堆栈、退出码和耗时 |  |
-| 重试次数和 fallback 分支 |  |
-| 定位结论 |  |
-| 缺失日志或已补诊断点 |  |
-| 验证用日志 pattern |  |
-| 脱敏处理 |  |
-| 下一步最该查看的日志 |  |
-
-## 端到端归因矩阵
-
-| 链路段 | 证据 | 当前判断 | 已排除依据 | 下一步验证 |
-|---|---|---|---|---|
-| 输入采集端 |  |  |  |  |
-| 上传或传输层 |  |  |  |  |
-| 后端入参解析 |  |  |  |  |
-| 业务处理 |  |  |  |  |
-| 存储或缓存中间态 |  |  |  |  |
-| 返回组装 |  |  |  |  |
-| 客户端接收 |  |  |  |  |
-| 客户端解析 |  |  |  |  |
-| 客户端渲染或输出处理 |  |  |  |  |
-
-## 字段生命周期记录
-
-| 字段或对象 | 产生位置 | 传输名称 | 中间态 | 返回名称 | 输出处理 | 结论 |
-|---|---|---|---|---|---|---|
-|  |  |  |  |  |  |  |
-
-## 门禁 warning 自迭代记录
-
-| 项目 | 记录 |
-|---|---|
-| 触发命令 |  |
-| warning/error 原文摘要 |  |
-| 涉及文件 |  |
-| 是否本轮新增 |  |
-| 根因分类 |  |
-| 即时修复动作 |  |
-| 修复前数量 |  |
-| 修复后数量 |  |
-| 是否复发同类问题 |  |
-| 防复发动作 |  |
-| 是否需要 correction |  |
-| 是否升级规则、提示词或脚本 |  |
-| token/context 节省方式 |  |
-| 下次预写检查提示 |  |
-
-## 脚本调用账本与项目状态记录
-
-| 项目 | 记录 |
-|---|---|
-| 是否运行脚本 |  |
-| 账本记录方式 |  |
-| 账本路径 |  |
-| 本轮调用排行 |  |
-| 最近一次调用 |  |
-| 失败次数 |  |
-| 最后一次门禁调用 |  |
-| 外部项目状态文件 |  |
-| 不创建项目状态文件原因 |  |
-
-## 影响面扫描
-
-| 对象 | 是否受影响 | 处理动作 | 证据或不处理原因 |
-|---|---|---|---|
-| 正文/主产物 |  |  |  |
-| README/索引 |  |  |  |
-| Markdown 链接与引用记录 |  |  |  |
-| 路线/入口/导航 |  |  |  |
-| task tracking |  |  |  |
-| pending |  |  |  |
-| corrections |  |  |  |
-| 脚本/导出/构建验证 |  |  |  |
-| Git/提交/推送 |  |  |  |
-
-## 计划处理的文件清单
-
-- 将读取：
-- 将修改：
-- 不处理：
-
-## 已查看文件缓存
-
-| 文件路径 | 用途 | 关键结论 |
-|---|---|---|
-
-## 已处理文件
-
-- 路径：处理动作与合规检查结论。
-
-## 未处理文件
-
-- 路径：未处理原因与后续条件。
-
-## 无需处理文件
-
-- 路径：排除原因。
-
-## 操作账本
-
-- 已执行：
-- 未执行：
-
-## 验证记录
-
-- 命令：
-- 结果：
-- 失败项与处理：
-
-## Definition of Done
-
-| 门禁项 | 状态 | 证据 |
-|---|---|---|
-| 影响面扫描已完成 |  |  |
-| 相关 README/索引已处理或说明无需处理 |  |  |
-| 引用记录和循环引用检查已完成 |  |  |
-| pending/corrections 状态已处理或说明不适用 |  |  |
-| 脚本、导出或构建验证已完成或说明不适用 |  |  |
-| 联网核对和来源记录已完成或说明不适用 |  |  |
-| 任务类型门禁和 task gate 已完成或说明不适用 |  |  |
-| 通用质量目标已检查或说明不适用 |  |  |
-| 规则沉淀判断已完成或说明不适用 |  |  |
-| 日志与可观测性检查已完成或说明不适用 |  |  |
-| 端到端归因矩阵已完成或说明不适用 |  |  |
-| 门禁 warning 自迭代记录已完成或说明不适用 |  |  |
-| 执行闭环门禁和 session gate 已完成 |  |  |
-| Git 状态、提交和推送边界已检查 |  |  |
-| 最终剩余事项已列明 |  |  |
-
-## 当前 Git 状态
-
-- 仓库：
-- 分支：
-- remote：
-- 最新提交：
-- 工作区状态：
-
-## 循环引用检查
-
-- 检查范围：
-- 检查方式：
-- 检查结果：
-
-## 恢复现场
-
-- 最近安全停止点：
-- 下一步动作：
-- 当前 Git 状态：
-- 子 AI 状态：
-- 禁止误动范围：
-- 最小恢复读取清单：
-
-## 最终结论
-
-- 当前计划范围内完成：
-- 剩余处理：
-```
-
-- 长任务、架构调整、批量迁移、跨目录修改和任何可能被中断的任务，必须在每个稳定阶段
-  更新恢复现场。
-- 最终回复前核对 tracking、pending、智能体组状态、Git 状态和 correction 状态。
-  如果只是当前计划闭环，不能误报“全局无剩余”。
-
-## 重构、新文档与规则同步交付门禁
-
-- 重新构建目录、迁移或重写文档、新建正式文档、批量同步规则、修改脚本、
-  生成 README/索引或执行 Git 收口前，必须把任务从“写主产物”提升为
-  “交付一组相关产物”，先完成影响面扫描，再写正文或脚本。
-- 影响面扫描至少覆盖：主产物、同目录 README、上级 README、路线或导航入口、
-  Markdown 链接、`.references/`、task tracking、pending、corrections、
-  状态看板、脚本/导出/构建验证、Git 提交和推送边界。
-- 扫描结果必须写入 task tracking 的“影响面扫描”表；每个对象都要写清
-  处理动作、证据或不处理原因，不能只写“无影响”。
-- 重构任务必须记录旧路径、旧标题、旧锚点或旧入口文本的反查结果；
-  新建文档必须记录文件名、一级标题、轻量索引、README 和引用记录检查；
-  规则同步任务必须记录 common/project 边界、安装清单、同步脚本、远程推送和
-  目标项目刷新状态。
-- 收口前必须填写 task tracking 的 `Definition of Done` 表。没有证据的门禁项
-  不能标记为完成；不适用项要写明不适用原因。
-- 只要仓库中存在 `scripts/validate_doc_task.py`，重构、新文档、规则同步和
-  文档批处理任务收口前必须运行它或等价检查。第一版脚本只读报告，
-  不自动修改 README、`.references/`、pending、corrections 或 Git 状态。
-- 门禁脚本失败或出现 warning 时，必须二选一：修复问题并重跑，或在
-  task tracking 的未处理文件、风险边界或 DoD 表中写清为何本轮不处理。
-- 门禁脚本发现本轮新增 warning 或 error 时，不能只把文件修到通过就结束。
-  必须同步填写 task tracking 的“门禁 warning 自迭代记录”，记录触发命令、
-  warning 摘要、涉及文件、根因、即时修复、修复前后数量和防复发动作。
-- 如果 warning 暴露的是 Codex 自身写作、提示、流程或上下文管理习惯问题，
-  必须把它记录到 corrections，并判断是否升级为通用规则、项目规则、
-  预写提示词、检查清单或只读脚本。第二次出现同类新增 warning 时，
-  默认升级规则或脚本候选；若不升级，必须写清原因和替代防线。
-- 写 task tracking、correction、`.references` 或 README 前，先执行预写检查：
-  仓库内部 Markdown 链接、引用记录、README 和正式文档不写本机绝对路径；
-  外部运行目标、游戏目录、日志文件、构建输出、导出产物和临时验证根等
-  复现证据必须记录真实路径，不能用占位符替代已确认路径；
-  本次 checked files 都写入 tracking；新建 `.references` 文件写入“已处理文件”；
-  普通说明行不超过约 120 可见字符；敏感信息已脱敏；验证命令和失败摘要会在收口前回填。
-- 自迭代目标必须可量化：至少记录本轮 warning/error 数量变化、是否复发、
-  本次新增读取文件数、关键 `rg` 查询词、复用缓存情况、是否减少全文读取、
-  是否新增更短的恢复读取清单或脚本化检查。不能只写“以后注意”。
-- 最终回复不能只说“完成”，必须以 DoD 证据为依据说明：已完成项、未处理项、
-  未验证项、仍在运行的子 AI、Git 状态和后续条件。
-
-## 通用会话恢复队列
-
-- `.codex/pending-tasks/` 用来记录未完成、暂停、阻塞、待批准、待恢复或可能因
-  上下文丢失而无法继续判断的会话任务。
-- `.codex/task-tracking/` 记录完整处理过程；`.codex/pending-tasks/` 只保存
-  后续恢复时必须先看的入口。
-- pending 任务完成后不删除文件，而是把索引和任务文件状态更新为 `已完成`，
-  写清完成时间、最终结论、验证结果和剩余风险。
-- pending 索引默认维护 `.codex/pending-tasks/index.md`，至少包含：
-
-```markdown
-# Pending Tasks
-
-| 任务文件 | 状态 | 最近更新 | 恢复入口 | 下一步 |
-|---|---|---|---|---|
-```
-
-- 单个 pending 文件建议使用以下通用格式：
-
-```markdown
-# 任务关键词
-
-## 状态
-
-- 状态：待批准 / 进行中 / 待验证 / 阻塞 / 已完成
-- 最近更新：
-- 对应 task tracking：
-
-## 恢复入口
-
-- 原始请求：
-- 最新指令：
-- 批准标签：
-- 最近安全停止点：
-- 下一步动作：
-
-## 最小恢复读取清单
-
--
-
-## 禁止误动范围
-
--
-
-## 完成记录
-
-- 完成时间：
-- 验证结果：
-- 剩余风险：
-```
-
-## Git 操作要求
-
-- 用户只要求“提交”“commit”“提交一下”或类似本地提交操作时，默认只执行本地
-  `git commit`，不得执行 `git push`。
-- 只有用户明确说“push”“推送”“提交并推送”或同等含义时，才允许执行 `git push`。
-- 执行 `git add`、`git commit`、`git push` 前仍要遵守协作审批流程。
-- 工作区存在无关脏改动时，只 stage 本次任务相关文件；不要把历史遗留修改、
-  用户未要求的文件或不确定来源的改动带进同一个 commit。
+- 每轮执行和收口前必须选择实际命中的任务类型：
+  `code-debug`、`correction`、`rules-script`、`docs`、`git`、`frontend`、
+  `resume`、`multi-agent`、`long-running`。
+- 任务类型不是标签装饰；选中后必须在 task tracking 写证据。
+- `rules-script` 默认要求联网核对外部成熟做法；不能只口头声称参考过。
+- 任务门禁入口：
+  `python .codex/ai-rules/scripts/ai_rules.py task-gate ...`。
+- session 收口门禁入口：
+  `python .codex/ai-rules/scripts/ai_rules.py session-gate ...`。
+- 门禁脚本只读检查，不得自动修改 AGENTS、README、pending、corrections 或 Git。
+- 门禁失败时，先修证据、修脚本能力或记录阻塞，不得带失败门禁发送完成态回复。
+
+## 用户要求、触发日志与输出门禁
+
+- 收到用户输入后，先记录 `## 用户输入拆解门禁`：原始输入或最新指令、拆出的
+  任务数/要求数，以及逐 REQ 表。逐 REQ 表必须至少包含 `REQ ID`、用户要求摘要、
+  记录判定、联网/搜索判定、子 AI/验证判定和验收/最终回复覆盖口径。
+- `task-gate` 必须按表格行解析输入拆解门禁，并与 `## 用户要求追踪门禁` 的 REQ
+  行交叉校验；散文式“记录/搜索/验证”关键词不能代替逐 REQ 判定。
+- 用户输入中出现“联网、搜索、查、核对、最新、资料、URL、引用”等要求时，必须在
+  输入拆解和触发日志中登记，后续验证记录要说明已联网、无需联网或阻塞原因。
+- 用户新增要求、纠正要求、批准计划、改变优先级或询问是否实现时，必须登记到
+  `## 用户要求追踪门禁`。
+- 每条要求使用稳定 ID，记录状态、动作、实现证据、验证证据和最终回复覆盖口径。
+- 同一轮多个要求不能只处理最近一条；最终回复前逐条回看。
+- 触发用户要求、任务类型、安全要求、脚本能力适配、上下文压缩、脚本账本或最终门禁时，
+  必须在 `## 要求触发日志` 记录 TRG 行。
+- 最终回复前必须用 `## 输出信息门禁` 或等价记录覆盖已完成项、未处理项、
+  未验证项、阻塞项、active pending、Git/worktree 状态和下一步。
+- 修改型任务的输出门禁必须提示 worktree 是否完成、是否已合并、是否 stage/commit、
+  是否 push、一般不会自动合并时需要用户确认的下一步。
+
+## 脚本与包结构
+
+- `ai-rules` 的 Python 代码采用包结构：`src/ai_rules/` 是唯一实现层。
+- `scripts/` 只保留一个公开入口：
+  `python .codex/ai-rules/scripts/ai_rules.py <command> ...`。
+- 新增能力不得再创建 `scripts/codex_*.py`、`scripts/validate_*.py`、
+  `scripts/agent_*.py` 这类平铺旧入口；发现旧入口属于当前改动范围时直接移除或迁移。
+- 通用脚本默认使用 Python 标准库实现；PowerShell/Bash 只作为 wrapper 或平台入口。
+- 新增或修改脚本后，必须验证 `--help`、一个真实成功路径、必要的失败/警告路径，
+  并运行 `python .codex/ai-rules/scripts/ai_rules.py selftest` 覆盖黑盒强制行为。
+- 脚本能力不支持当前目标时，先记录 `## 脚本能力适配门禁`；不得手工改运行态、
+  锁、账本或派生报告来伪造脚本能力。
+- Python 运行产生的缓存必须重定向到 `.codex/project/cache/python-pycache`。
+- 文本文件必须用 UTF-8；JSON 不应带 UTF-8 BOM。
+- 编码验证入口：
+  `python .codex/ai-rules/scripts/ai_rules.py validate-encoding ...`。
+
+## 文档、引用与交付
+
+- 新文档、重构、README/索引/引用维护必须做影响面扫描、循环引用检查和 DoD。
+- 文档引用图入口：
+  `python .codex/ai-rules/scripts/ai_rules.py doc-index ...`。
+- 文档任务验证入口：
+  `python .codex/ai-rules/scripts/ai_rules.py validate-doc ...`。
+- 仓库内部 Markdown 链接使用相对路径，不写本机绝对路径。
+- 外部运行目标、日志、构建输出和临时验证根等复现证据必须记录真实路径。
+
+## Git 边界
+
+- 用户只要求 commit 时默认只本地 commit，不 push。
+- 只有用户明确说 push、推送或提交并推送时，才允许 `git push`。
+- stage/commit/push 前仍要遵守审批和 worktree 规则。
+- 工作区有无关脏改动时，只 stage 本次任务相关文件。
 - commit 后检查提交号、最新提交信息和剩余工作区状态。
-- 长任务执行期间，每隔 1 小时做一次 commit 检查并记录；检查不是无条件自动提交。
+- 多个 worktree 或子任务修改同一热点文件时，进入 integration queue，
+  由单一整合者合并、记录冲突矩阵和验证结果。
 
-## 子 AI 协作与状态看板
+## 子 AI 协作
 
-- 大型重构、批量文档生成、跨目录整理、批量代码修改或用户明确要求多 AI 分工时，
-  总控必须先拆出不重叠的文件范围和知识点范围，再创建或登记子 AI 任务树。
-- 大任务默认至少考虑创建一个叶子子 AI 做只读审查、验证或独立实现。
-  如果最终不创建实际子 AI，必须在 task tracking 写清具体证据，例如工具不可用、
-  任务未超过阈值、写范围无法拆分且只读审查也没有价值；不能只写“主控处理”。
-- 创建任何子 AI 前，总控必须先设计上下文压缩输入包，优先写入
-  `.codex/agent-briefs/`，或在 spawn 消息中给出等价短输入包。
-- Agent brief 或等价 spawn 输入至少包含：
+- 大任务或用户明确要求多 AI 分工时，总控先拆任务树、写范围和验证边界。
+- 创建子 AI 前必须准备 Agent Brief 或等价短输入包。
+- Agent Brief 模板由程序输出：
+  `python .codex/ai-rules/scripts/ai_rules.py templates agent-brief`。
+- 文件型通信总线入口：
+  `python .codex/ai-rules/scripts/ai_rules.py agent-comm ...`。
+- 状态看板入口：
+  `python .codex/ai-rules/scripts/ai_rules.py agent-groups ...`。
+- 多 agent 写入前必须登记 write scope 并获取锁。
+- 子 AI 用于测试门禁时，不能只抽查单点；必须记录 `## 子 AI 验收矩阵` 的结构化
+  表格行，覆盖本轮全部触发子 AI 的 REQ、输入门禁、输出门禁、任务类型门禁、
+  Git/worktree 门禁、失败路径、成功路径、发现问题和修复复测。
+- `task-gate` 必须按矩阵行校验覆盖的 REQ、门禁、失败路径、成功路径和修复复测；
+  一句话式“全面覆盖、失败成功均通过”不能替代矩阵。
 
-```markdown
-# Agent Brief
+## Corrections 与规则自迭代
 
-## task_scope
+- 用户指出 Codex 漏处理、错做、违反规则、验证不足或流程失效时，默认按高严重度
+  correction 处理，除非用户明确说只是轻微问题。
+- correction 独立文件是事实源；`index.md` 是派生汇总。
+- 新增或更新 correction 后必须同步独立文件、索引、当前 tracking 和返回动作。
+- correction 模板由程序输出：
+  `python .codex/ai-rules/scripts/ai_rules.py templates correction`。
+- 扫描入口：
+  `python .codex/ai-rules/scripts/ai_rules.py scan-corrections ...`。
+- 不把一次性用户原话直接堆进 AGENTS；先沉淀 correction，再判断是否升级规则、
+  脚本、skill 或 README。
 
-## allowed_files
+## Skills
 
-## required_inputs
+- 通用 skill 事实源在 `.codex/ai-rules/.codex/skills/`。
+- 项目特化 skill 放 `.codex/project/skills/`。
+- 目标项目原生 skill 优先级最高；同名冲突必须记录，不能静默覆盖。
+- 修改任意 skill 后必须运行对应 skill 校验；带脚本的 skill 还要跑最小真实用例。
 
-## skip_inputs
+## 收口
 
-## confirmed_facts
-
-## validation
-
-## output_contract
-
-## write_scope
-
-## lock_policy
-
-## token_usage_source
-```
-
-- 同时存在多个智能体组时，必须维护 `.codex/agent-groups/current-status.json`
-  作为状态看板事实源。
-- 状态看板中的每个组至少记录：
-  `group_id`、`group_title`、`task_tracking_file`、`approval_label`、
-  `last_checkpoint`、`restore_reading_list`、`status`、`parent_node`、
-  `leaf_count`、`active_agents`、`closed_agents`、`residual_agents`、
-  `current_files`、`unfinished_items`、`next_action`、`children`。
-- 展示状态时优先运行 `python scripts/agent_group_status.py --once`；阶段收口后运行
-  `python scripts/agent_group_status.py --once --validate`。
-- 长期任务和跨会话恢复需要同步维护 `.codex/agent-comm/` 文件型通信总线，
-  使用 `scripts/agent_comm.py` 管理 inbox/outbox、ack、heartbeat、artifact 和锁。
-- 使用通信总线时，常用验收命令包括：
-
-```powershell
-python scripts\agent_comm.py report <group-id>
-python scripts\agent_comm.py validate <group-id>
-python scripts\agent_comm.py lock status --active-only
-```
-
-- 多组并发写入前必须登记 write scope 并获取锁；没有锁和冲突策略时不得让两个组
-  同时写同一文件、同一目录或父子目录范围。
-
-## 修正文档与规则自迭代
-
-- 用户指出 Codex 漏处理、规划不清、结构不合理、审批遗漏、验证不足或违反要求时，
-  必须记录到 `.codex/corrections/`。
-- 用户指出的 Codex 错误默认按严重流程事件处理；除非用户明确说明只是轻微问题，
-  严重程度至少按“高”记录，并做影响面审计。
-- `暂不升级` 只表示本次不新增长期规则，不表示问题轻微或不严重；仍要记录
-  已有防线、为什么不升级和后续观察点。
-- corrections 使用多文件结构：`README.md`、`index.md` 和
-  `YYYY-MM-DD-错误关键词.md` 独立记录。
-- 独立纠错文件是事实源，`index.md` 是派生汇总；二者冲突时以独立文件为准。
-- 不能把单次用户纠错原话直接堆进规则文件。必须先沉淀到 corrections，
-  再按频率、严重性和通用性决定是否升级为长期规则。
-- 处理 corrections、README、路线、引用记录、task tracking、索引、状态统计等
-  可能被多个会话同时维护的文件前，必须先做并行会话冲突检查。
-- `.codex/corrections/README.md` 至少说明用途、文件结构、记录模板、状态定义、
-  提炼流程、数据保存原则和工具化观察边界。最小结构如下：
-
-````markdown
-# 修正文档
-
-## 用途
-
-## 文件结构
-
-```text
-.codex/corrections/
-├── README.md
-├── index.md
-└── YYYY-MM-DD-错误关键词.md
-```
-
-## 记录模板
-
-## 状态定义
-
-## 提炼流程
-
-## 数据保存原则
-
-## 工具化观察
-````
-
-- 独立纠错文件必须聚焦一个错误，使用以下模板；如果项目需要更多字段，
-  放在 project 规则中追加，不能删除这些通用字段：
-
-```markdown
-# 错误关键词
-
-## 用户纠错摘要
-
-- 用户指出的问题：
-- 发生时间：
-
-## 发生场景
-
-- 关联任务：
-- 关联文件：
-
-## 错误类型
-
-- 类型：
-- 严重程度：
-
-## 具体遗漏
-
--
-
-## 根因判断
-
--
-
-## 即时修复动作
-
--
-
-## 候选规则
-
--
-
-## 是否需要升级到 AGENTS.md
-
--
-
-## 关联 task tracking
-
--
-
-## 当前状态
-
-- 状态：
-- 处理备注：
-```
-
-- `index.md` 是派生汇总，至少包含快速索引、状态汇总、数据处理与工具化观察、
-  提炼备注。快速索引表头固定为：
-
-```markdown
-| 文件 | 状态 | 错误类型 | 是否需要升级 | 关联 tracking |
-|---|---|---|---|---|
-```
-
-- corrections 状态值只使用：`待记录`、`待提炼`、`已提炼进要求`、`暂不升级`、
-  `已废弃`。含义如下：
-  - `待记录`：刚发现问题，还没整理完整。
-  - `待提炼`：已确认是有效问题，等待归类成长期规则。
-  - `已提炼进要求`：已写入通用规则、项目规则、README 或 skill。
-  - `暂不升级`：不新增长期规则；仍需写清已有防线、影响面和后续观察点，
-    不代表问题不严重。
-  - `已废弃`：后续确认不适用或被更准确记录替代。
-- 新增或更新 correction 后必须同步：
-  独立纠错文件、`index.md` 快速索引、状态汇总、工具化观察和当前 task tracking。
-  如果 `index.md` 和独立记录冲突，先以独立记录修正索引，再继续提炼规则。
-- 每次使用 corrections 数据后，必须在 task tracking 记录读取了哪些记录、
-  如何分组、哪些升级、哪些继续观察；如果存在只读扫描脚本，先运行扫描脚本，
-  再根据报告决定是否修改文件。
-
-## 脚本维护要求
-
-- 新增或修改脚本后，必须重新运行该脚本或最小真实用例，确认输出符合预期。
-- 新增或修改自动化、批量检查、文档同步、导出、编码处理等工具脚本后，
-  必须用真实仓库路径跑一次最小可验证用例。
-- 脚本依赖 Windows、Node、Python、PowerShell 或其它本地环境时，验证要使用
-  当前仓库实际环境，不能只做伪命令或静态检查。
-- 为验证、语法检查、构建或数据处理临时安装/下载工具、依赖、运行时、
-  包管理器项目或插件前，必须先判断是否已有用户批准；没有明确批准时先请求。
-  即使已获批，也要把安装位置、缓存位置、临时目录、生成物和清理策略写入
-  task tracking。
-- 任务级工具和依赖默认只能放在当前项目的 `.codex/` 下，优先使用
-  `.codex/tools/`、`.codex/cache/`、`.codex/tmp/` 等目录；不得写入系统临时目录、
-  用户 HOME 全局缓存、全局安装位置或项目根 `node_modules`，除非用户单独明确批准。
-- 使用带缓存或仓库位置的工具时，必须把缓存重定向到当前项目 `.codex/cache/`：
-  npm 使用 `--cache <project>/.codex/cache/npm`，并把 `--prefix` 或工作目录放在
-  `.codex/tools/` 或 `.codex/tmp/`；Maven 使用
-  `-Dmaven.repo.local=<project>/.codex/cache/maven` 或等价 `settings.xml`
-  `localRepository`；Gradle 使用
-  `GRADLE_USER_HOME=<project>/.codex/cache/gradle`；pip/Python 使用项目内 venv
-  和 `--cache-dir <project>/.codex/cache/pip` 或等价缓存配置。其它 CLI 只要支持
-  缓存、临时目录、输出目录或仓库目录配置，也必须指向 `.codex/`。
-- 如果工具无法可靠重定向安装、缓存或临时文件，停止并改用已有本机工具、
-  纯静态检查或向用户说明风险后重新获批；不得为了验证方便把依赖装到系统 temp、
-  用户 HOME、全局包目录或未记录的外部目录。
-- 脚本文件默认使用 UTF-8 保存；PowerShell 脚本若需要兼容 Windows PowerShell 5.1，
-  应避免在脚本源码字符串中直接写必须由解析器读取的非 ASCII 模板，或明确验证
-  解析器能按预期读取。输出中文内容时要用真实命令验证编码。
-- 在 Windows/PowerShell 中读取或写入仓库维护文件时，默认显式指定 UTF-8：
-  `Get-Content -Raw -Encoding UTF8`、`Set-Content -Encoding UTF8`、
-  `Out-File -Encoding UTF8`。不要依赖 Windows PowerShell 5.1 的默认 ANSI
-  编码，也不要把控制台当前代码页当作文件编码依据。
-- PowerShell 需要调用 Python、Git、Node 或其它外部程序并传递中文路径、
-  中文 stdout/stderr 或中文 JSON 时，先设置本次进程编码：
-  `$OutputEncoding = [System.Text.UTF8Encoding]::new()`，
-  `[Console]::InputEncoding = [System.Text.UTF8Encoding]::new()`，
-  `[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()`。
-  如果改变编码可能影响用户交互式终端，必须只在脚本或命令作用域内设置。
-- Python 脚本读取/写入仓库文本文件必须显式使用 `encoding="utf-8"`；
-  `subprocess.run(..., text=True)`、`subprocess.Popen(..., text=True)` 或
-  等价文本模式读取外部程序输出时，也必须显式传入 `encoding="utf-8"` 和必要的
-  `errors="replace"`。在 PowerShell 中运行涉及中文输出或中文路径的 Python 校验时，
-  设置 `$env:PYTHONUTF8 = "1"`，必要时设置
-  `$env:PYTHONIOENCODING = "utf-8"` 后再运行。
-- Git 输出中文路径时优先使用
-  `git -c core.quotepath=false status --short` 或等价命令记录人工可读输出；
-  脚本解析 Git 路径列表时优先使用 `-z` 的 NUL 分隔输出，避免路径转义和空格歧义。
-  如果看到 `\345\...` 这类转义路径，先判断是否只是 Git 路径转义，
-  不要误判为文件内容乱码。
-- JSON 文件必须按 UTF-8 处理；用于跨系统传输、配置或工具互操作的 JSON 不应写入
-  UTF-8 BOM。发现 JSON 带 BOM 时先报告和记录风险，不自动重写。
-- 发现乱码、中文路径显示异常、脚本输出问号或转义路径时，必须记录到
-  task tracking 或 corrections：触发命令、PowerShell 版本、当前编码设置、
-  文件真实编码判断、是否为 Git quotePath 显示问题，以及最终处理方式。
-- 只要仓库中存在 `scripts/validate_encoding.py`，新增或修改 `.md`、`.json`、
-  `.ps1`、`.py`、`.yaml`、`.yml`、`.toml`、`.css`、`.html`、`.js`、`.ts`
-  等文本文件后，收口前必须运行该脚本或等价 UTF-8 检查。脚本第一版只读报告，
-  不自动转码、不自动重写 BOM、不自动修改 PowerShell 脚本。
-- 修改 PowerShell 脚本后，至少运行语法解析：
-
-```powershell
-$tokens = $null
-$errors = $null
-[System.Management.Automation.Language.Parser]::ParseFile(
-  "script.ps1",
-  [ref]$tokens,
-  [ref]$errors
-) | Out-Null
-if ($errors.Count -gt 0) { $errors | ForEach-Object { $_.Message }; exit 1 }
-```
-
-- 修改 Python 脚本后，至少运行：
-
-```powershell
-$env:PYTHONPYCACHEPREFIX = ".codex\cache\python-pycache"
-python -m py_compile scripts\name.py
-python scripts\name.py --help
-```
-
-- 运行 Python 语法检查、测试或脚本入口时，只要可能生成 `__pycache__`、`.pyc`
-  或测试缓存，就必须把 `PYTHONPYCACHEPREFIX`、测试缓存目录或等价配置指向
-  当前项目 `.codex/cache/`；不得把 Python 字节码缓存留在 `scripts/`、
-  源码目录或用户 HOME。
-- 门禁脚本、验证脚本或其它 Python 工具在进程内动态导入本地脚本时，必须优先用
-  `sys.pycache_prefix` 把字节码缓存临时重定向到
-  `.codex/cache/python-pycache`，导入完成后恢复原值；不得为了避免
-  `scripts/__pycache__` 而直接设置 `sys.dont_write_bytecode = True` 禁用缓存。
-
-- 修改 Node 或 JavaScript 脚本后，优先运行项目已有测试；没有测试时至少运行
-  语法或最小入口检查，例如：
-
-```powershell
-node --check scripts\name.js
-node scripts\name.js --help
-```
-
-- 涉及文件复制、删除、移动、安装、同步、导出或批量改写的脚本，必须用临时目录或
-  最小真实仓库路径跑一遍。临时目录清理前必须确认解析后的绝对路径位于预期临时根下；
-  不得对未校验的计算路径执行递归删除。
-- 安装、同步和 Git 类脚本的最小真实用例至少检查：
-  目标文件是否生成、已有文件是否按规则备份或保留、配置文件是否写入、
-  冲突时是否停止、无 remote 时是否跳过 push、有 remote 时是否按审批执行 push。
-- 每次脚本验证都要把命令、工作目录、通过/失败结果、失败输出摘要和后续处理写入
-  task tracking；最终回复只汇报关键结果，不粘贴冗长日志。
-
-## 通用本地 Skills
-
-- 通用规则仓库可以维护可跨项目复用的 Codex skills，默认安装到
-  `.codex/skills/`。
-- 修改任意 Codex skill 后，包括 `SKILL.md`、`agents/openai.yaml`、`scripts/`、
-  `references/` 或 `assets/`，都必须重新运行 skill 校验。
-- 如果某个 skill 只适用于单一项目，应放到项目特有规则目录说明，不能放进通用
-  `ai-rules` 仓库作为默认安装项。
+- 收口前按任务类型运行 gate pool 或等价门禁：
+  `python .codex/ai-rules/scripts/ai_rules.py gate-pool ...`。
+- 规则/脚本强制执行能力变更后，收口前必须运行：
+  `python .codex/ai-rules/scripts/ai_rules.py selftest --root <target-project>`。
+- 工具调用账本入口：
+  `python .codex/ai-rules/scripts/ai_rules.py tool-invocations ...`。
+- 调用链路报告入口：
+  `python .codex/ai-rules/scripts/ai_rules.py tool-flow ...`。
+- 最终回复必须说明：本轮任务完成状态、原主任务状态、active pending、验证结果、
+  Git/worktree 状态、worktree 是否完成、是否合并/提交/push、未处理项和下一步。

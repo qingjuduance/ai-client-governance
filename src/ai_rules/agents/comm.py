@@ -16,8 +16,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from ai_rules.common.paths import AGENT_COMM_DIR
 
-BASE_DIR = Path(".codex") / "agent-comm"
+BASE_DIR = AGENT_COMM_DIR
 GROUPS_DIR = BASE_DIR / "groups"
 LOCKS_FILE = BASE_DIR / "locks.json"
 SCHEMA_VERSION = 1
@@ -800,7 +801,7 @@ def add_common_message_args(parser: argparse.ArgumentParser) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Manage .codex/agent-comm local sub-agent communication files."
+        description="Manage .codex/project/agents/comm local sub-agent communication files."
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -925,3 +926,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
