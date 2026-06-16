@@ -185,12 +185,12 @@ def ignored_status_paths(cwd: Path, ignored_abs_paths: set[Path] | None) -> set[
 
 def short_status(path: Path, ignored_abs_paths: set[Path] | None = None) -> str:
     """Return git status --short for a worktree."""
-    output = git_run(["status", "--short"], path, check=False).stdout.strip()
+    output = git_run(["status", "--short"], path, check=False).stdout.rstrip()
     ignored = ignored_status_paths(path, ignored_abs_paths)
     if not output or not ignored:
         return output
     lines = [line for line in output.splitlines() if status_path_from_line(line) not in ignored]
-    return "\n".join(lines).strip()
+    return "\n".join(lines).rstrip()
 
 
 def last_commit_message(path: Path) -> str:
