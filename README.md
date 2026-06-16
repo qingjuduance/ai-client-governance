@@ -358,9 +358,11 @@ python .codex\ai-rules\scripts\ai_rules.py worktree-task remove --repo ai-rules 
 ```
 
 `status --write-state` 会生成或更新 `.codex/project/state/worktrees.json`，记录 self 和
-ai-rules 两个仓库下每个任务 worktree 的路径、分支、head、dirty 状态和是否已合并到
-目标分支。后续 AI 会话必须优先读取这个快照，再结合 `git worktree list --porcelain`
-核对真实 Git 状态。
+ai-rules 两个仓库下每个任务 worktree 的路径、分支、`head_at_snapshot`、dirty 状态和
+是否已合并到目标分支。这个文件是可提交的审计快照，不是免运行的实时数据库；提交快照
+本身会推进主仓库 HEAD，所以 HEAD 字段必须按 `*_at_snapshot` 理解。后续 AI 会话必须
+优先读取这个快照，再重新运行同一个脚本或结合 `git worktree list --porcelain` 核对真实
+Git 状态，最终回复前也必须做一次 live status 校验。
 
 `remove` 默认只输出 dry-run 计划；只有显式传 `--execute` 才会调用
 `git worktree remove`，且默认拒绝移除 dirty worktree。固定脚本会把路径限制在宿主

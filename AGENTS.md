@@ -29,6 +29,9 @@
 - worktree 创建、状态同步、收口检查和安全清理优先使用
   `python .codex/ai-rules/scripts/ai_rules.py worktree-task ...`；当前 worktree
   总览写入 `.codex/project/state/worktrees.json`，并在 task tracking 中引用。
+  该文件是可提交的审计快照，活体状态以重新运行 `worktree-task status --write-state`
+  为准；其中 HEAD 字段必须使用 `*_at_snapshot` 语义，避免提交快照本身推进 HEAD
+  后造成误判。
 - 多会话、多线程或多 worktree 修改同一范围时，必须通过 `worktree-coord` 的
   session、lock 和 integration queue 记录冲突、整合者、冲突矩阵和验证结果。
 - 用户新增流程要求时，先判断是否应升级为脚本能力、生命周期组件、门禁或状态文件；

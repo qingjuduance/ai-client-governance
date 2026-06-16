@@ -212,14 +212,15 @@ def build_worktree_record(
     branch = clean_branch_name(wt.get("branch", ""))
     status_text = short_status(path, ignored_abs_paths)
     merged = merged_to_target(source_repo, branch, target_ref)
+    head = wt.get("head", "")
     return {
         "repo": repo_name,
         "task_slug": path.name,
         "path": display_path(path, project_root),
         "absolute_path": str(path),
         "branch": branch,
-        "head": wt.get("head", "")[:7],
-        "head_full": wt.get("head", ""),
+        "head_at_snapshot": head[:7],
+        "head_full_at_snapshot": head,
         "last_commit_message": last_commit_message(path),
         "status": "dirty" if status_text else "clean",
         "dirty": bool(status_text),
@@ -243,15 +244,22 @@ def build_status_snapshot(
     ]
     worktree_base = project_root / ".codex" / "project" / ".worktree"
     snapshot: dict[str, Any] = {
-        "schema_version": 2,
+        "schema_version": 3,
         "last_updated": now_iso(),
         "project_root": str(project_root.resolve()),
         "core_principle": "一切流程化 + 可审计",
+        "snapshot_semantics": {
+            "kind": "committed_audit_snapshot",
+            "live_state_command": "python .codex/ai-rules/scripts/ai_rules.py worktree-task status --write-state",
+            "head_fields": "HEAD fields are observed at snapshot generation time. Committing this state file can advance the main repository HEAD, so rerun the live_state_command for live truth.",
+            "status_fields": "Status is calculated with the output state file ignored to avoid self-dirty snapshots.",
+        },
         "audit_policy": {
             "worktree_state_source": ".codex/project/state/worktrees.json",
             "script_entry": "python .codex/ai-rules/scripts/ai_rules.py worktree-task status --write-state",
             "require_commit_before_merge": True,
             "require_state_snapshot_before_closeout": True,
+            "require_live_status_rerun_before_final_reply": True,
         },
     }
 
@@ -259,11 +267,12 @@ def build_status_snapshot(
         if not (repo_path / ".git").exists():
             continue
         main_status = short_status(repo_path, ignored_abs_paths)
+        main_head = current_head(repo_path)
         repo_record: dict[str, Any] = {
             "main_worktree": display_path(repo_path, project_root),
             "main_branch": current_branch(repo_path),
-            "main_head": current_head(repo_path)[:7],
-            "main_head_full": current_head(repo_path),
+            "main_head_at_snapshot": main_head[:7],
+            "main_head_full_at_snapshot": main_head,
             "main_status": "dirty" if main_status else "clean",
             "main_status_short": main_status.splitlines(),
             "target_ref": target_ref,
