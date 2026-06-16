@@ -428,7 +428,15 @@ def final_gate_commands(args: argparse.Namespace, report: LifecycleReport) -> li
     entrypoint = ai_rules_entrypoint()
     commands: list[list[str]] = []
     changed_paths = report.classification.changed_paths
-    if "docs" in report.classification.task_types or any(Path(path).suffix.lower() == ".md" for path in changed_paths):
+    final_context = AgentExecutionContext(
+        input_source="tool",
+        task_types=tuple(report.classification.task_types),
+        task_size=report.classification.task_size,
+        changed_paths=tuple(changed_paths),
+        final=True,
+    )
+    gate_steps = set(default_registry().gate_step_ids_for_context(final_context))
+    if "doc-index" in gate_steps and not args.task_tracking:
         commands.append(
             [
                 py,

@@ -120,7 +120,11 @@ def parse_args() -> argparse.Namespace:
 
 
 def rel_path(path: Path, root: Path) -> str:
-    return path.resolve().relative_to(root.resolve()).as_posix()
+    resolved = path.resolve()
+    try:
+        return resolved.relative_to(root.resolve()).as_posix()
+    except ValueError:
+        return resolved.as_posix()
 
 
 def resolve_from_root(root: Path, value: str) -> Path:

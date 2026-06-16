@@ -297,6 +297,7 @@ MUTATING_TASK_TYPES = {
 }
 
 TEXT_SUFFIXES = (".css", ".html", ".js", ".json", ".md", ".ps1", ".py", ".toml", ".ts", ".yaml", ".yml")
+DOC_IMPACT_SUFFIXES = (".json", ".md", ".ps1", ".py", ".toml", ".yaml", ".yml")
 
 
 def component(
@@ -499,6 +500,24 @@ def default_components() -> list[ComponentDefinition]:
             fail_policy="fail_closed",
         ),
         component(
+            "post-change.interceptor.document-impact-sync",
+            "processing-interceptor",
+            "post-change",
+            511,
+            "After rules, scripts, skills, manifest, or docs change, require affected-document and reference sync judgement.",
+            task_types=("rules-script", "docs"),
+            path_suffixes=DOC_IMPACT_SUFFIXES,
+            requires_changed_paths=True,
+            gate_label="ai_rules.py doc-index",
+            gate_step="doc-index",
+            fail_policy="fail_closed",
+            metadata={
+                "dedupe_key": "doc-index:changed-paths",
+                "performance_budget": "aggregate changed paths and run one indexed reference check per gate-pool invocation",
+                "requires_tracking_evidence": "record affected docs, updated docs/references, or no-impact rationale",
+            },
+        ),
+        component(
             "post-change.interceptor.reference-check",
             "processing-interceptor",
             "post-change",
@@ -530,6 +549,23 @@ def default_components() -> list[ComponentDefinition]:
             gate_label="ai_rules.py doc-index",
             gate_step="doc-index",
             fail_policy="fail_closed",
+        ),
+        component(
+            "post-change.gate.document-impact-index",
+            "cross-cutting-gate",
+            "post-change",
+            523,
+            "Run one scoped document impact index for changed rules, scripts, manifests, and docs.",
+            task_types=("rules-script", "docs"),
+            path_suffixes=DOC_IMPACT_SUFFIXES,
+            requires_changed_paths=True,
+            gate_label="ai_rules.py doc-index",
+            gate_step="doc-index",
+            fail_policy="fail_closed",
+            metadata={
+                "dedupe_key": "doc-index:changed-paths",
+                "observability": "visible in runtime components and gate-pool dry-run",
+            },
         ),
         component(
             "post-change.interceptor.resume-export",
@@ -631,6 +667,18 @@ def default_components() -> list[ComponentDefinition]:
             "Ensure document/index sync status is reflected in final output.",
             task_types=("docs",),
             fail_policy="fail_closed",
+        ),
+        component(
+            "output.interceptor.runtime-effectiveness",
+            "output-interceptor",
+            "output",
+            725,
+            "Report whether registered runtime nodes were visible, executed, de-duplicated, and efficient enough.",
+            task_types=("rules-script", "docs"),
+            fail_policy="fail_closed",
+            metadata={
+                "evidence": "runtime components, gate-pool plan, tool-flow trace, and task tracking validation notes",
+            },
         ),
         component(
             "output.interceptor.finalize-closeout",

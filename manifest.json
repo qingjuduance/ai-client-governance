@@ -39,7 +39,8 @@
       "input_sources",
       "path_suffixes",
       "path_prefixes",
-      "gate_step"
+      "gate_step",
+      "metadata"
     ],
     "failPolicies": [
       "fail_closed",
@@ -47,7 +48,19 @@
       "requires_approval",
       "report_only"
     ],
-    "extensionPolicy": "Add deterministic behavior as registered runtime components before expanding prose rules."
+    "extensionPolicy": "Add deterministic behavior as registered runtime components before expanding prose rules.",
+    "documentImpactPolicy": {
+      "phase": "post-change",
+      "trigger": "rules, scripts, skills, manifest, README, adapters, or Markdown changes that may affect user-facing docs or references",
+      "gateStep": "doc-index",
+      "trackingEvidence": "record affected docs and references, updated files, or explicit no-impact rationale"
+    },
+    "executionGuarantees": {
+      "componentVisibility": "python .codex/ai-rules/scripts/ai_rules.py runtime components must show matching nodes for the task context",
+      "gateExecution": "python .codex/ai-rules/scripts/ai_rules.py gate-pool --dry-run must show executable gate steps before final runs",
+      "dedupePolicy": "gate-pool de-duplicates by gate_step and aggregates changed paths before running the same gate",
+      "performancePolicy": "avoid unconditional checks; every expensive node needs task type, path, final-only, or changed-path triggers"
+    }
   },
   "agentEntryAdapters": [
     {
