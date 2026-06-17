@@ -79,6 +79,10 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   该文件是可提交的审计快照，活体状态以重新运行 `worktree-task status --write-state`
   为准；其中 HEAD 字段必须使用 `*_at_snapshot` 语义，避免提交快照本身推进 HEAD
   后造成误判。
+- 创建任务 worktree 前必须经过 `worktree-creation-policy` 节点：计划输出或写入前
+  先声明使用 `worktree-task create`、sparse checkout 策略和源码快照目录处理方式。
+  裸 `git worktree add` 只作为 break-glass 例外，必须在 task tracking 记录原因、
+  稀疏检出/排除策略和为什么不能使用固定脚本。
 - 用户要求“合并所有 worktree”“收口 worktree”或 DoD 已把 worktree 合并作为完成条件时，
   已 clean 且已合并的任务 worktree 目录必须在最终回复前用
   `worktree-task remove --execute` 清理；对应本地任务分支在 worktree 移除后用
@@ -118,8 +122,10 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
 - 只读定位、读取规则、同步检查、状态检查、计划输出不要求 worktree；一旦要落盘，
   先进入 worktree。
 - 任务 worktree 默认放在宿主项目 `.codex/project/.worktree/<task-slug>/`。
-- 修改嵌入式 `.codex/ai-client-governance/` 时，从 ai-client-governance 仓库执行 `git worktree add`，
-  目标路径仍放到宿主项目 `.codex/project/.worktree/<task-slug>/`。
+- 修改嵌入式 `.codex/ai-client-governance/` 时，仍优先用
+  `worktree-task create --repo ai-client-governance` 创建任务 worktree，目标路径放到宿主项目
+  `.codex/project/.worktree/<task-slug>/`。只有固定脚本不可用时，才从
+  ai-client-governance 仓库手工执行 `git worktree add` 并记录 break-glass 原因。
 - task tracking 必须记录源仓库、worktree 路径、分支、基准提交和 `git status`。
 - coord session、lock 或队列记录不能代替 Git live state；开始修改、恢复任务和最终收口时，
   必须用 `git worktree list`、`worktree-task status --write-state` 或

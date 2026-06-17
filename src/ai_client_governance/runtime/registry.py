@@ -553,6 +553,27 @@ def default_components() -> list[ComponentDefinition]:
             condition="Run for Git stage, commit, push, worktree, dirty tree, or branch-state operations.",
         ),
         component(
+            "preflight.gate.worktree-creation-policy",
+            "cross-cutting-gate",
+            "preflight",
+            245,
+            "Require an explicit task-worktree creation method and sparse-checkout strategy before task writes.",
+            events=("plan-output", "write-intent", "resume"),
+            task_types=("code-debug", "correction", "rules-script", "docs", "git", "frontend", "resume", "multi-agent"),
+            gate_label="ai_client_governance.py task-gate --only-worktree-creation-policy",
+            gate_step="worktree-creation-policy",
+            fail_policy="fail_closed",
+            requires_facts=("task_tracking", "worktree_creation_method", "sparse_checkout_strategy"),
+            produces_facts=("worktree_creation_policy_decision",),
+            condition=(
+                "Run before creating or reusing a task worktree for mutating work. "
+                "Use worktree-task create by default; raw git worktree add is a break-glass path "
+                "that must record the reason and source snapshot handling."
+            ),
+            performance_budget="One task tracking file read; no Git scan.",
+            dedupe_key="worktree-creation-policy:task-tracking",
+        ),
+        component(
             "prewrite.gate.worktree-live-state",
             "cross-cutting-gate",
             "coordination",

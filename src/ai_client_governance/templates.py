@@ -59,9 +59,12 @@ TEMPLATES: dict[str, str] = {
 | 项目 | 证据 |
 |---|---|
 | 源仓库 |  |
+| worktree 创建方式 |  |
 | worktree 路径 |  |
 | 分支 |  |
 | 基准提交 |  |
+| sparse checkout 策略 |  |
+| 源码目录/快照处理 |  |
 | git status |  |
 
 ## Worktree 完成记录

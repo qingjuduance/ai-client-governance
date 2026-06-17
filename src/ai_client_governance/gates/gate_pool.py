@@ -146,6 +146,26 @@ def build_steps(root: Path, args: argparse.Namespace) -> list[GateStep]:
     gate_steps = registry_gate_steps(task_types, changed_paths, args.final, event)
 
     steps: list[GateStep] = []
+    if "worktree-creation-policy" in gate_steps:
+        steps.append(
+            GateStep(
+                name="ai_client_governance.py task-gate --only-worktree-creation-policy",
+                phase="preflight",
+                command=cli_command(
+                    py,
+                    entrypoint,
+                    "task-gate",
+                    "--task-tracking",
+                    args.task_tracking,
+                    "--only-worktree-creation-policy",
+                ),
+                final_gate=args.final,
+                reason=(
+                    "Task worktree creation must declare worktree-task create or a break-glass "
+                    "raw git path plus sparse/source snapshot handling."
+                ),
+            )
+        )
     if "worktree-live-state" in gate_steps:
         steps.append(
             GateStep(
@@ -620,4 +640,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
