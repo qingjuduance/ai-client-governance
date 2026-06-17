@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import sys
 from dataclasses import asdict, dataclass, field
@@ -45,6 +46,10 @@ DEFAULT_TARGETS = [
     ".ai-client/project/rules/project",
     ".ai-client/ai-client-governance/AGENTS.md",
 ]
+
+
+def default_output() -> str:
+    return os.environ.get("AICG_DOC_INDEX_OUTPUT", str(DEFAULT_OUTPUT))
 EXCLUDED_DIR_NAMES = {
     ".git",
     ".idea",
@@ -142,12 +147,12 @@ def parse_args() -> argparse.Namespace:
 
     build = subparsers.add_parser("build", help="Build .ai-client/project/doc-index/graph.json.")
     add_common_args(build)
-    build.add_argument("--output", default=str(DEFAULT_OUTPUT), help="Index output path.")
+    build.add_argument("--output", default=default_output(), help="Index output path.")
 
     check = subparsers.add_parser("check", help="Check links and backlinks from the document index.")
     add_common_args(check)
     check.add_argument("--index", default=str(DEFAULT_OUTPUT), help="Index JSON path.")
-    check.add_argument("--output", default=str(DEFAULT_OUTPUT), help="Index output path when --rebuild is used.")
+    check.add_argument("--output", default=default_output(), help="Index output path when --rebuild is used.")
     check.add_argument("--rebuild", action="store_true", help="Rebuild the index before checking.")
     check.add_argument("--changed-path", action="append", default=[], help="Changed path used for scoped affected-doc checks.")
     check.add_argument("--strict", action="store_true", help="Exit non-zero for scoped broken links or anchors.")

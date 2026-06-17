@@ -13,8 +13,12 @@ from ai_client_governance.records.task_record import (
     KNOWN_TASK_TYPES,
     MUTATING_TASK_TYPES,
     OUTPUT_TYPES,
+    PATCH_PREFLIGHT_EVENT,
+    PLAN_APPROVAL_BOUNDARY_EVENT,
     REQUIREMENT_STATUSES,
+    STATE_ARTIFACT_OWNERSHIP_EVENT,
     TASK_STATUSES,
+    USER_CLAIM_VALIDATION_EVENT,
     VALIDATION_RESULTS,
     WORKTREE_COMMIT_STATUSES,
     WORKTREE_CREATION_METHODS,
@@ -154,6 +158,42 @@ def build_contract(task_types: list[str], event: str) -> Contract:
             "json",
             "Machine-readable command groups for task-run run, including parallel/cache/order boundaries.",
         ),
+        field(
+            f"events[event_type={PLAN_APPROVAL_BOUNDARY_EVENT}].payload.execution_policy",
+            mutating or normalized != [],
+            "string",
+            "Plan, approval, local commit, and push boundary before execution.",
+        ),
+        field(
+            f"events[event_type={PLAN_APPROVAL_BOUNDARY_EVENT}].payload.push_policy",
+            mutating or normalized != [],
+            "string",
+            "Must be push_requires_separate_approval for gated work.",
+        ),
+        field(
+            f"events[event_type={USER_CLAIM_VALIDATION_EVENT}].payload.claims",
+            mutating or normalized != [],
+            "json",
+            "User assertions with trust_level, risk_flags, and verification_action.",
+        ),
+        field(
+            f"events[event_type={USER_CLAIM_VALIDATION_EVENT}].payload.execution_policy",
+            mutating or normalized != [],
+            "string",
+            "Whether user assertions require verify-first, clarification, blocking, or recorded execution.",
+        ),
+        field(
+            f"events[event_type={STATE_ARTIFACT_OWNERSHIP_EVENT}].payload.manual_edit_policy",
+            "rules-script" in normalized,
+            "string",
+            "Must be forbidden_without_break_glass for script-generated state.",
+        ),
+        field(
+            f"events[event_type={PATCH_PREFLIGHT_EVENT}].payload.anchor_policy",
+            bool(set(normalized) & {"rules-script", "docs", "correction"}),
+            "string",
+            "Must verify unique anchors or re-extract narrow context before patching.",
+        ),
     ]
     if mutating:
         fields.extend(
@@ -200,10 +240,23 @@ def build_contract(task_types: list[str], event: str) -> Contract:
             "Mutating work must persist events.event_type=command-compression.analysis before write-intent or final gates."
         )
         gate_requirements.append(
+            f"Mutating work must persist events.event_type={PLAN_APPROVAL_BOUNDARY_EVENT} with push_policy=push_requires_separate_approval."
+        )
+        gate_requirements.append(
+            f"Mutating work must persist events.event_type={USER_CLAIM_VALIDATION_EVENT} before user assertions steer execution."
+        )
+        gate_requirements.append(
             "Important local commands should run through task-run run, gate-pool, or tool-invocations so command ledger evidence exists."
         )
     if "rules-script" in normalized:
         gate_requirements.append("rules-script tasks require task.approval_label plus an approved approvals[] row with the same label.")
+        gate_requirements.append(
+            f"rules-script tasks require events.event_type={STATE_ARTIFACT_OWNERSHIP_EVENT} for script-generated ledgers and artifacts."
+        )
+    if set(normalized) & {"rules-script", "docs", "correction"}:
+        gate_requirements.append(
+            f"Patchable governance/docs/correction tasks require events.event_type={PATCH_PREFLIGHT_EVENT}."
+        )
     if "docs" in normalized:
         gate_requirements.append("Docs tasks should include validate-doc or doc-index validation rows.")
     if "resume" in normalized:
