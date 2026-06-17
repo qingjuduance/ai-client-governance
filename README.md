@@ -618,6 +618,23 @@ DoD 的一部分。合并后必须先确认 task worktree clean 且 merged，再
 做 live gate；除非用户明确要求保留或存在取证/恢复需要，否则最终回复不能把残留
 `.ai-client/project/.worktree/<task-slug>/` 当成“已完成”。
 
+批量收口优先使用 `closeout-all`，先看 plan，再显式 execute：
+
+```powershell
+python .ai-client\ai-client-governance\scripts\ai_client_governance.py worktree-task closeout-all --plan
+python .ai-client\ai-client-governance\scripts\ai_client_governance.py worktree-task closeout-all --execute
+python .ai-client\ai-client-governance\scripts\ai_client_governance.py worktree-task closeout-all --execute --push
+```
+
+`closeout-all` 按 `ai-client-governance`、`self` 的依赖顺序处理，只接受 clean 且已提交的
+task worktree。它会阻塞 dirty worktree、锁定 worktree、缺失 target ref、源仓库未在
+target 分支、宿主仓库存在非收口路径脏改动、缺失 push upstream 或 merge conflict。
+执行模式会合并未合并分支、移除已收口 worktree、删除已合并本地任务分支，刷新
+`.ai-client/project/state/worktrees.json`，运行 CLI list、`git diff --check` 和
+sync-check，并只 stage/commit 宿主 gitlink、worktree state、sync state 和显式传入的
+`--task-tracking` 路径。`--push` 不会隐式创建 upstream；它先推送
+`ai-client-governance`，再推送宿主 `self`。
+
 嵌入式 `ai-client-governance` 是宿主仓库的 submodule 时，合并 `ai-client-governance` 任务 worktree 还会改变
 宿主仓库记录的 gitlink。这个收口不能只在 `.ai-client/ai-client-governance/` 子仓库内完成：
 
@@ -902,7 +919,11 @@ Claude、Gemini、Copilot、Cursor、Cline、Windsurf、Continue、Roo 和 Aider
 ```powershell
 $env:PYTHONUTF8 = "1"
 $env:PYTHONPYCACHEPREFIX = ".ai-client\project\cache\python-pycache"
-$pyFiles = Get-ChildItem -Recurse -Filter *.py .ai-client\ai-client-governance\scripts, .ai-client\ai-client-governance\src
+$pyRoots = @(
+  ".ai-client\ai-client-governance\scripts",
+  ".ai-client\ai-client-governance\src"
+)
+$pyFiles = Get-ChildItem -Recurse -Filter *.py $pyRoots
 python -m py_compile ($pyFiles | ForEach-Object { $_.FullName })
 python .ai-client\ai-client-governance\scripts\ai_client_governance.py --list
 python .ai-client\ai-client-governance\scripts\ai_client_governance.py validate-encoding `
