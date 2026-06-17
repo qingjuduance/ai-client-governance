@@ -720,7 +720,7 @@ def build_closeout_all_plan(args: argparse.Namespace) -> dict[str, Any]:
         "project_root": str(project_root),
         "target_ref": args.target_ref,
         "selected_repos": selected_repos,
-        "push": bool(args.push),
+        "push_policy": "closeout-all never pushes; run a separate push command after explicit approval.",
         "tasks": [],
         "actions": [],
         "execution": [],
@@ -730,7 +730,6 @@ def build_closeout_all_plan(args: argparse.Namespace) -> dict[str, Any]:
         "host_state_needed": False,
         "common_merge_needed": False,
         "self_merge_needed": False,
-        "push_repos": [],
     }
     if args.plan and args.execute:
         plan["blockers"].append("use either --plan or --execute, not both")
@@ -911,29 +910,6 @@ def build_closeout_all_plan(args: argparse.Namespace) -> dict[str, Any]:
                 ],
             )
 
-    push_repos: list[str] = []
-    if args.push:
-        if plan["common_merge_needed"]:
-            push_repos.append("ai-client-governance")
-        if plan["self_merge_needed"] or plan["host_state_needed"]:
-            push_repos.append("self")
-        for repo_name in push_repos:
-            source_repo_text = plan["repositories"].get(repo_name, {}).get("source_repo")
-            if not source_repo_text:
-                continue
-            source_repo = Path(str(source_repo_text))
-            upstream = upstream_for(source_repo)
-            plan["repositories"][repo_name]["upstream"] = upstream
-            if not upstream:
-                plan["blockers"].append(f"{repo_name}: --push requested but current branch has no upstream")
-            add_closeout_action(
-                plan,
-                action="push",
-                repo=repo_name,
-                command=["git", "push"],
-                reason=f"push current branch to {upstream or '<missing-upstream>'}",
-            )
-    plan["push_repos"] = push_repos
     if args.execute:
         current_cwd = Path.cwd().resolve()
         for task in plan.get("tasks", []):
@@ -1134,15 +1110,6 @@ def execute_closeout_all(plan: dict[str, Any], args: argparse.Namespace) -> int:
                 action="validate-cli-list",
                 repo="ai-client-governance",
             )
-            if args.push and plan.get("common_merge_needed"):
-                source_repo = Path(str(plan["repositories"]["ai-client-governance"]["source_repo"]))
-                run_closeout_process(
-                    plan,
-                    ["git", "push"],
-                    cwd=source_repo,
-                    action="push",
-                    repo="ai-client-governance",
-                )
             if (project_root / ".ai-client" / "ai-client-governance" / ".git").exists():
                 run_closeout_process(
                     plan,
@@ -1214,14 +1181,6 @@ def execute_closeout_all(plan: dict[str, Any], args: argparse.Namespace) -> int:
                 action="host-post-closeout-diff-check",
                 repo="self",
             )
-            if args.push and ("self" in plan.get("push_repos", [])):
-                run_closeout_process(
-                    plan,
-                    ["git", "push"],
-                    cwd=project_root,
-                    action="push",
-                    repo="self",
-                )
     except subprocess.CalledProcessError as exc:
         detail = (exc.stderr or exc.output or "").strip()
         if detail:
@@ -2183,7 +2142,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     closeout_all = subparsers.add_parser(
         "closeout-all",
-        help="Plan or execute merge, host closeout, worktree removal, branch cleanup, validation, and optional push.",
+        help="Plan or execute merge, host closeout, worktree removal, branch cleanup, and validation.",
     )
     closeout_all.add_argument("--project-root", help="Host project root containing .ai-client/project.")
     closeout_all.add_argument(
@@ -2194,8 +2153,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     closeout_all.add_argument("--target-ref", default="main", help="Target branch currently checked out in source repos.")
     closeout_all.add_argument("--plan", action="store_true", help="Print a dry-run plan. This is the default without --execute.")
-    closeout_all.add_argument("--execute", action="store_true", help="Actually merge, clean, commit host closeout, and optionally push.")
-    closeout_all.add_argument("--push", action="store_true", help="After successful validation, push ai-client-governance first, then host self.")
+    closeout_all.add_argument("--execute", action="store_true", help="Actually merge, clean, and commit host closeout without pushing.")
     closeout_all.add_argument(
         "--task-tracking",
         action="append",

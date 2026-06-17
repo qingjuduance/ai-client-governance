@@ -1616,6 +1616,7 @@ def test_worktree_closeout_all_plan(root: Path, run_dir: Path) -> TestResult:
         payload = {}
     passed = (
         all(command.exit_code == 0 for command in commands)
+        and "--push" not in commands[5].stdout
         and payload.get("command") == "worktree-task closeout-all"
         and payload.get("mode") == "plan"
         and payload.get("selected_repos") == ["self"]

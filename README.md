@@ -666,17 +666,16 @@ DoD 的一部分。合并后必须先确认 task worktree clean 且 merged，再
 ```powershell
 python .ai-client\ai-client-governance\scripts\ai_client_governance.py worktree-task closeout-all --plan
 python .ai-client\ai-client-governance\scripts\ai_client_governance.py worktree-task closeout-all --execute
-python .ai-client\ai-client-governance\scripts\ai_client_governance.py worktree-task closeout-all --execute --push
 ```
 
 `closeout-all` 按 `ai-client-governance`、`self` 的依赖顺序处理，只接受 clean 且已提交的
 task worktree。它会阻塞 dirty worktree、锁定 worktree、缺失 target ref、源仓库未在
-target 分支、宿主仓库存在非收口路径脏改动、缺失 push upstream 或 merge conflict。
+target 分支、宿主仓库存在非收口路径脏改动或 merge conflict。
 执行模式会合并未合并分支、移除已收口 worktree、删除已合并本地任务分支，刷新
 `.ai-client/project/state/worktrees.json`，运行 CLI list、`git diff --check` 和
 sync-check，并只 stage/commit 宿主 gitlink、worktree state、sync state 和显式传入的
-`--task-tracking` 路径。`--push` 不会隐式创建 upstream；它先推送
-`ai-client-governance`，再推送宿主 `self`。
+`--task-tracking` 路径。`closeout-all` 不执行 `git push`；push 必须作为后续单独步骤，
+在用户明确批准远端边界后进入对应仓库执行。
 
 嵌入式 `ai-client-governance` 是宿主仓库的 submodule 时，合并 `ai-client-governance` 任务 worktree 还会改变
 宿主仓库记录的 gitlink。这个收口不能只在 `.ai-client/ai-client-governance/` 子仓库内完成：
