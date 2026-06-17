@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from ai_client_governance.common.paths import PYTHON_PYCACHE_DIR, TOOL_INVOCATIONS_DIR
+from ai_client_governance.runtime.scope import classify_scope
 
 DEFAULT_LEDGER_DIR = TOOL_INVOCATIONS_DIR
 SCHEMA_VERSION = 2
@@ -163,6 +164,12 @@ def make_event(
     parent_task_node_id: str = "",
     event_type: str = "",
     attempt: int | None = None,
+    task_id: str = "",
+    scope_kind: str = "",
+    scope_reason: str = "",
+    scope_paths: list[str] | None = None,
+    adapter_enforcement: str = "",
+    shell_adapter: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     timestamp = ended_at or started_at or now_iso()
     return {
@@ -187,8 +194,14 @@ def make_event(
         "parent_task_node_id": parent_task_node_id,
         "event_type": event_type,
         "attempt": attempt,
+        "task_id": task_id,
         "cwd": os.getcwd(),
         "source": "ai_client_governance.py tool-invocations",
+        "scope_kind": scope_kind,
+        "scope_reason": scope_reason,
+        "scope_paths": scope_paths or [],
+        "adapter_enforcement": adapter_enforcement,
+        "shell_adapter": shell_adapter or {},
     }
 
 
@@ -387,6 +400,9 @@ def command_record(args: argparse.Namespace) -> int:
     timestamp = args.ended_at or args.started_at or now_iso()
     invocation_id = args.invocation_id or str(uuid.uuid4())
     trace_id = env_default(args.trace_id, "CODEX_TRACE_ID") or invocation_id
+    scope = classify_scope(root=root, paths=args.scope_path or [], command=command, cwd=os.getcwd())
+    scope_kind = args.scope_kind or scope.scope_kind
+    scope_reason = args.scope_reason or scope.scope_reason
     event = make_event(
         invocation_id=invocation_id,
         name=name,
@@ -407,6 +423,11 @@ def command_record(args: argparse.Namespace) -> int:
         parent_task_node_id=env_default(args.parent_task_node_id, "CODEX_PARENT_TASK_NODE_ID"),
         event_type=env_default(args.event_type, "CODEX_EVENT_TYPE"),
         attempt=env_default_int(args.attempt, "CODEX_ATTEMPT"),
+        task_id=args.task_id or "",
+        scope_kind=scope_kind,
+        scope_reason=scope_reason,
+        scope_paths=scope.paths,
+        adapter_enforcement=args.adapter_enforcement or os.environ.get("AICG_COMMAND_LEDGER_ENFORCEMENT", "tool-invocations"),
     )
     path = append_event(root, args.ledger_dir, event)
     print(f"recorded {name} status={args.status} ledger={path}")
@@ -431,10 +452,14 @@ def command_run(args: argparse.Namespace) -> int:
     event_type = env_default(args.event_type, "CODEX_EVENT_TYPE")
     attempt = env_default_int(args.attempt, "CODEX_ATTEMPT")
     started_at = now_iso()
+    command_text = command_to_string(command)
+    scope = classify_scope(root=root, paths=args.scope_path or [], command=command_text, cwd=args.cwd or os.getcwd())
+    scope_kind = args.scope_kind or scope.scope_kind
+    scope_reason = args.scope_reason or scope.scope_reason
     start_event = make_event(
         invocation_id=invocation_id,
         name=name,
-        command=command_to_string(command),
+        command=command_text,
         status="started",
         task_tracking=args.task_tracking or "",
         task_types=ensure_list(args.task_type),
@@ -448,6 +473,11 @@ def command_run(args: argparse.Namespace) -> int:
         parent_task_node_id=parent_task_node_id,
         event_type=event_type,
         attempt=attempt,
+        task_id=args.task_id or "",
+        scope_kind=scope_kind,
+        scope_reason=scope_reason,
+        scope_paths=scope.paths,
+        adapter_enforcement=args.adapter_enforcement or os.environ.get("AICG_COMMAND_LEDGER_ENFORCEMENT", "tool-invocations"),
     )
     append_event(root, args.ledger_dir, start_event)
 
@@ -467,7 +497,7 @@ def command_run(args: argparse.Namespace) -> int:
     end_event = make_event(
         invocation_id=invocation_id,
         name=name,
-        command=command_to_string(command),
+        command=command_text,
         status=status,
         task_tracking=args.task_tracking or "",
         task_types=ensure_list(args.task_type),
@@ -484,6 +514,11 @@ def command_run(args: argparse.Namespace) -> int:
         parent_task_node_id=parent_task_node_id,
         event_type=event_type,
         attempt=attempt,
+        task_id=args.task_id or "",
+        scope_kind=scope_kind,
+        scope_reason=scope_reason,
+        scope_paths=scope.paths,
+        adapter_enforcement=args.adapter_enforcement or os.environ.get("AICG_COMMAND_LEDGER_ENFORCEMENT", "tool-invocations"),
     )
     path = append_event(root, args.ledger_dir, end_event)
     print(f"recorded {name} status={status} exit={completed.returncode} ledger={path}")
@@ -532,7 +567,12 @@ def build_parser() -> argparse.ArgumentParser:
     record.add_argument("--status", default="succeeded", help="Invocation status.")
     record.add_argument("--exit-code", type=int, help="Process exit code.")
     record.add_argument("--task-tracking", help="Related task tracking file.")
+    record.add_argument("--task-id", help="Related structured task id.")
     record.add_argument("--task-type", action="append", help="Related task type.")
+    record.add_argument("--scope-kind", help="Explicit governance scope kind.")
+    record.add_argument("--scope-reason", help="Explicit governance scope reason.")
+    record.add_argument("--scope-path", action="append", help="Path used for common/project/native scope classification.")
+    record.add_argument("--adapter-enforcement", help="Ledger enforcement adapter label.")
     record.add_argument("--phase", help="Task phase, e.g. planning or final-gate.")
     record.add_argument("--summary", help="Short result summary.")
     record.add_argument("--final-gate", action="store_true", help="Mark as final gate evidence.")
@@ -551,7 +591,12 @@ def build_parser() -> argparse.ArgumentParser:
     run = subparsers.add_parser("run", help="Run a command and record its result.")
     run.add_argument("--name", help="Tool or script name.")
     run.add_argument("--task-tracking", help="Related task tracking file.")
+    run.add_argument("--task-id", help="Related structured task id.")
     run.add_argument("--task-type", action="append", help="Related task type.")
+    run.add_argument("--scope-kind", help="Explicit governance scope kind.")
+    run.add_argument("--scope-reason", help="Explicit governance scope reason.")
+    run.add_argument("--scope-path", action="append", help="Path used for common/project/native scope classification.")
+    run.add_argument("--adapter-enforcement", help="Ledger enforcement adapter label.")
     run.add_argument("--phase", help="Task phase, e.g. planning or final-gate.")
     run.add_argument("--summary", help="Short result summary.")
     run.add_argument("--final-gate", action="store_true", help="Mark as final gate evidence.")
@@ -595,4 +640,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

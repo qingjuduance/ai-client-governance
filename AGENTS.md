@@ -190,6 +190,12 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
 - 生命周期把输入来源区分为 `user`、`web`、`file`、`tool`、`agent`、`history`。
 - 联网输入必须记录 URL 或资料路径；不能把外部资料和用户指令混作同一事实。
 - 脚本判断与人工判断不一致时，在 task tracking 记录采用、修正或阻塞原因。
+- 生命周期还必须把当前任务、变更路径、候选命令和记录事实分类为
+  `ai-client-governance-common`、`project-specialization`、`native-project-assets`、
+  `mixed` 或 `unknown`。中/大型或修改型任务缺少 `scope-classification`
+  trigger 和事件 payload 中的 `scope_kind` 时，`task-record gate` 必须 fail closed。
+  通用治理变更只写入 `.ai-client/ai-client-governance/`，项目特化事实只写入
+  `.ai-client/project/` 或项目原生资产；混合任务必须在 task record 说明边界。
 - 新增治理节点必须同时说明触发条件、去重键、失败策略、验证证据和性能边界；
   不能让所有任务无差别慢跑同一检查。
 - 生成、选择或运行本地命令前，必须经过 `command-compression` 前置拦截器：
@@ -205,6 +211,13 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   `--trace-json`；`--no-ledger` 只能用于隔离测试。宿主客户端裸 shell 调用若无法自动
   拦截，必须在 task record 中记录原因或改用 `task-run`、`gate-pool`、
   `tool-invocations run` 补账。
+- 重要本地命令的强制适配入口是
+  `python .ai-client/ai-client-governance/scripts/ai_client_governance.py shell-adapter run -- ...`。
+  `shell-adapter` 会写入本地 JSONL ledger，并在事件中记录 `adapter_enforcement`、
+  `scope_kind`、`scope_reason` 和 task id。PowerShell 可用
+  `shell-adapter profile-snippet` 或 `shell-adapter install-powershell --execute`
+  安装 profile shim；profile shim 是显式适配器，不声称能拦截宿主客户端内部所有裸
+  shell。收口诊断必须区分 adapter evidence、ledger-wrapped command 和 raw shell gap。
 - 运行状态和资源遗漏检查使用
   `python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-run diagnose ...`；
   它报告命令账本失败、重复终态命令、cache hit/miss、coord lock/session 和裸 shell

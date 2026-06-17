@@ -15,7 +15,7 @@ from ai_client_governance.io import context_extract
 from ai_client_governance import templates
 from ai_client_governance.lifecycle import engine as lifecycle
 from ai_client_governance.records import scan_corrections, task_queue, task_record, tool_flow, tool_invocations
-from ai_client_governance.runtime import contract, registry as runtime_registry, task_run
+from ai_client_governance.runtime import contract, registry as runtime_registry, shell_adapter, task_run
 from ai_client_governance.sync import check as sync_check
 from ai_client_governance.validation import completion, encoding, selftest
 from ai_client_governance.worktree import coord as worktree_coord
@@ -36,6 +36,7 @@ COMMANDS: dict[str, tuple[str, Callable[[], int]]] = {
     "runtime": ("Inspect agent governance runtime components.", runtime_registry.main),
     "scan-corrections": ("Scan correction records.", scan_corrections.main),
     "session-gate": ("Validate session closeout evidence.", session_gate.main),
+    "shell-adapter": ("Run local shell commands through a governance ledger adapter.", shell_adapter.main),
     "sync-check": ("Check embedded ai-client-governance synchronization state.", sync_check.main),
     "task-gate": ("Validate task-type evidence.", task_gate.main),
     "task-queue": ("Manage task workflow state.", task_queue.main),

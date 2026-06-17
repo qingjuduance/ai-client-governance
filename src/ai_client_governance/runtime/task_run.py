@@ -18,6 +18,8 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from ai_client_governance.runtime.scope import classify_scope
+
 
 COMMAND_COMPRESSION_EVENT = "command-compression.analysis"
 RUNNER_VERSION = "task-run-dag-v1"
@@ -272,6 +274,8 @@ def classify_command(command: str) -> tuple[str, str]:
         return "validation", "validation or gate command can be batched after writes settle"
     if any(stripped.startswith(prefix) for prefix in READONLY_PREFIXES):
         return "readonly", "read-only inspection can run in one local batch"
+    if " shell-adapter run " in lowered:
+        return "ledger-wrapped", "already routed through the shell adapter ledger"
     if " tool-invocations run " in lowered:
         return "ledger-wrapped", "already routed through the local command ledger"
     return "sequential", "unknown side effects, keep ordering conservative"
@@ -377,6 +381,7 @@ def build_plan(args: argparse.Namespace) -> CommandCompressionPlan:
     commands = args.command or default_commands(args)
     planned, skipped = dedupe_commands(commands, cwd)
     groups = group_commands(planned)
+    scope = classify_scope(root=root, paths=args.changed_path, command="\n".join(commands), cwd=cwd).to_dict()
     parallel_groups = [group for group in groups if group.can_parallel and len(group.commands) > 1]
     stateful_groups = [group for group in groups if group.kind in {"stateful", "sequential", "ledger-wrapped"}]
     payload: dict[str, Any] = {
@@ -384,6 +389,7 @@ def build_plan(args: argparse.Namespace) -> CommandCompressionPlan:
         "join_point": args.event,
         "task_types": args.task_type,
         "changed_paths": args.changed_path,
+        "scope": scope,
         "decision": "Use a local deterministic task-run plan before asking the model to reason across more command steps.",
         "selected_pattern": "local-command-compression",
         "command_count_before": len([command for command in commands if normalize_command(command)]),
@@ -565,6 +571,7 @@ def ledger_event(
     ended_at: str | None = None,
 ) -> dict[str, Any]:
     timestamp = ended_at or result.started_at
+    scope = classify_scope(root=Path(result.cwd), paths=[], command=result.command, cwd=result.cwd)
     return {
         "schema_version": LEDGER_SCHEMA_VERSION,
         "invocation_id": invocation_id,
@@ -593,6 +600,10 @@ def ledger_event(
         "cache_key": result.cache_key,
         "cache_reason": result.cache_reason,
         "cached": result.cached,
+        "scope_kind": scope.scope_kind,
+        "scope_reason": scope.scope_reason,
+        "scope_paths": scope.paths,
+        "adapter_enforcement": os.environ.get("AICG_COMMAND_LEDGER_ENFORCEMENT", "task-run-ledger"),
     }
 
 
@@ -966,6 +977,16 @@ def build_diagnostics(
         for command, count in Counter(commands).most_common()
         if command and count > 1
     ]
+    adapter_events = [
+        event
+        for event in terminal_events
+        if event.get("adapter_enforcement")
+        or event.get("event_type") == "shell-adapter"
+        or event.get("source") == "ai_client_governance.py shell-adapter"
+    ]
+    adapter_installed = bool(os.environ.get("AICG_SHELL_ADAPTER"))
+    scope_kind_counts = Counter(str(event.get("scope_kind") or "unknown") for event in terminal_events)
+    adapter_modes = Counter(str(event.get("adapter_enforcement") or "unknown") for event in adapter_events)
     failures = [
         {
             "timestamp": event.get("timestamp", ""),
@@ -990,10 +1011,20 @@ def build_diagnostics(
             "event_count": len(events),
             "duplicate_commands": duplicates[:10],
             "failures": failures[-10:],
-            "raw_shell_auto_intercepted": False,
-            "raw_shell_gap": (
+            "scope_kind_counts": dict(sorted(scope_kind_counts.items())),
+            "adapter": {
+                "installed": adapter_installed,
+                "event_count": len(adapter_events),
+                "enforcement_modes": dict(sorted(adapter_modes.items())),
+                "fail_closed_ready": adapter_installed or bool(adapter_events),
+                "latest_event": adapter_events[-1] if adapter_events else {},
+            },
+            "raw_shell_auto_intercepted": adapter_installed,
+            "raw_shell_gap": ""
+            if adapter_installed or adapter_events
+            else (
                 "The host client shell is not automatically intercepted by ai-client-governance; "
-                "important commands should run through task-run, gate-pool, or tool-invocations."
+                "important commands should run through shell-adapter, task-run, gate-pool, or tool-invocations."
             ),
         },
         "coordination": coord_summary(coord_root),
@@ -1078,6 +1109,8 @@ def format_diagnostics_text(diagnostics: dict[str, Any]) -> str:
         f"Ledger duplicate commands: {len(ledger.get('duplicate_commands', []))}",
         f"Ledger failures: {len(ledger.get('failures', []))}",
         f"Raw shell auto intercepted: {ledger.get('raw_shell_auto_intercepted')}",
+        f"Shell adapter events: {ledger.get('adapter', {}).get('event_count', 0)}",
+        f"Scope kinds: {json.dumps(ledger.get('scope_kind_counts', {}), ensure_ascii=False, sort_keys=True)}",
         f"Coord available: {coord.get('available')}",
         f"Active locks: {coord.get('locks_active', 0)}",
         f"Active sessions: {coord.get('sessions_active', 0)}",
