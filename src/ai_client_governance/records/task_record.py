@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from ai_client_governance.common.paths import STRUCTURED_DB_PATH
+from ai_client_governance.runtime.scope import COMMON_SCOPE, MIXED_SCOPE, NATIVE_SCOPE, PROJECT_SCOPE, UNKNOWN_SCOPE
 
 
 SCHEMA_VERSION = 1
@@ -49,6 +50,8 @@ INPUT_FILTER_REQUIREMENT_FIELDS = (
     "acceptance",
 )
 COMMAND_COMPRESSION_EVENT = "command-compression.analysis"
+SCOPE_CLASSIFICATION_TRIGGER = "scope-classification"
+SCOPE_KINDS = {COMMON_SCOPE, PROJECT_SCOPE, NATIVE_SCOPE, MIXED_SCOPE, UNKNOWN_SCOPE}
 
 
 @dataclass
@@ -637,6 +640,61 @@ def validate_command_compression_preflight(
         add(notes, "note", f"command compression analysis facts present: {COMMAND_COMPRESSION_EVENT}", "events")
 
 
+def validate_scope_classification_preflight(
+    con: sqlite3.Connection,
+    task: sqlite3.Row,
+    task_types: set[str],
+    errors: list[Finding],
+    notes: list[Finding],
+) -> None:
+    """Require common/project/native scope facts before gated work."""
+    task_size = str(task["task_size"] or "").strip().lower()
+    if not (task_types & MUTATING_TASK_TYPES or task_size in {"medium", "large"}):
+        return
+
+    scope_triggers = [
+        trigger
+        for trigger in rows(con, "triggers", task["task_id"])
+        if str(trigger["trigger_type"] or "").strip() == SCOPE_CLASSIFICATION_TRIGGER
+    ]
+    if not scope_triggers:
+        add(
+            errors,
+            "error",
+            "scope classification requires a trigger row with trigger_type=scope-classification",
+            "triggers",
+        )
+
+    usable_payload = False
+    invalid_event_ids: list[str] = []
+    for event in rows(con, "events", task["task_id"]):
+        try:
+            payload = json.loads(event["payload_json"] or "{}")
+        except json.JSONDecodeError:
+            invalid_event_ids.append(event["event_id"])
+            continue
+        if not isinstance(payload, dict):
+            continue
+        scope_kind = str(payload.get("scope_kind") or "").strip()
+        if not scope_kind:
+            continue
+        if scope_kind not in SCOPE_KINDS:
+            invalid_event_ids.append(event["event_id"])
+            continue
+        usable_payload = True
+        break
+    if not usable_payload:
+        add(
+            errors,
+            "error",
+            "scope classification requires an event payload with a valid scope_kind",
+            "events",
+            ", ".join(invalid_event_ids),
+        )
+    else:
+        add(notes, "note", "scope classification facts present", "events")
+
+
 def validate_task(con: sqlite3.Connection, db: Path, task_id: str, event: str, explicit_task_types: list[str]) -> GateReport:
     errors: list[Finding] = []
     warnings: list[Finding] = []
@@ -663,6 +721,7 @@ def validate_task(con: sqlite3.Connection, db: Path, task_id: str, event: str, e
 
     validate_input_filter_preflight(con, task_id, errors, notes)
     validate_command_compression_preflight(con, task, task_types, errors, notes)
+    validate_scope_classification_preflight(con, task, task_types, errors, notes)
 
     if event == "final":
         output_types = {row["output_type"] for row in rows(con, "outputs", task_id)}

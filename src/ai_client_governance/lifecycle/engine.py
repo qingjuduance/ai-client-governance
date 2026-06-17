@@ -27,6 +27,7 @@ from ai_client_governance.common.paths import PYTHON_PYCACHE_DIR, ai_client_gove
 from ai_client_governance.records import task_record as structured_task_record
 from ai_client_governance.runtime import AgentExecutionContext, default_registry, requires_approval_for, requires_tracking_for
 from ai_client_governance.runtime.registry import MUTATING_TASK_TYPES, NODE_EVENTS, TASK_TYPE_KEYWORDS
+from ai_client_governance.runtime.scope import classify_scope
 
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -104,6 +105,9 @@ class Classification:
     required_hooks: list[str]
     required_gates: list[str]
     changed_paths: list[str]
+    scope_kind: str
+    scope_reason: str
+    scope_paths: list[str]
 
 
 @dataclass
@@ -330,6 +334,21 @@ def build_input_filter_task_record(args: argparse.Namespace, report: LifecycleRe
                 "status": "done",
                 "trace_id": report.trace_id,
             },
+            {
+                "trigger_id": f"TRG-{id_base}-SCOPE-CLASSIFICATION",
+                "trigger_type": "scope-classification",
+                "source": "ai_client_governance.py lifecycle input-filter",
+                "matched_requirement": matched,
+                "priority": "high",
+                "applicability_scope": report.classification.scope_kind,
+                "scope_expansion": "not expanded",
+                "reason": report.classification.scope_reason,
+                "required_action": "Route common governance changes to ai-client-governance and project-specific changes to .ai-client/project or native project assets.",
+                "executed_steps": "Classified changed paths and message path references before write-intent.",
+                "quantitative_evidence": f"scope_paths={len(report.classification.scope_paths)}",
+                "status": "done",
+                "trace_id": report.trace_id,
+            },
         ],
         "outputs": outputs,
         "events": [
@@ -343,8 +362,12 @@ def build_input_filter_task_record(args: argparse.Namespace, report: LifecycleRe
                     "requirements": requirement_ids,
                     "task_types": task_types,
                     "task_size": report.classification.task_size,
+                    "scope_kind": report.classification.scope_kind,
+                    "scope_reason": report.classification.scope_reason,
+                    "scope_paths": report.classification.scope_paths,
                     "filter_chain": [
                         "classify-source",
+                        "classify-common-project-scope",
                         "decompose-requirements",
                         "recordability-judgement",
                         "network-search-judgement",
@@ -363,6 +386,9 @@ def build_input_filter_task_record(args: argparse.Namespace, report: LifecycleRe
                     "task_types": task_types,
                     "task_size": report.classification.task_size,
                     "changed_paths": report.classification.changed_paths,
+                    "scope_kind": report.classification.scope_kind,
+                    "scope_reason": report.classification.scope_reason,
+                    "scope_paths": report.classification.scope_paths,
                     "decision": "Analyze new local command candidates for dedupe, batching, cache eligibility, task-run DAG execution, gate-pool use, and ledger wrapping before write-intent.",
                     "selected_pattern": "lifecycle-preflight-command-compression",
                     "recommended_command": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-run plan --task-id <task-id> --event write-intent",
@@ -538,6 +564,7 @@ def build_classification(args: argparse.Namespace, root: Path) -> tuple[InputRec
     task_types = infer_task_types(message, changed_paths, explicit_types)
     task_size, reasons = estimate_task_size(message, task_types, changed_paths, args.input_source)
     event = lifecycle_event(args)
+    scope = classify_scope(root=root, paths=changed_paths, command=message)
     hooks, gates, requires_tracking, requires_approval = required_hooks_and_gates(
         task_types, task_size, changed_paths, args.input_source, event
     )
@@ -551,6 +578,9 @@ def build_classification(args: argparse.Namespace, root: Path) -> tuple[InputRec
         required_hooks=hooks,
         required_gates=gates,
         changed_paths=changed_paths,
+        scope_kind=scope.scope_kind,
+        scope_reason=scope.scope_reason,
+        scope_paths=scope.paths,
     )
 
 

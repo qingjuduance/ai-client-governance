@@ -804,6 +804,21 @@ def structured_payload(task_id: str, include_worktree: bool = True) -> dict[str,
                 "quantitative_evidence": "one invalid payload and one valid payload",
                 "status": "done",
                 "trace_id": "trace-structured-selftest",
+            },
+            {
+                "trigger_id": f"TRG-{task_id}-SCOPE",
+                "trigger_type": "scope-classification",
+                "source": "selftest structured payload",
+                "matched_requirement": f"REQ-{task_id}-01",
+                "priority": "high",
+                "applicability_scope": "ai-client-governance-common",
+                "scope_expansion": "not expanded",
+                "reason": "selftest payload represents common governance structured record behavior",
+                "required_action": "record common/project/native scope before gated work",
+                "executed_steps": "included scope-classification trigger and event payload",
+                "quantitative_evidence": "scope_kind=ai-client-governance-common",
+                "status": "done",
+                "trace_id": "trace-structured-selftest",
             }
         ],
         "outputs": outputs,
@@ -814,8 +829,12 @@ def structured_payload(task_id: str, include_worktree: bool = True) -> dict[str,
                 "payload": {
                     "join_point": "user-message",
                     "requirement_count": 1,
+                    "scope_kind": "ai-client-governance-common",
+                    "scope_reason": "selftest common governance payload",
+                    "scope_paths": ["src/ai_client_governance/records/task_record.py"],
                     "filter_chain": [
                         "classify-source",
+                        "classify-common-project-scope",
                         "decompose-requirements",
                         "recordability-judgement",
                         "network-search-judgement",
@@ -829,6 +848,9 @@ def structured_payload(task_id: str, include_worktree: bool = True) -> dict[str,
                 "event_type": "command-compression.analysis",
                 "payload": {
                     "join_point": "write-intent",
+                    "scope_kind": "ai-client-governance-common",
+                    "scope_reason": "selftest common governance payload",
+                    "scope_paths": ["src/ai_client_governance/records/task_record.py"],
                     "decision": "selftest records command compression before mutating task gates",
                     "selected_pattern": "local-command-compression",
                     "command_count_before": 2,
@@ -1201,6 +1223,8 @@ def test_lifecycle_input_filter_preflight(root: Path, run_dir: Path) -> TestResu
         and "\"fail_policy\": \"fail_closed\"" in component_output
         and "\"event_type\": \"input-filter.preflight\"" in input_filter_output
         and "\"event_type\": \"command-compression.analysis\"" in input_filter_output
+        and "\"scope_kind\": \"ai-client-governance-common\"" in input_filter_output
+        and "scope-classification" in input_filter_output
         and "input-filter preflight facts present" in gate_output
         and "task-record preflight gate passed" in lifecycle_output
     )
@@ -1301,7 +1325,9 @@ def test_task_run_command_compression_plan(root: Path, run_dir: Path) -> TestRes
     passed = (
         all(command.exit_code == 0 for command in commands)
         and "preflight.interceptor.command-compression" in component_output
+        and "preflight.interceptor.scope-classification" in component_output
         and "\"event_type\": \"command-compression.analysis\"" in plan_output
+        and "\"scope_kind\": \"ai-client-governance-common\"" in plan_output
         and "\"skipped_duplicate_count\": 1" in plan_output
         and "local-command-compression" in plan_output
         and ".ai-client/ai-client-governance/scripts/ai_client_governance.py selftest" in host_plan_output
@@ -1433,6 +1459,8 @@ def test_task_run_dag_cache_diagnostics(root: Path, run_dir: Path) -> TestResult
         and "\"status\": \"cache-hit\"" in second_output
         and "\"ledger_path\"" in first_output
         and int(ledger.get("event_count", 0)) >= 4
+        and int(ledger.get("adapter", {}).get("event_count", 0)) >= 2
+        and "ai-client-governance-common" in ledger.get("scope_kind_counts", {})
         and not ledger.get("duplicate_commands")
         and not ledger.get("failures")
         and filtered_filters.get("task_id") == "TASK-RUN-DAG-SELFTEST"
@@ -1445,6 +1473,98 @@ def test_task_run_dag_cache_diagnostics(root: Path, run_dir: Path) -> TestResult
             "task-run run writes ledger events, reuses safe cache on the second validation, and diagnose reports clean ledger health"
             if passed
             else "task-run DAG/cache/diagnostics regression failed"
+        ),
+        commands=commands,
+    )
+
+
+def test_shell_adapter_scope_diagnostics(root: Path, run_dir: Path) -> TestResult:
+    ledger_dir = run_dir / "shell-adapter-ledger"
+    profile_path = run_dir / "Microsoft.PowerShell_profile.ps1"
+    commands = [
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "shell-adapter",
+                "--root",
+                str(root),
+                "--ledger-dir",
+                str(ledger_dir),
+                "run",
+                "--task-id",
+                "SHELL-ADAPTER-SELFTEST",
+                "--task-type",
+                "rules-script",
+                "--scope-path",
+                "src/ai_client_governance/runtime/shell_adapter.py",
+                "--format",
+                "json",
+                "--",
+                sys.executable,
+                "-c",
+                "import sys; sys.exit(0)",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "shell-adapter",
+                "--root",
+                str(root),
+                "--ledger-dir",
+                str(ledger_dir),
+                "diagnose",
+                "--task-id",
+                "SHELL-ADAPTER-SELFTEST",
+                "--format",
+                "json",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "shell-adapter",
+                "--root",
+                str(root),
+                "install-powershell",
+                "--profile-path",
+                str(profile_path),
+                "--script-path",
+                str(ai_client_governance_entrypoint()),
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+    ]
+    run_output = commands[0].stdout + commands[0].stderr
+    diagnose: dict[str, object] = {}
+    try:
+        diagnose = json.loads(commands[1].stdout)
+    except json.JSONDecodeError:
+        pass
+    scope_counts = diagnose.get("scope_kind_counts", {}) if isinstance(diagnose.get("scope_kind_counts"), dict) else {}
+    passed = (
+        all(command.exit_code == 0 for command in commands)
+        and "\"status\": \"succeeded\"" in run_output
+        and int(diagnose.get("event_count", 0)) >= 1
+        and "ai-client-governance-common" in scope_counts
+        and "powershell-profile" in commands[2].stdout
+        and "execute_required" in commands[2].stdout
+    )
+    return TestResult(
+        name="shell-adapter-scope-diagnostics",
+        passed=passed,
+        summary=(
+            "shell-adapter run writes scoped ledger events and diagnose reports adapter evidence"
+            if passed
+            else "shell-adapter scoped ledger diagnostics regression failed"
         ),
         commands=commands,
     )
@@ -1552,6 +1672,7 @@ def main() -> int:
         test_lifecycle_input_filter_preflight(root, run_dir),
         test_task_run_command_compression_plan(root, run_dir),
         test_task_run_dag_cache_diagnostics(root, run_dir),
+        test_shell_adapter_scope_diagnostics(root, run_dir),
         test_worktree_closeout_all_plan(root, run_dir),
     ]
     passed = all(result.passed for result in results)
