@@ -264,6 +264,11 @@ def parse_args() -> argparse.Namespace:
         help="Fail when no task type can be determined.",
     )
     parser.add_argument(
+        "--only-worktree-creation-policy",
+        action="store_true",
+        help="Only validate worktree creation method and sparse-checkout policy evidence.",
+    )
+    parser.add_argument(
         "--fail-on-warning",
         action="store_true",
         help="Exit non-zero when warnings are found.",
@@ -735,6 +740,31 @@ def validate_worktree_evidence(text: str, errors: list[Finding], tracking: str) 
     for label, patterns in required_groups:
         if not contains_any(haystack, patterns):
             add(errors, "error", f"modifying task must record {label}.", tracking)
+
+
+def validate_worktree_creation_policy(text: str, errors: list[Finding], tracking: str) -> None:
+    section = section_text(text, "Worktree 证据") or section_text(text, "当前 Git 状态")
+    if not section.strip():
+        add(errors, "error", "worktree creation policy requires ## Worktree 证据.", tracking)
+        return
+
+    required_groups = [
+        ("worktree creation method", ["worktree-task create", "创建方式", "创建命令"]),
+        ("sparse checkout strategy", ["sparse", "稀疏", "--include-source-projects", "--exclude-path"]),
+        ("source snapshot handling", [".source-projects", "source-projects", "源码目录", "源码快照", "不适用"]),
+    ]
+    for label, patterns in required_groups:
+        if not contains_any(section, patterns):
+            add(errors, "error", f"worktree creation policy lacks {label}.", tracking)
+
+    if contains_any(section, ["git worktree add"]) and not contains_any(section, ["worktree-task create"]):
+        if not contains_any(section, ["break-glass", "例外", "手工", "原因", "理由", "为什么"]):
+            add(
+                errors,
+                "error",
+                "raw git worktree add must record a break-glass reason and sparse strategy.",
+                tracking,
+            )
 
 
 def validate_worktree_completion_record(text: str, errors: list[Finding], tracking: str) -> None:
@@ -1227,6 +1257,7 @@ def validate_task_type(
         "long-running",
     }:
         validate_worktree_evidence(text, errors, tracking)
+        validate_worktree_creation_policy(text, errors, tracking)
         validate_worktree_completion_record(text, errors, tracking)
 
     if task_type == "code-debug":
@@ -1294,6 +1325,7 @@ def build_report(
     task_tracking_arg: str | None,
     explicit_task_types: list[str] | None,
     require_task_types: bool,
+    only_worktree_creation_policy: bool = False,
 ) -> Report:
     errors: list[Finding] = []
     warnings: list[Finding] = []
@@ -1313,6 +1345,10 @@ def build_report(
         return Report(str(root.resolve()), tracking_rel, [], errors, warnings, notes)
 
     text = read_text(task_tracking)
+    if only_worktree_creation_policy:
+        validate_worktree_creation_policy(text, errors, tracking_rel)
+        return Report(str(root.resolve()), tracking_rel, [], errors, warnings, notes)
+
     validate_input_decomposition_gate(text, errors, tracking_rel)
     validate_user_requirement_gate(text, errors, tracking_rel)
     validate_requirement_trigger_log(text, errors, tracking_rel)
@@ -1377,6 +1413,7 @@ def main() -> int:
         task_tracking_arg=args.task_tracking,
         explicit_task_types=args.task_types,
         require_task_types=args.require_task_types,
+        only_worktree_creation_policy=args.only_worktree_creation_policy,
     )
 
     if args.format == "json":
@@ -1393,4 +1430,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

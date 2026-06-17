@@ -74,6 +74,7 @@
       "gateExecution": "python .codex/ai-client-governance/scripts/ai_client_governance.py gate-pool --dry-run must show executable gate steps before final runs",
       "dedupePolicy": "gate-pool de-duplicates by gate_step and aggregates changed paths before running the same gate",
       "performancePolicy": "avoid unconditional checks; every expensive node needs event, task type, path, final-only, or changed-path triggers",
+      "worktreeCreationPolicy": "plan-output/write-intent/resume must expose worktree-creation-policy, requiring worktree-task create by default plus sparse/source snapshot handling evidence; raw git worktree add is break-glass only",
       "worktreeLiveStatePolicy": "worktree-task reconcile treats Git worktree list as the source of truth and blocks active coord sessions whose worktree disappeared",
       "hostSubmoduleCloseoutPolicy": "after merging an embedded ai-client-governance worktree, host closeout must verify and commit the .codex/ai-client-governance gitlink, worktrees.json, and related task tracking",
       "completionTestPolicy": "completion-test plans required validation from changed paths, task types, and acceptance criteria",

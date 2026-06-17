@@ -465,8 +465,8 @@ git push origin main
 计划输出可以在原工作区完成；一旦要落盘修改，先进入 worktree。
 
 目标路径固定为宿主项目 `.codex/project/.worktree/<task-slug>/`。即使修改的是嵌入式
-`.codex/ai-client-governance/` 仓库，也从 ai-client-governance 仓库执行 `git worktree add`，把新工作区放到宿主
-项目的 `.codex/project/.worktree/` 下。
+`.codex/ai-client-governance/` 仓库，也优先通过 `worktree-task create --repo ai-client-governance`
+创建任务 worktree，把新工作区放到宿主项目的 `.codex/project/.worktree/` 下。
 
 优先使用固定脚本入口：
 
@@ -504,6 +504,19 @@ python .codex\ai-client-governance\scripts\ai_client_governance.py worktree-task
 确实需要完整源码快照时，显式加 `--include-source-projects`；如果还要排除其它大目录，
 可以重复传 `--exclude-path <repo-relative-path>`。这些排除只影响新建的任务
 worktree，不删除主工作区文件，也不改变 Git 历史。
+
+创建或恢复任务 worktree 前，执行链路要命中 `worktree-creation-policy` 节点：
+计划输出和写入意图阶段必须先在 task tracking 的 `## Worktree 证据` 中记录
+`worktree-task create` 创建方式、sparse checkout 策略和 `.source-projects`/源码快照
+处理口径。裸 `git worktree add` 只能作为 break-glass 例外；如果固定脚本不可用，
+必须写明例外原因、手工命令、稀疏检出或排除策略，以及为什么不会把不需要的大目录
+带进任务 worktree。对应门禁可单独运行：
+
+```powershell
+python .codex\ai-client-governance\scripts\ai_client_governance.py task-gate `
+  --task-tracking .codex/project/records/task-tracking/<task>.md `
+  --only-worktree-creation-policy
+```
 
 `status --write-state` 会生成或更新 `.codex/project/state/worktrees.json`，记录 self 和
 ai-client-governance 两个仓库下每个任务 worktree 的路径、分支、`head_at_snapshot`、dirty 状态和

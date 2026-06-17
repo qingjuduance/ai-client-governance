@@ -233,10 +233,12 @@ REQ-SELFTEST-01 已完成，REQ-SELFTEST-02 已完成；这里故意不用标准
 
 | 项目 | 证据 |
 |---|---|
-| git worktree 命令 | `git worktree add <path> -b codex/selftest` |
+| worktree 创建方式 | `worktree-task create --repo self --task-slug selftest` |
 | 固定 worktree 根 | `.codex/project/.worktree/selftest` |
 | branch 分支 | `codex/selftest` |
 | base commit 基准提交 | `abc1234` |
+| sparse checkout 策略 | 默认 sparse checkout 排除 `.source-projects`，需要时显式 `--include-source-projects`。 |
+| 源码目录/快照处理 | `.source-projects` 默认不复制；本 selftest 不需要源码快照。 |
 {status_row}
 
 {worktree_completion_section}
@@ -320,6 +322,68 @@ def test_worktree_gate(root: Path, run_dir: Path) -> TestResult:
             "missing status evidence failed and complete evidence passed"
             if bad_failed_for_status and good_passed
             else "worktree evidence enforcement did not match expected behavior"
+        ),
+        commands=commands,
+    )
+
+
+def worktree_creation_policy_command(root: Path, tracking: Path) -> list[str]:
+    return [
+        sys.executable,
+        str(ai_client_governance_entrypoint()),
+        "task-gate",
+        "--root",
+        str(root),
+        "--task-tracking",
+        str(tracking),
+        "--only-worktree-creation-policy",
+    ]
+
+
+def test_worktree_creation_policy_gate(root: Path, run_dir: Path) -> TestResult:
+    raw_git_tracking = run_dir / "raw-git-worktree-policy.md"
+    missing_sparse_tracking = run_dir / "missing-sparse-policy.md"
+    good_tracking = run_dir / "complete-worktree-policy.md"
+
+    good_text = tracking_text(include_status=True)
+    raw_git_tracking.write_text(
+        good_text.replace(
+            "| worktree 创建方式 | `worktree-task create --repo self --task-slug selftest` |",
+            "| git worktree 命令 | `git worktree add <path> -b codex/selftest` |",
+        ),
+        encoding="utf-8",
+        newline="\n",
+    )
+    missing_sparse_tracking.write_text(
+        good_text.replace(
+            "| sparse checkout 策略 | 默认 sparse checkout 排除 `.source-projects`，需要时显式 `--include-source-projects`。 |\n",
+            "",
+        ),
+        encoding="utf-8",
+        newline="\n",
+    )
+    good_tracking.write_text(good_text, encoding="utf-8", newline="\n")
+
+    commands = [
+        run_command(worktree_creation_policy_command(root, raw_git_tracking), cwd=root, env_root=root),
+        run_command(worktree_creation_policy_command(root, missing_sparse_tracking), cwd=root, env_root=root),
+        run_command(worktree_creation_policy_command(root, good_tracking), cwd=root, env_root=root),
+    ]
+    raw_git_failed = commands[0].exit_code != 0 and "raw git worktree add" in (
+        commands[0].stdout + commands[0].stderr
+    )
+    missing_sparse_failed = commands[1].exit_code != 0 and "sparse checkout strategy" in (
+        commands[1].stdout + commands[1].stderr
+    )
+    good_passed = commands[2].exit_code == 0
+    passed = raw_git_failed and missing_sparse_failed and good_passed
+    return TestResult(
+        name="worktree-creation-policy-required",
+        passed=passed,
+        summary=(
+            "raw git without break-glass reason and missing sparse policy failed; complete policy passed"
+            if passed
+            else "worktree creation policy enforcement did not match expected behavior"
         ),
         commands=commands,
     )
@@ -692,6 +756,7 @@ def main() -> int:
 
     results = [
         test_worktree_gate(root, run_dir),
+        test_worktree_creation_policy_gate(root, run_dir),
         test_input_and_output_closeout_gate(root, run_dir),
         test_multi_agent_acceptance_matrix_gate(root, run_dir),
         test_task_queue_task_id_priority(root, run_dir),
