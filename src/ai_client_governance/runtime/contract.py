@@ -78,7 +78,7 @@ def build_contract(task_types: list[str], event: str) -> Contract:
     normalized = unique(task_types)
     mutating = bool(set(normalized) & MUTATING_TASK_TYPES)
     final = event == "final-output"
-    required_tables = ["tasks", "requirements", "triggers", "outputs"]
+    required_tables = ["tasks", "requirements", "triggers", "outputs", "events"]
     if mutating:
         required_tables.append("worktrees")
     if final or normalized:
@@ -138,6 +138,10 @@ def build_contract(task_types: list[str], event: str) -> Contract:
         field("outputs[].user_confirmation", True, "string", "Needed user confirmation, or explicit none."),
         field("outputs[].final_coverage", True, "string", "Final response coverage."),
         field("outputs[].trace_id", True, "string", "Trace id linking output claims to execution."),
+        field("events[].event_id", False, "string", "Stable event row id; generated when omitted."),
+        field("events[].event_type", True, "string", "Lifecycle event type; input preflight must record input-filter.preflight."),
+        field("events[].payload", False, "json", "Machine-readable event payload, including join point and filter-chain facts."),
+        field("events[].created_at", False, "datetime", "Event time; defaults to now when omitted."),
     ]
     if mutating:
         fields.extend(
@@ -172,6 +176,7 @@ def build_contract(task_types: list[str], event: str) -> Contract:
         )
 
     gate_requirements = [
+        "Run lifecycle input-filter for the user-message join point and persist an events[] row with event_type=input-filter.preflight.",
         "Create or update the structured record before running final gates.",
         "Run task-record gate --task-id <id> before final answer.",
     ]

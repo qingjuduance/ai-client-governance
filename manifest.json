@@ -35,11 +35,23 @@
     ],
     "commands": {
       "contractDescribe": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py contract describe",
+      "lifecycleInputFilter": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py lifecycle input-filter --message <user-message> --task-id <task-id>",
+      "lifecyclePreflight": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py lifecycle preflight --task-id <task-id>",
       "taskRecordInit": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-record init",
       "taskRecordApply": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-record apply --json <task-record.json>",
-      "taskRecordGate": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-record gate --task-id <task-id>",
+      "taskRecordGate": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-record gate --task-id <task-id> --event preflight",
       "taskRecordStatus": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-record status",
       "taskGateStructured": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-gate --task-id <task-id>"
+    },
+    "mandatoryInputFilter": {
+      "joinPoint": "user-message",
+      "command": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py lifecycle input-filter",
+      "requiredEvent": "input-filter.preflight",
+      "requiredTriggerTypes": [
+        "user-message",
+        "input-filter"
+      ],
+      "failPolicy": "fail_closed"
     },
     "markdownPolicy": "Markdown task tracking is a human-readable export or historical audit artifact, not a gate input for new tasks.",
     "readOnlyPolicy": "task-record status never creates the SQLite database; missing DB returns an empty summary."
@@ -146,7 +158,8 @@
       "performancePolicy": "avoid unconditional checks; every expensive node needs event, task type, path, final-only, or changed-path triggers",
       "worktreeCreationPolicy": "plan-output/write-intent/resume must expose worktree-creation-policy, requiring worktree-task create by default plus sparse/source snapshot handling evidence; raw git worktree add is break-glass only",
       "worktreeLiveStatePolicy": "worktree-task reconcile treats Git worktree list as the source of truth and blocks active coord sessions whose worktree disappeared",
-      "structuredRecordPolicy": "new tasks should call contract describe before execution and write typed SQLite task records before final gates; task-id mode does not require Markdown task tracking",
+      "inputFilterPreflightPolicy": "user-message must pass lifecycle input-filter and task-record gate --event preflight before later processing; missing input-filter.preflight facts fail closed",
+      "structuredRecordPolicy": "new tasks should call contract describe before execution and write typed SQLite task records before preflight/final gates; task-id mode does not require Markdown task tracking",
       "hostSubmoduleCloseoutPolicy": "after merging an embedded ai-client-governance worktree, host closeout must verify and commit the .ai-client/ai-client-governance gitlink, worktrees.json, and related task tracking",
       "completionTestPolicy": "completion-test plans required validation from changed paths, task types, and acceptance criteria",
       "outputBoundaryPolicy": "Git push state is audited at plan-output, status-output, and final-output boundaries; no automatic push"
@@ -167,6 +180,8 @@
     "runtimeCommands": {
       "components": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py runtime components",
       "contractDescribe": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py contract describe",
+      "lifecycleInputFilter": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py lifecycle input-filter",
+      "lifecyclePreflight": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py lifecycle preflight --task-id <task-id>",
       "taskRecord": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-record",
       "gatePool": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py gate-pool",
       "completionTest": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py completion-test",
