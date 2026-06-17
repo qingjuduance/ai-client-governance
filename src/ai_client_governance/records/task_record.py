@@ -39,6 +39,15 @@ GATE_RESULTS = ("pass", "fail", "warn", "skipped")
 BASE_OUTPUT_TYPES = {"plan", "status", "final", "script", "error", "git_worktree"}
 MUTATING_TASK_TYPES = {"correction", "rules-script", "docs", "git", "frontend", "resume", "multi-agent", "long-running"}
 KNOWN_TASK_TYPES = MUTATING_TASK_TYPES | {"code-debug"}
+INPUT_FILTER_PREFLIGHT_EVENT = "input-filter.preflight"
+INPUT_FILTER_TRIGGER_TYPES = {"input-filter", "user-message"}
+INPUT_FILTER_REQUIREMENT_FIELDS = (
+    "summary",
+    "record_decision",
+    "network_decision",
+    "validation_decision",
+    "acceptance",
+)
 
 
 @dataclass
@@ -534,6 +543,51 @@ def task_types_for(task: sqlite3.Row, explicit: list[str]) -> set[str]:
     return found
 
 
+def has_text(row: sqlite3.Row, column: str) -> bool:
+    return bool(str(row[column] or "").strip())
+
+
+def validate_input_filter_preflight(con: sqlite3.Connection, task_id: str, errors: list[Finding], notes: list[Finding]) -> None:
+    """Require user-message input analysis facts before execution or final output."""
+    requirements = rows(con, "requirements", task_id)
+    triggers = rows(con, "triggers", task_id)
+    events = rows(con, "events", task_id)
+
+    for requirement in requirements:
+        missing = [field for field in INPUT_FILTER_REQUIREMENT_FIELDS if not has_text(requirement, field)]
+        if missing:
+            add(
+                errors,
+                "error",
+                f"requirement lacks input-filter decision fields: {', '.join(missing)}",
+                "requirements",
+                requirement["requirement_id"],
+            )
+
+    input_triggers = [
+        trigger
+        for trigger in triggers
+        if str(trigger["trigger_type"] or "").strip() in INPUT_FILTER_TRIGGER_TYPES
+    ]
+    if not input_triggers:
+        add(
+            errors,
+            "error",
+            "input-filter preflight requires a trigger row with trigger_type=user-message or input-filter",
+            "triggers",
+        )
+
+    if not any(str(event["event_type"] or "").strip() == INPUT_FILTER_PREFLIGHT_EVENT for event in events):
+        add(
+            errors,
+            "error",
+            f"input-filter preflight requires an events row with event_type={INPUT_FILTER_PREFLIGHT_EVENT}",
+            "events",
+        )
+    else:
+        add(notes, "note", f"input-filter preflight facts present: {INPUT_FILTER_PREFLIGHT_EVENT}", "events")
+
+
 def validate_task(con: sqlite3.Connection, db: Path, task_id: str, event: str, explicit_task_types: list[str]) -> GateReport:
     errors: list[Finding] = []
     warnings: list[Finding] = []
@@ -557,6 +611,8 @@ def validate_task(con: sqlite3.Connection, db: Path, task_id: str, event: str, e
         add(errors, "error", "at least one trigger row is required", "triggers")
     if output_count == 0:
         add(errors, "error", "at least one output row is required", "outputs")
+
+    validate_input_filter_preflight(con, task_id, errors, notes)
 
     if event == "final":
         output_types = {row["output_type"] for row in rows(con, "outputs", task_id)}

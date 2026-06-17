@@ -792,8 +792,8 @@ def structured_payload(task_id: str) -> dict[str, object]:
         "triggers": [
             {
                 "trigger_id": f"TRG-{task_id}-01",
-                "trigger_type": "selftest",
-                "source": "selftest",
+                "trigger_type": "user-message",
+                "source": "selftest user message",
                 "matched_requirement": f"REQ-{task_id}-01",
                 "priority": "high",
                 "applicability_scope": "typed task record gate",
@@ -807,6 +807,24 @@ def structured_payload(task_id: str) -> dict[str, object]:
             }
         ],
         "outputs": outputs,
+        "events": [
+            {
+                "event_id": f"EVT-{task_id}-INPUT-FILTER",
+                "event_type": "input-filter.preflight",
+                "payload": {
+                    "join_point": "user-message",
+                    "requirement_count": 1,
+                    "filter_chain": [
+                        "classify-source",
+                        "decompose-requirements",
+                        "recordability-judgement",
+                        "network-search-judgement",
+                        "acceptance-extract",
+                    ],
+                    "fail_policy": "fail_closed",
+                },
+            }
+        ],
         "worktrees": [
             {
                 "worktree_id": f"WT-{task_id}-01",
@@ -843,9 +861,14 @@ def test_structured_task_record_gate(root: Path, run_dir: Path) -> TestResult:
     db = run_dir / "structured-selftest.db"
     invalid_payload = structured_payload(task_id + "-BAD")
     invalid_payload["requirements"] = []
+    missing_filter_payload = structured_payload(task_id + "-NOFILTER")
+    missing_filter_payload["events"] = []
+    missing_filter_payload["triggers"][0]["trigger_type"] = "selftest"
     invalid = run_dir / "structured-invalid.json"
+    missing_filter = run_dir / "structured-missing-input-filter.json"
     valid = run_dir / "structured-valid.json"
     invalid.write_text(json.dumps(invalid_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    missing_filter.write_text(json.dumps(missing_filter_payload, ensure_ascii=False, indent=2), encoding="utf-8")
     valid.write_text(json.dumps(structured_payload(task_id), ensure_ascii=False, indent=2), encoding="utf-8")
 
     commands = [
@@ -893,7 +916,53 @@ def test_structured_task_record_gate(root: Path, run_dir: Path) -> TestResult:
                 str(db),
                 "apply",
                 "--json",
+                str(missing_filter),
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-record",
+                "--db",
+                str(db),
+                "gate",
+                "--task-id",
+                task_id + "-NOFILTER",
+                "--event",
+                "preflight",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-record",
+                "--db",
+                str(db),
+                "apply",
+                "--json",
                 str(valid),
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-record",
+                "--db",
+                str(db),
+                "gate",
+                "--task-id",
+                task_id,
+                "--event",
+                "preflight",
             ],
             cwd=root,
             env_root=root,
@@ -950,19 +1019,132 @@ def test_structured_task_record_gate(root: Path, run_dir: Path) -> TestResult:
         and commands[1].exit_code == 0
         and commands[2].exit_code != 0
         and commands[3].exit_code == 0
-        and commands[4].exit_code == 0
+        and commands[4].exit_code != 0
         and commands[5].exit_code == 0
         and commands[6].exit_code == 0
+        and commands[7].exit_code == 0
+        and commands[8].exit_code == 0
+        and commands[9].exit_code == 0
         and "requirements must contain at least one row" in (commands[2].stdout + commands[2].stderr)
-        and "--task-id" in commands[6].stdout
+        and "input-filter preflight requires" in (commands[4].stdout + commands[4].stderr)
+        and "--task-id" in commands[9].stdout
     )
     return TestResult(
         name="structured-task-record-gate",
         passed=passed,
         summary=(
-            "structured task records reject missing required rows and pass DB-backed gates"
+            "structured task records reject missing rows, fail closed without input-filter facts, and pass DB-backed gates"
             if passed
             else "structured task record gate regression failed"
+        ),
+        commands=commands,
+    )
+
+
+def test_lifecycle_input_filter_preflight(root: Path, run_dir: Path) -> TestResult:
+    task_id = "INPUT-FILTER-SELFTEST"
+    db = run_dir / "input-filter-selftest.db"
+    generated = run_dir / "input-filter-task-record.json"
+    message = "Check parsed user request rows."
+    commands = [
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "runtime",
+                "components",
+                "--event",
+                "user-message",
+                "--kind",
+                "input-filter",
+                "--format",
+                "json",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "lifecycle",
+                "input-filter",
+                "--message",
+                message,
+                "--task-id",
+                task_id,
+                "--title",
+                "input filter lifecycle selftest",
+                "--task-type",
+                "code-debug",
+                "--db",
+                str(db),
+                "--task-record-json",
+                str(generated),
+                "--apply-task-record",
+                "--format",
+                "json",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-record",
+                "--db",
+                str(db),
+                "gate",
+                "--task-id",
+                task_id,
+                "--event",
+                "preflight",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "lifecycle",
+                "preflight",
+                "--message",
+                message,
+                "--task-id",
+                task_id,
+                "--task-type",
+                "code-debug",
+                "--db",
+                str(db),
+                "--format",
+                "json",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+    ]
+    component_output = commands[0].stdout + commands[0].stderr
+    input_filter_output = commands[1].stdout + commands[1].stderr
+    gate_output = commands[2].stdout + commands[2].stderr
+    lifecycle_output = commands[3].stdout + commands[3].stderr
+    passed = (
+        all(command.exit_code == 0 for command in commands)
+        and generated.exists()
+        and "input.filter.user-message-preflight" in component_output
+        and "\"fail_policy\": \"fail_closed\"" in component_output
+        and "\"event_type\": \"input-filter.preflight\"" in input_filter_output
+        and "input-filter preflight facts present" in gate_output
+        and "task-record preflight gate passed" in lifecycle_output
+    )
+    return TestResult(
+        name="lifecycle-input-filter-preflight",
+        passed=passed,
+        summary=(
+            "lifecycle input-filter emits structured facts and preflight gates pass when those facts exist"
+            if passed
+            else "lifecycle input-filter preflight regression failed"
         ),
         commands=commands,
     )
@@ -1067,6 +1249,7 @@ def main() -> int:
         test_task_queue_task_id_priority(root, run_dir),
         test_gate_pool_validate_doc_tracking_context(root, run_dir),
         test_structured_task_record_gate(root, run_dir),
+        test_lifecycle_input_filter_preflight(root, run_dir),
         test_worktree_closeout_all_plan(root, run_dir),
     ]
     passed = all(result.passed for result in results)

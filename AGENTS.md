@@ -170,12 +170,18 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   不能假设它能拦截客户端内部所有行为。
 - 输入过滤器负责拆分用户输入、识别要求数量、绑定逐 REQ 行和任务类型，并判断每条
   要求是否必须落盘、是否触发联网/搜索、是否触发子 AI 或黑盒验证。
+- 用户输入是强制 `user-message` join point。非纯只读小问答在计划、写入、恢复或最终
+  回复前，必须先运行 `lifecycle input-filter`，把 `requirements`、`triggers`、
+  `outputs` 和 `events.event_type=input-filter.preflight` 写入结构化 task record；
+  缺少这些事实时 `task-record gate --event preflight` 必须 fail closed。
 - 处理拦截器负责审批、worktree、联网核对、task tracking、脚本能力适配和状态机。
 - 输出拦截器负责最终回复覆盖、worktree 完成状态、未合并/未提交/未 push 边界和下一步提示。
 - 横切门禁负责编码、文档引用、Git 边界、脚本账本、trace flow 和 correction 扫描。
-- 非纯只读小问答，优先运行生命周期 preflight：
-  `python .ai-client/ai-client-governance/scripts/ai_client_governance.py lifecycle preflight ...`。
-- 收口前优先运行 lifecycle finalize，并根据任务类型触发已注册门禁：
+- 强制输入过滤器入口：
+  `python .ai-client/ai-client-governance/scripts/ai_client_governance.py lifecycle input-filter ...`。
+- 写入前必须运行 lifecycle preflight，并用 `--task-id` 验证结构化 task record：
+  `python .ai-client/ai-client-governance/scripts/ai_client_governance.py lifecycle preflight --task-id <task-id> ...`。
+- 收口前必须运行 lifecycle finalize，并根据任务类型触发已注册门禁：
   `python .ai-client/ai-client-governance/scripts/ai_client_governance.py lifecycle finalize ...`。
 - 生命周期把输入来源区分为 `user`、`web`、`file`、`tool`、`agent`、`history`。
 - 联网输入必须记录 URL 或资料路径；不能把外部资料和用户指令混作同一事实。
@@ -202,7 +208,7 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
 - 执行前必须先用 `contract describe` 明确本任务必填字段、枚举、gate 和
   写入命令；不要靠最终 `task-gate` 从 Markdown 里反推缺什么。
 - `task-record apply --json <file>` 是结构化写入入口；它必须在落库前校验
-  `tasks`、`requirements`、`triggers`、`outputs`、`worktrees`、`validations`
+  `tasks`、`requirements`、`triggers`、`outputs`、`events`、`worktrees`、`validations`
   的必填字段、枚举和外键。校验失败不得生成半成品记录。
 - `task-gate --task-id <task-id>` 和 `session-gate --task-id <task-id>` 读取
   SQLite 事实源；Markdown task tracking 只作为历史审计和 `task-record export-md`
@@ -239,6 +245,10 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
 - 收到用户输入后，先记录 `## 用户输入拆解门禁`：原始输入或最新指令、拆出的
   任务数/要求数，以及逐 REQ 表。逐 REQ 表必须至少包含 `REQ ID`、用户要求摘要、
   记录判定、联网/搜索判定、子 AI/验证判定和验收/最终回复覆盖口径。
+- 对新任务，机器事实必须由 `lifecycle input-filter` 或等价 AOP/filter-chain 前置步骤写入
+  SQLite：至少包含逐 REQ 行、`trigger_type=user-message` 或 `input-filter` 的触发日志、
+  以及 `event_type=input-filter.preflight` 的事件行。只在对话里分析或只写 Markdown
+  不满足 preflight。
 - `task-gate` 必须按表格行解析输入拆解门禁，并与 `## 用户要求追踪门禁` 的 REQ
   行交叉校验；散文式“记录/搜索/验证”关键词不能代替逐 REQ 判定。
 - 用户输入中出现“联网、搜索、查、核对、最新、资料、URL、引用”等要求时，必须在
