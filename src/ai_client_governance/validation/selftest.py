@@ -64,6 +64,15 @@ def run_command(command: list[str], cwd: Path, env_root: Path) -> CommandResult:
     )
 
 
+def remove_tree(path: Path) -> None:
+    """Remove a temporary tree, retrying read-only Git object files on Windows."""
+    def onerror(func: object, failed_path: str, _exc_info: object) -> None:
+        os.chmod(failed_path, 0o700)
+        func(failed_path)  # type: ignore[operator]
+
+    shutil.rmtree(path, onerror=onerror)
+
+
 def output_gate_rows(worktree_variant: str = "complete") -> str:
     rows = []
     output_types = ["计划", "状态", "最终回复", "脚本报告", "错误", "仓库状态"]
@@ -959,6 +968,70 @@ def test_structured_task_record_gate(root: Path, run_dir: Path) -> TestResult:
     )
 
 
+def test_worktree_closeout_all_plan(root: Path, run_dir: Path) -> TestResult:
+    project = run_dir / "closeout-all-project"
+    (project / ".ai-client" / "project").mkdir(parents=True, exist_ok=True)
+    (project / ".ai-client" / "project" / ".gitkeep").write_text("", encoding="utf-8")
+    commands = [
+        run_command(["git", "init", "-b", "main"], cwd=project, env_root=root),
+        run_command(["git", "config", "user.email", "selftest@example.invalid"], cwd=project, env_root=root),
+        run_command(["git", "config", "user.name", "ai-client-governance selftest"], cwd=project, env_root=root),
+        run_command(["git", "add", ".ai-client/project/.gitkeep"], cwd=project, env_root=root),
+        run_command(["git", "commit", "-m", "init selftest project"], cwd=project, env_root=root),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "worktree-task",
+                "closeout-all",
+                "--help",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "worktree-task",
+                "closeout-all",
+                "--project-root",
+                str(project),
+                "--repo",
+                "self",
+                "--plan",
+                "--format",
+                "json",
+            ],
+            cwd=project,
+            env_root=root,
+        ),
+    ]
+    payload: dict[str, object] = {}
+    try:
+        payload = json.loads(commands[-1].stdout)
+    except json.JSONDecodeError:
+        payload = {}
+    passed = (
+        all(command.exit_code == 0 for command in commands)
+        and payload.get("command") == "worktree-task closeout-all"
+        and payload.get("mode") == "plan"
+        and payload.get("selected_repos") == ["self"]
+        and payload.get("blockers") == []
+        and payload.get("actions") == []
+    )
+    return TestResult(
+        name="worktree-closeout-all-plan",
+        passed=passed,
+        summary=(
+            "closeout-all exposes help and produces a clean no-task dry-run plan"
+            if passed
+            else "closeout-all dry-run planning regression failed"
+        ),
+        commands=commands,
+    )
+
+
 def format_text(root: Path, run_dir: Path, results: list[TestResult]) -> str:
     lines = [
         "ai-client-governance Selftest Report",
@@ -994,6 +1067,7 @@ def main() -> int:
         test_task_queue_task_id_priority(root, run_dir),
         test_gate_pool_validate_doc_tracking_context(root, run_dir),
         test_structured_task_record_gate(root, run_dir),
+        test_worktree_closeout_all_plan(root, run_dir),
     ]
     passed = all(result.passed for result in results)
 
@@ -1017,7 +1091,7 @@ def main() -> int:
         resolved_tmp = (root / TMP_DIR).resolve()
         resolved_run = run_dir.resolve()
         if resolved_tmp in resolved_run.parents:
-            shutil.rmtree(resolved_run)
+            remove_tree(resolved_run)
     return 0 if passed else 1
 
 

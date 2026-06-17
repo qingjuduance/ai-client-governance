@@ -20,6 +20,7 @@ from ai_client_governance.worktree.coord import GuardedState, StateStore, curren
 
 DEFAULT_SELF_EXCLUDES = (".source-projects",)
 ACTIVE_COORD_STATUSES = {"active", "integrating", "waiting"}
+CLOSEOUT_REPO_ORDER = ("ai-client-governance", "self")
 
 
 def git_run(args: list[str], cwd: Path, check: bool = True) -> subprocess.CompletedProcess:
@@ -372,6 +373,11 @@ def state_ai_client_governance_head(state_path: Path) -> str:
     return str(ai_client_governance.get("main_head_full_at_snapshot", ""))
 
 
+def ai_client_governance_sync_state_path(project_root: Path) -> Path:
+    """Return the sync-check state file path in the host project."""
+    return project_root / ".ai-client" / "project" / "state" / "ai-client-governance-state.json"
+
+
 def project_relative_status_path(project_root: Path, path: Path) -> str:
     """Return a Git status path relative to the host project root."""
     try:
@@ -592,6 +598,638 @@ def build_status_snapshot(
             )
         snapshot[repo_name] = repo_record
     return snapshot
+
+
+def closeout_repo_order(selected: list[str] | None) -> list[str]:
+    """Return closeout repositories in dependency order."""
+    values = selected or list(CLOSEOUT_REPO_ORDER)
+    deduped = list(dict.fromkeys(values))
+    return [repo for repo in CLOSEOUT_REPO_ORDER if repo in deduped]
+
+
+def rev_list_count(cwd: Path, rev_range: str) -> int | None:
+    """Return git rev-list --count for a revision range."""
+    result = git_run(["rev-list", "--count", rev_range], cwd, check=False)
+    if result.returncode != 0:
+        return None
+    try:
+        return int(result.stdout.strip())
+    except ValueError:
+        return None
+
+
+def status_lines_outside(status_text: str, allowed_paths: set[str]) -> list[str]:
+    """Return status lines whose path is outside allowed host closeout paths."""
+    outside: list[str] = []
+    normalized_allowed = {path.strip("/").replace("\\", "/") for path in allowed_paths if path.strip("/")}
+    for line in status_text.splitlines():
+        path = status_path_from_line(line)
+        if any(path == allowed or path.startswith(f"{allowed}/") for allowed in normalized_allowed):
+            continue
+        outside.append(line)
+    return outside
+
+
+def closeout_owned_host_paths(project_root: Path, task_tracking: list[str] | None = None) -> set[str]:
+    """Return host paths that closeout-all is allowed to stage and commit."""
+    paths = {
+        ".ai-client/project/state/worktrees.json",
+        project_relative_status_path(project_root, ai_client_governance_sync_state_path(project_root)),
+    }
+    if host_gitlink_record(project_root, ".ai-client/ai-client-governance").get("mode") == "160000":
+        paths.add(".ai-client/ai-client-governance")
+    for path in resolve_project_paths(project_root, task_tracking):
+        paths.add(project_relative_status_path(project_root, path))
+    return paths
+
+
+def governance_script_for_project(project_root: Path) -> Path:
+    """Return the embedded governance script, falling back to the current source tree."""
+    embedded = project_root / ".ai-client" / "ai-client-governance" / "scripts" / "ai_client_governance.py"
+    if embedded.exists():
+        return embedded
+    return ai_client_governance_script()
+
+
+def upstream_for(cwd: Path) -> str:
+    """Return the configured upstream ref for the current branch."""
+    return git_text(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], cwd, allow_fail=True)
+
+
+def command_text(command: list[str]) -> str:
+    """Render a command for reports."""
+    return " ".join(command)
+
+
+def add_closeout_action(
+    plan: dict[str, Any],
+    *,
+    action: str,
+    repo: str = "",
+    task_slug: str = "",
+    status: str = "planned",
+    command: list[str] | None = None,
+    reason: str = "",
+) -> None:
+    """Append one closeout action to a plan or execution report."""
+    plan["actions"].append(
+        {
+            "action": action,
+            "repo": repo,
+            "task_slug": task_slug,
+            "status": status,
+            "command": command_text(command) if command else "",
+            "reason": reason,
+        }
+    )
+
+
+def add_closeout_step(
+    plan: dict[str, Any],
+    *,
+    action: str,
+    repo: str = "",
+    task_slug: str = "",
+    status: str,
+    command: list[str] | None = None,
+    detail: str = "",
+) -> None:
+    """Append one executed closeout step."""
+    plan.setdefault("execution", []).append(
+        {
+            "action": action,
+            "repo": repo,
+            "task_slug": task_slug,
+            "status": status,
+            "command": command_text(command) if command else "",
+            "detail": detail,
+        }
+    )
+
+
+def build_closeout_all_plan(args: argparse.Namespace) -> dict[str, Any]:
+    """Build a conservative plan for merging and cleaning task worktrees."""
+    project_root = find_project_root(Path.cwd(), args.project_root)
+    selected_repos = closeout_repo_order(args.repo)
+    snapshot = build_status_snapshot(project_root, args.target_ref)
+    allowed_host_paths = closeout_owned_host_paths(project_root, args.task_tracking)
+    plan: dict[str, Any] = {
+        "schema_version": 1,
+        "command": "worktree-task closeout-all",
+        "mode": "execute" if args.execute else "plan",
+        "project_root": str(project_root),
+        "target_ref": args.target_ref,
+        "selected_repos": selected_repos,
+        "push": bool(args.push),
+        "tasks": [],
+        "actions": [],
+        "execution": [],
+        "blockers": [],
+        "warnings": [],
+        "repositories": {},
+        "host_state_needed": False,
+        "common_merge_needed": False,
+        "self_merge_needed": False,
+        "push_repos": [],
+    }
+    if args.plan and args.execute:
+        plan["blockers"].append("use either --plan or --execute, not both")
+
+    for raw_path in args.task_tracking or []:
+        path = Path(raw_path)
+        if not path.is_absolute():
+            path = project_root / path
+        if not path.exists():
+            plan["blockers"].append(f"task tracking path does not exist: {project_relative_status_path(project_root, path)}")
+
+    for repo_name in selected_repos:
+        try:
+            source_repo = source_repo_for(project_root, repo_name)
+        except SystemExit as exc:
+            plan["blockers"].append(str(exc))
+            continue
+        repo_record = snapshot.get(repo_name) if isinstance(snapshot.get(repo_name), dict) else {}
+        task_worktrees = sorted(
+            list(repo_record.get("task_worktrees", [])) if isinstance(repo_record, dict) else [],
+            key=lambda item: str(item.get("task_slug", "")),
+        )
+        repo_status = short_status(source_repo)
+        repo_current_branch = current_branch(source_repo)
+        target_exists = ref_exists(source_repo, args.target_ref)
+        plan["repositories"][repo_name] = {
+            "source_repo": str(source_repo),
+            "current_branch": repo_current_branch,
+            "main_status": "dirty" if repo_status else "clean",
+            "status_short": repo_status.splitlines(),
+            "target_exists": target_exists,
+            "task_worktree_count": len(task_worktrees),
+        }
+        if task_worktrees and not target_exists:
+            plan["blockers"].append(f"{repo_name}: target ref not found: {args.target_ref}")
+        if task_worktrees and repo_current_branch != args.target_ref:
+            plan["blockers"].append(
+                f"{repo_name}: source repository must be checked out on {args.target_ref}; current branch is {repo_current_branch}"
+            )
+        if task_worktrees and repo_status:
+            plan["blockers"].append(f"{repo_name}: source repository worktree is dirty")
+
+        for wt in task_worktrees:
+            branch = str(wt.get("branch", ""))
+            task_slug = str(wt.get("task_slug", ""))
+            merged = wt.get("merged_to_target")
+            branch_exists = bool(branch and ref_exists(source_repo, f"refs/heads/{branch}"))
+            unique_commits = (
+                rev_list_count(source_repo, f"{args.target_ref}..{branch}") if branch and target_exists else None
+            )
+            task = {
+                "repo": repo_name,
+                "task_slug": task_slug,
+                "branch": branch,
+                "worktree_path": wt.get("absolute_path", ""),
+                "dirty": bool(wt.get("dirty")),
+                "locked": bool(wt.get("locked")),
+                "lock_reason": wt.get("lock_reason", ""),
+                "merged_to_target": merged,
+                "unique_commits": unique_commits,
+                "status": "blocked",
+                "needs_merge": merged is False,
+                "cleanup_only": merged is True,
+            }
+            if task["dirty"]:
+                plan["blockers"].append(f"{repo_name}:{task_slug}: task worktree is dirty")
+            if task["locked"]:
+                plan["blockers"].append(f"{repo_name}:{task_slug}: task worktree is locked ({task['lock_reason']})")
+            if not branch:
+                plan["blockers"].append(f"{repo_name}:{task_slug}: task worktree has no branch")
+            elif not branch_exists:
+                plan["blockers"].append(f"{repo_name}:{task_slug}: branch not found: {branch}")
+            if merged is None:
+                plan["blockers"].append(f"{repo_name}:{task_slug}: cannot determine merge state against {args.target_ref}")
+            if merged is False and unique_commits == 0:
+                plan["blockers"].append(
+                    f"{repo_name}:{task_slug}: branch is not reported merged but has no unique commits; inspect manually"
+                )
+
+            if not task["dirty"] and not task["locked"] and branch and branch_exists and merged in (False, True):
+                task["status"] = "ready"
+                plan["host_state_needed"] = True
+                if merged is False:
+                    add_closeout_action(
+                        plan,
+                        action="merge",
+                        repo=repo_name,
+                        task_slug=task_slug,
+                        command=["git", "merge", "--no-ff", branch, "-m", f"merge: {task_slug}"],
+                        reason=f"{unique_commits if unique_commits is not None else '?'} unique commit(s)",
+                    )
+                    if repo_name == "ai-client-governance":
+                        plan["common_merge_needed"] = True
+                    if repo_name == "self":
+                        plan["self_merge_needed"] = True
+                else:
+                    add_closeout_action(
+                        plan,
+                        action="skip-merge",
+                        repo=repo_name,
+                        task_slug=task_slug,
+                        status="skipped",
+                        reason=f"already merged to {args.target_ref}",
+                    )
+                add_closeout_action(
+                    plan,
+                    action="remove-worktree",
+                    repo=repo_name,
+                    task_slug=task_slug,
+                    command=["git", "worktree", "remove", str(wt.get("absolute_path", ""))],
+                )
+                add_closeout_action(
+                    plan,
+                    action="delete-branch",
+                    repo=repo_name,
+                    task_slug=task_slug,
+                    command=["git", "branch", "-d", branch],
+                )
+            plan["tasks"].append(task)
+
+    if not plan["tasks"]:
+        plan["warnings"].append("no task worktrees found under .ai-client/project/.worktree")
+
+    if plan["host_state_needed"]:
+        if "self" not in plan["repositories"]:
+            host_status = short_status(project_root)
+            plan["repositories"]["self"] = {
+                "source_repo": str(project_root),
+                "current_branch": current_branch(project_root),
+                "main_status": "dirty" if host_status else "clean",
+                "status_short": host_status.splitlines(),
+                "target_exists": ref_exists(project_root, args.target_ref),
+                "task_worktree_count": 0,
+            }
+        if plan["repositories"]["self"]["current_branch"] != args.target_ref:
+            plan["blockers"].append(
+                "self: host repository must be checked out on "
+                f"{args.target_ref}; current branch is {plan['repositories']['self']['current_branch']}"
+            )
+        host_status = short_status(project_root)
+        outside = status_lines_outside(host_status, allowed_host_paths)
+        if outside:
+            plan["blockers"].append("host repository has dirty status outside closeout-owned paths: " + "; ".join(outside))
+        add_closeout_action(
+            plan,
+            action="write-state",
+            repo="self",
+            command=["python", "ai_client_governance.py", "worktree-task", "status", "--write-state"],
+            reason="refresh .ai-client/project/state/worktrees.json after merge cleanup",
+        )
+        add_closeout_action(
+            plan,
+            action="host-closeout-commit",
+            repo="self",
+            command=["git", "commit", "-m", "chore: record worktree closeout"],
+            reason="commit host gitlink/state changes without staging unrelated files",
+        )
+
+    if plan["host_state_needed"]:
+        add_closeout_action(
+            plan,
+            action="validate-cli-list",
+            repo="ai-client-governance",
+            command=[sys.executable, str(governance_script_for_project(project_root)), "--list"],
+        )
+        if (project_root / ".ai-client" / "ai-client-governance" / ".git").exists():
+            add_closeout_action(
+                plan,
+                action="sync-check",
+                repo="ai-client-governance",
+                command=[
+                    sys.executable,
+                    str(governance_script_for_project(project_root)),
+                    "sync-check",
+                    "--target-project-path",
+                    str(project_root),
+                    "--no-fetch",
+                ],
+            )
+
+    push_repos: list[str] = []
+    if args.push:
+        if plan["common_merge_needed"]:
+            push_repos.append("ai-client-governance")
+        if plan["self_merge_needed"] or plan["host_state_needed"]:
+            push_repos.append("self")
+        for repo_name in push_repos:
+            source_repo_text = plan["repositories"].get(repo_name, {}).get("source_repo")
+            if not source_repo_text:
+                continue
+            source_repo = Path(str(source_repo_text))
+            upstream = upstream_for(source_repo)
+            plan["repositories"][repo_name]["upstream"] = upstream
+            if not upstream:
+                plan["blockers"].append(f"{repo_name}: --push requested but current branch has no upstream")
+            add_closeout_action(
+                plan,
+                action="push",
+                repo=repo_name,
+                command=["git", "push"],
+                reason=f"push current branch to {upstream or '<missing-upstream>'}",
+            )
+    plan["push_repos"] = push_repos
+    if args.execute:
+        current_cwd = Path.cwd().resolve()
+        for task in plan.get("tasks", []):
+            if task.get("status") != "ready":
+                continue
+            worktree_path = Path(str(task.get("worktree_path", ""))).resolve()
+            try:
+                current_cwd.relative_to(worktree_path)
+            except ValueError:
+                continue
+            plan["blockers"].append(
+                "closeout-all --execute must be run outside task worktrees it will remove; "
+                "run it from the host root or embedded source repository"
+            )
+            break
+    return plan
+
+
+def print_closeout_all_report(plan: dict[str, Any], *, output_format: str) -> None:
+    """Print a closeout-all plan or execution report."""
+    if output_format == "json":
+        print(json.dumps(plan, ensure_ascii=False, indent=2, sort_keys=True))
+        return
+    print("Worktree closeout-all:")
+    print(f"  mode: {plan.get('mode')}")
+    print(f"  project_root: {plan.get('project_root')}")
+    print(f"  target_ref: {plan.get('target_ref')}")
+    print(f"  repos: {', '.join(plan.get('selected_repos', [])) or '<none>'}")
+    print(f"  task_worktrees: {len(plan.get('tasks', []))}")
+    blockers = plan.get("blockers", [])
+    warnings = plan.get("warnings", [])
+    print(f"  blockers: {len(blockers)}")
+    for blocker in blockers:
+        print(f"  - {blocker}")
+    print(f"  warnings: {len(warnings)}")
+    for warning in warnings:
+        print(f"  - {warning}")
+    print("  actions:")
+    actions = plan.get("actions", [])
+    if not actions:
+        print("  - none")
+    for action in actions:
+        label = f"{action.get('repo') or '-'}:{action.get('task_slug') or '-'}"
+        print(f"  - [{action.get('status')}] {action.get('action')} {label}")
+        if action.get("reason"):
+            print(f"    reason: {action.get('reason')}")
+        if action.get("command"):
+            print(f"    command: {action.get('command')}")
+    execution = plan.get("execution", [])
+    if execution:
+        print("  execution:")
+        for step in execution:
+            label = f"{step.get('repo') or '-'}:{step.get('task_slug') or '-'}"
+            print(f"  - [{step.get('status')}] {step.get('action')} {label}")
+            if step.get("detail"):
+                print(f"    detail: {step.get('detail')}")
+
+
+def run_closeout_process(
+    plan: dict[str, Any],
+    command: list[str],
+    *,
+    cwd: Path,
+    action: str,
+    repo: str = "",
+    task_slug: str = "",
+    check: bool = True,
+) -> subprocess.CompletedProcess:
+    """Run one closeout command and record its result."""
+    completed = subprocess.run(
+        command,
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    detail = (completed.stdout or completed.stderr).strip().splitlines()
+    add_closeout_step(
+        plan,
+        action=action,
+        repo=repo,
+        task_slug=task_slug,
+        status="done" if completed.returncode == 0 else "failed",
+        command=command,
+        detail=detail[0] if detail else "",
+    )
+    if check and completed.returncode != 0:
+        raise subprocess.CalledProcessError(
+            completed.returncode,
+            command,
+            output=completed.stdout,
+            stderr=completed.stderr,
+        )
+    return completed
+
+
+def execute_closeout_all(plan: dict[str, Any], args: argparse.Namespace) -> int:
+    """Execute a previously validated closeout-all plan."""
+    project_root = Path(str(plan["project_root"]))
+    tasks = [task for task in plan.get("tasks", []) if task.get("status") == "ready"]
+    touched_repos: set[str] = set()
+    try:
+        for repo_name in closeout_repo_order(args.repo):
+            repo_tasks = [task for task in tasks if task.get("repo") == repo_name]
+            if not repo_tasks:
+                continue
+            source_repo = Path(str(plan["repositories"][repo_name]["source_repo"]))
+            for task in repo_tasks:
+                task_slug = str(task["task_slug"])
+                branch = str(task["branch"])
+                if task.get("needs_merge"):
+                    diff_range = f"{args.target_ref}..{branch}"
+                    run_closeout_process(
+                        plan,
+                        ["git", "diff", "--check", diff_range],
+                        cwd=source_repo,
+                        action="pre-merge-diff-check",
+                        repo=repo_name,
+                        task_slug=task_slug,
+                    )
+                    merge_cmd = ["git", "merge", "--no-ff", branch, "-m", f"merge: {task_slug}"]
+                    completed = run_closeout_process(
+                        plan,
+                        merge_cmd,
+                        cwd=source_repo,
+                        action="merge",
+                        repo=repo_name,
+                        task_slug=task_slug,
+                        check=False,
+                    )
+                    if completed.returncode != 0:
+                        abort = subprocess.run(
+                            ["git", "merge", "--abort"],
+                            cwd=source_repo,
+                            capture_output=True,
+                            text=True,
+                            encoding="utf-8",
+                            errors="replace",
+                        )
+                        add_closeout_step(
+                            plan,
+                            action="merge-abort",
+                            repo=repo_name,
+                            task_slug=task_slug,
+                            status="done" if abort.returncode == 0 else "failed",
+                            command=["git", "merge", "--abort"],
+                            detail=(abort.stderr or abort.stdout).strip(),
+                        )
+                        return completed.returncode
+                    touched_repos.add(repo_name)
+                run_closeout_process(
+                    plan,
+                    ["git", "worktree", "remove", str(task["worktree_path"])],
+                    cwd=source_repo,
+                    action="remove-worktree",
+                    repo=repo_name,
+                    task_slug=task_slug,
+                )
+                git_run(["worktree", "prune"], source_repo, check=False)
+                if ref_exists(source_repo, f"refs/heads/{branch}"):
+                    if merged_to_target(source_repo, branch, args.target_ref) is not True:
+                        add_closeout_step(
+                            plan,
+                            action="delete-branch",
+                            repo=repo_name,
+                            task_slug=task_slug,
+                            status="failed",
+                            command=["git", "branch", "-d", branch],
+                            detail=f"branch is not merged to {args.target_ref}",
+                        )
+                        return 1
+                    run_closeout_process(
+                        plan,
+                        ["git", "branch", "-d", branch],
+                        cwd=source_repo,
+                        action="delete-branch",
+                        repo=repo_name,
+                        task_slug=task_slug,
+                    )
+
+        for repo_name in sorted(touched_repos):
+            source_repo = Path(str(plan["repositories"][repo_name]["source_repo"]))
+            run_closeout_process(
+                plan,
+                ["git", "diff", "--check"],
+                cwd=source_repo,
+                action="post-merge-diff-check",
+                repo=repo_name,
+            )
+
+        if plan.get("host_state_needed"):
+            script = governance_script_for_project(project_root)
+            run_closeout_process(
+                plan,
+                [sys.executable, str(script), "--list"],
+                cwd=project_root,
+                action="validate-cli-list",
+                repo="ai-client-governance",
+            )
+            if args.push and plan.get("common_merge_needed"):
+                source_repo = Path(str(plan["repositories"]["ai-client-governance"]["source_repo"]))
+                run_closeout_process(
+                    plan,
+                    ["git", "push"],
+                    cwd=source_repo,
+                    action="push",
+                    repo="ai-client-governance",
+                )
+            if (project_root / ".ai-client" / "ai-client-governance" / ".git").exists():
+                run_closeout_process(
+                    plan,
+                    [
+                        sys.executable,
+                        str(script),
+                        "sync-check",
+                        "--target-project-path",
+                        str(project_root),
+                        "--no-fetch",
+                    ],
+                    cwd=project_root,
+                    action="sync-check",
+                    repo="ai-client-governance",
+                )
+
+            state_path = status_state_path(project_root, "")
+            snapshot = build_status_snapshot(project_root, args.target_ref, {state_path.resolve()})
+            snapshot["state_file"] = display_path(state_path, project_root)
+            write_status_snapshot(state_path, snapshot)
+            add_closeout_step(
+                plan,
+                action="write-state",
+                repo="self",
+                status="done",
+                command=[sys.executable, str(script), "worktree-task", "status", "--write-state"],
+                detail=display_path(state_path, project_root),
+            )
+
+            stage_paths = sorted(closeout_owned_host_paths(project_root, args.task_tracking))
+            existing_stage_paths = [path for path in stage_paths if (project_root / path).exists()]
+            run_closeout_process(
+                plan,
+                ["git", "add", "--", *existing_stage_paths],
+                cwd=project_root,
+                action="stage-host-closeout",
+                repo="self",
+            )
+            run_closeout_process(
+                plan,
+                ["git", "diff", "--cached", "--check"],
+                cwd=project_root,
+                action="host-staged-diff-check",
+                repo="self",
+            )
+            cached = git_run(["diff", "--cached", "--quiet", "--exit-code"], project_root, check=False)
+            if cached.returncode == 1:
+                run_closeout_process(
+                    plan,
+                    ["git", "commit", "-m", "chore: record worktree closeout"],
+                    cwd=project_root,
+                    action="host-closeout-commit",
+                    repo="self",
+                )
+                touched_repos.add("self")
+            else:
+                add_closeout_step(
+                    plan,
+                    action="host-closeout-commit",
+                    repo="self",
+                    status="skipped",
+                    command=["git", "commit", "-m", "chore: record worktree closeout"],
+                    detail="no staged host closeout changes",
+                )
+            run_closeout_process(
+                plan,
+                ["git", "diff", "--check"],
+                cwd=project_root,
+                action="host-post-closeout-diff-check",
+                repo="self",
+            )
+            if args.push and ("self" in plan.get("push_repos", [])):
+                run_closeout_process(
+                    plan,
+                    ["git", "push"],
+                    cwd=project_root,
+                    action="push",
+                    repo="self",
+                )
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or exc.output or "").strip()
+        if detail:
+            plan["blockers"].append(detail)
+        else:
+            plan["blockers"].append(f"command failed: {command_text([str(part) for part in exc.cmd])}")
+        return exc.returncode or 1
+    return 0
 
 
 def parse_coord_time(value: str | None) -> datetime | None:
@@ -1463,6 +2101,22 @@ def command_remove(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_closeout_all(args: argparse.Namespace) -> int:
+    """Plan or execute a conservative closeout for all selected task worktrees."""
+    plan = build_closeout_all_plan(args)
+    if not args.execute:
+        print_closeout_all_report(plan, output_format=args.format)
+        return 1 if plan.get("blockers") else 0
+    if plan.get("blockers"):
+        print_closeout_all_report(plan, output_format=args.format)
+        return 1
+    result = execute_closeout_all(plan, args)
+    print_closeout_all_report(plan, output_format=args.format)
+    if result != 0:
+        return result
+    return 1 if plan.get("blockers") else 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Manage task-level Git worktrees with fixed conventions."
@@ -1526,6 +2180,28 @@ def build_parser() -> argparse.ArgumentParser:
         const="",
         help="Write full status snapshot. Default path: .ai-client/project/state/worktrees.json.",
     )
+
+    closeout_all = subparsers.add_parser(
+        "closeout-all",
+        help="Plan or execute merge, host closeout, worktree removal, branch cleanup, validation, and optional push.",
+    )
+    closeout_all.add_argument("--project-root", help="Host project root containing .ai-client/project.")
+    closeout_all.add_argument(
+        "--repo",
+        action="append",
+        choices=["self", "ai-client-governance"],
+        help="Repository to close out. Repeatable. Default: ai-client-governance first, then self.",
+    )
+    closeout_all.add_argument("--target-ref", default="main", help="Target branch currently checked out in source repos.")
+    closeout_all.add_argument("--plan", action="store_true", help="Print a dry-run plan. This is the default without --execute.")
+    closeout_all.add_argument("--execute", action="store_true", help="Actually merge, clean, commit host closeout, and optionally push.")
+    closeout_all.add_argument("--push", action="store_true", help="After successful validation, push ai-client-governance first, then host self.")
+    closeout_all.add_argument(
+        "--task-tracking",
+        action="append",
+        help="Related host tracking/state path to stage in the host closeout commit. Repeatable.",
+    )
+    closeout_all.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
 
     # close
     close = subparsers.add_parser("close", help="Check worktree closeout status.")
@@ -1620,6 +2296,8 @@ def main() -> int:
         return command_status(args)
     if args.command == "reconcile":
         return command_reconcile(args)
+    if args.command == "closeout-all":
+        return command_closeout_all(args)
     if args.command == "close":
         return command_close(args)
     if args.command == "queue":
