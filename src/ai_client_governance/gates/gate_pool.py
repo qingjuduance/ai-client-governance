@@ -212,7 +212,6 @@ def build_steps(root: Path, args: argparse.Namespace) -> list[GateStep]:
                     "worktree-task",
                     "reconcile",
                     "--strict",
-                    "--write-state",
                 ),
                 final_gate=args.final,
                 reason="Coord/session state must match Git live worktree state at this runtime boundary.",

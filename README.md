@@ -756,6 +756,11 @@ python scripts\ai_client_governance.py worktree-coord session register `
 因此多个节点都要求 `doc-index` 时，门禁池只会把所有 `--changed-path` 聚合起来运行一次，
 而不是按节点或按文件反复慢跑。
 
+`gate-pool` 的 live-state 节点只运行只读 `worktree-task reconcile --strict`。需要刷新
+`.ai-client/project/state/worktrees.json` 时，必须显式运行
+`worktree-task status --write-state` 或 `worktree-task finalize --write-state`，并在收口提交
+中处理该快照；门禁池不能先写状态再要求 clean host。
+
 文档联动节点属于 post-change 链路。修改功能、脚本、规则、skill、manifest、
 README 或入口 adapter 后，必须判断是否影响用户可读文档、命令说明、索引、
 Markdown 链接或 `.references` 记录。影响到文档时先同步文档和引用；不影响时在
