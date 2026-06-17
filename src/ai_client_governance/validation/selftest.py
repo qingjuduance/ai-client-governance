@@ -15,6 +15,10 @@ from datetime import datetime
 from pathlib import Path
 
 from ai_client_governance.common.paths import PYTHON_PYCACHE_DIR, TMP_DIR, ai_client_governance_entrypoint
+from ai_client_governance.records import task_record as structured_task_record
+
+
+SELFTEST_ARTIFACT_ENV = "AICG_SELFTEST_ARTIFACT_ROOT"
 
 
 @dataclass
@@ -42,6 +46,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def run_command(command: list[str], cwd: Path, env_root: Path) -> CommandResult:
+    artifact_root = Path(os.environ.get(SELFTEST_ARTIFACT_ENV, str(env_root))).resolve()
     completed = subprocess.run(
         command,
         cwd=cwd,
@@ -54,7 +59,8 @@ def run_command(command: list[str], cwd: Path, env_root: Path) -> CommandResult:
             **os.environ,
             "PYTHONUTF8": "1",
             "PYTHONIOENCODING": "utf-8",
-            "PYTHONPYCACHEPREFIX": str(env_root / PYTHON_PYCACHE_DIR),
+            "PYTHONPYCACHEPREFIX": str(artifact_root / PYTHON_PYCACHE_DIR),
+            "AICG_DOC_INDEX_OUTPUT": str(artifact_root / "doc-index" / "graph.json"),
         },
     )
     return CommandResult(
@@ -78,6 +84,56 @@ def write_text_lf(path: Path, value: str) -> None:
     """Write text fixtures with LF endings so git diff --check is platform-stable."""
     with path.open("w", encoding="utf-8", newline="\n") as handle:
         handle.write(value)
+
+
+def snapshot_ai_client_paths(root: Path) -> set[str]:
+    base = root / ".ai-client"
+    if not base.exists():
+        return set()
+    return {path.relative_to(root).as_posix() for path in base.rglob("*")}
+
+
+def allowed_selftest_artifact_paths(root: Path, run_dir: Path) -> set[str]:
+    allowed: set[str] = set()
+    for path in [root / ".ai-client", root / ".ai-client" / "project", root / TMP_DIR, root / TMP_DIR / "ai-client-governance-selftest"]:
+        try:
+            allowed.add(path.relative_to(root).as_posix())
+        except ValueError:
+            continue
+    try:
+        run_rel = run_dir.relative_to(root).as_posix()
+    except ValueError:
+        return allowed
+    allowed.add(run_rel)
+    return allowed
+
+
+def unexpected_ai_client_artifacts(root: Path, run_dir: Path, before: set[str]) -> list[str]:
+    after = snapshot_ai_client_paths(root)
+    try:
+        run_rel = run_dir.relative_to(root).as_posix()
+    except ValueError:
+        run_rel = ""
+    allowed = allowed_selftest_artifact_paths(root, run_dir)
+    unexpected: list[str] = []
+    for path in sorted(after - before):
+        if path in allowed:
+            continue
+        if run_rel and path.startswith(run_rel + "/"):
+            continue
+        unexpected.append(path)
+    return unexpected
+
+
+def cleanup_empty_selftest_parents(root: Path, run_dir: Path, before: set[str]) -> None:
+    for path in [run_dir.parent, root / TMP_DIR, root / ".ai-client" / "project", root / ".ai-client"]:
+        rel = path.relative_to(root).as_posix()
+        if rel in before:
+            continue
+        try:
+            path.rmdir()
+        except OSError:
+            pass
 
 
 def output_gate_rows(worktree_variant: str = "complete") -> str:
@@ -841,6 +897,7 @@ def structured_payload(task_id: str, include_worktree: bool = True) -> dict[str,
                     "scope_paths": ["src/ai_client_governance/records/task_record.py"],
                     "filter_chain": [
                         "classify-source",
+                        "user-claim-validation",
                         "classify-common-project-scope",
                         "decompose-requirements",
                         "recordability-judgement",
@@ -862,6 +919,71 @@ def structured_payload(task_id: str, include_worktree: bool = True) -> dict[str,
                     "selected_pattern": "local-command-compression",
                     "command_count_before": 2,
                     "command_count_after": 1,
+                    "groups": [
+                        {
+                            "group_id": "selftest-readonly",
+                            "execution": "parallel-ok",
+                            "cache": "readonly-only",
+                            "commands": ["contract describe", "task-record gate"],
+                        }
+                    ],
+                },
+            },
+            {
+                "event_id": f"EVT-{task_id}-PLAN-APPROVAL-BOUNDARY",
+                "event_type": structured_task_record.PLAN_APPROVAL_BOUNDARY_EVENT,
+                "payload": {
+                    "join_point": "plan-output",
+                    "requires_approval": True,
+                    "approval_label": "批准：selftest",
+                    "approval_status": "approved",
+                    "execution_policy": "approved-local-only-no-push",
+                    "push_policy": "push_requires_separate_approval",
+                    "commit_policy": "local_commit_allowed_when_approved",
+                    "fail_policy": "fail_closed",
+                },
+            },
+            {
+                "event_id": f"EVT-{task_id}-USER-CLAIM-VALIDATION",
+                "event_type": structured_task_record.USER_CLAIM_VALIDATION_EVENT,
+                "payload": {
+                    "join_point": "user-message",
+                    "execution_policy": "execute-with-recorded-claims",
+                    "claims": [
+                        {
+                            "claim_id": "CLAIM-SELFTEST-01",
+                            "requirement_id": f"REQ-{task_id}-01",
+                            "claim_summary": "selftest payload asserts complete records should pass",
+                            "source": "user",
+                            "trust_level": "user-assertion-needs-verification",
+                            "risk_flags": ["source_is_user", "affects_execution_or_repository_state"],
+                            "verification_action": "verify-local-live-state-or-script-contract-before-execution",
+                        }
+                    ],
+                    "fail_policy": "fail_closed",
+                },
+            },
+            {
+                "event_id": f"EVT-{task_id}-STATE-ARTIFACT-OWNERSHIP",
+                "event_type": structured_task_record.STATE_ARTIFACT_OWNERSHIP_EVENT,
+                "payload": {
+                    "join_point": "write-intent",
+                    "owner_policy": "selftest scripts own their generated state and cleanup",
+                    "generated_state_classes": ["lifecycle-state", "doc-index", "python-pycache", "selftest-artifact"],
+                    "manual_edit_policy": "forbidden_without_break_glass",
+                    "cleanup_policy": "selftest cleans allowed artifacts and fails on unexpected artifacts",
+                    "fail_policy": "fail_closed",
+                },
+            },
+            {
+                "event_id": f"EVT-{task_id}-PATCH-PREFLIGHT",
+                "event_type": structured_task_record.PATCH_PREFLIGHT_EVENT,
+                "payload": {
+                    "join_point": "write-intent",
+                    "anchor_policy": "verify_unique_or_reextract",
+                    "apply_policy": "small_step_patch",
+                    "fallback_policy": "use narrower context when anchors are unstable",
+                    "fail_policy": "fail_closed",
                 },
             }
         ],
@@ -895,6 +1017,16 @@ def structured_payload(task_id: str, include_worktree: bool = True) -> dict[str,
                 "next_action": "none",
             }
         ]
+    return payload
+
+
+def payload_without_event(task_id: str, event_type: str) -> dict[str, object]:
+    payload = structured_payload(task_id)
+    payload["events"] = [
+        event
+        for event in payload["events"]  # type: ignore[index]
+        if isinstance(event, dict) and event.get("event_type") != event_type
+    ]
     return payload
 
 
@@ -1135,6 +1267,104 @@ def test_structured_task_record_gate(root: Path, run_dir: Path) -> TestResult:
     )
 
 
+def test_preflight_boundary_hardening(root: Path, run_dir: Path) -> TestResult:
+    db = run_dir / "preflight-boundary-hardening.db"
+    valid_task = "PREFLIGHT-HARDENING-VALID"
+    missing_plan_task = "PREFLIGHT-HARDENING-NOPLAN"
+    missing_claim_task = "PREFLIGHT-HARDENING-NOCLAIM"
+    valid = run_dir / "preflight-hardening-valid.json"
+    missing_plan = run_dir / "preflight-hardening-missing-plan.json"
+    missing_claim = run_dir / "preflight-hardening-missing-claim.json"
+    valid.write_text(json.dumps(structured_payload(valid_task), ensure_ascii=False, indent=2), encoding="utf-8")
+    missing_plan.write_text(
+        json.dumps(payload_without_event(missing_plan_task, structured_task_record.PLAN_APPROVAL_BOUNDARY_EVENT), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    missing_claim.write_text(
+        json.dumps(payload_without_event(missing_claim_task, structured_task_record.USER_CLAIM_VALIDATION_EVENT), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    commands = [
+        run_command([sys.executable, str(ai_client_governance_entrypoint()), "task-record", "--db", str(db), "init"], cwd=root, env_root=root),
+        run_command([sys.executable, str(ai_client_governance_entrypoint()), "task-record", "--db", str(db), "apply", "--json", str(missing_plan)], cwd=root, env_root=root),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-record",
+                "--db",
+                str(db),
+                "gate",
+                "--task-id",
+                missing_plan_task,
+                "--event",
+                "preflight",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command([sys.executable, str(ai_client_governance_entrypoint()), "task-record", "--db", str(db), "apply", "--json", str(missing_claim)], cwd=root, env_root=root),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-record",
+                "--db",
+                str(db),
+                "gate",
+                "--task-id",
+                missing_claim_task,
+                "--event",
+                "preflight",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command([sys.executable, str(ai_client_governance_entrypoint()), "task-record", "--db", str(db), "apply", "--json", str(valid)], cwd=root, env_root=root),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-record",
+                "--db",
+                str(db),
+                "gate",
+                "--task-id",
+                valid_task,
+                "--event",
+                "preflight",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+    ]
+    missing_plan_output = commands[2].stdout + commands[2].stderr
+    missing_claim_output = commands[4].stdout + commands[4].stderr
+    valid_output = commands[6].stdout + commands[6].stderr
+    passed = (
+        commands[0].exit_code == 0
+        and commands[1].exit_code == 0
+        and commands[2].exit_code != 0
+        and commands[3].exit_code == 0
+        and commands[4].exit_code != 0
+        and commands[5].exit_code == 0
+        and commands[6].exit_code == 0
+        and "plan approval boundary requires" in missing_plan_output
+        and "user claim validation requires" in missing_claim_output
+        and "Errors: 0" in valid_output
+    )
+    return TestResult(
+        name="preflight-boundary-hardening",
+        passed=passed,
+        summary=(
+            "preflight fails closed without plan approval boundary or user claim validation facts"
+            if passed
+            else "preflight hardening gate regression failed"
+        ),
+        commands=commands,
+    )
+
+
 def test_tool_flow_accepts_task_record_gate(root: Path, run_dir: Path) -> TestResult:
     ledger_dir = run_dir / "tool-flow-task-record-ledger"
     ledger_dir.mkdir(parents=True, exist_ok=True)
@@ -1304,9 +1534,13 @@ def test_lifecycle_input_filter_preflight(root: Path, run_dir: Path) -> TestResu
         all(command.exit_code == 0 for command in commands)
         and generated.exists()
         and "input.filter.user-message-preflight" in component_output
+        and "input.filter.user-claim-validation" in component_output
         and "\"fail_policy\": \"fail_closed\"" in component_output
         and "\"event_type\": \"input-filter.preflight\"" in input_filter_output
         and "\"event_type\": \"command-compression.analysis\"" in input_filter_output
+        and f"\"event_type\": \"{structured_task_record.PLAN_APPROVAL_BOUNDARY_EVENT}\"" in input_filter_output
+        and f"\"event_type\": \"{structured_task_record.USER_CLAIM_VALIDATION_EVENT}\"" in input_filter_output
+        and "\"state_file\": null" in input_filter_output
         and "\"scope_kind\": \"ai-client-governance-common\"" in input_filter_output
         and "scope-classification" in input_filter_output
         and "input-filter preflight facts present" in gate_output
@@ -1946,27 +2180,51 @@ def format_text(root: Path, run_dir: Path, results: list[TestResult]) -> str:
 def main() -> int:
     args = parse_args()
     root = Path(args.root).resolve()
+    before_ai_client = snapshot_ai_client_paths(root)
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     run_dir = root / TMP_DIR / "ai-client-governance-selftest" / timestamp
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    results = [
-        test_worktree_gate(root, run_dir),
-        test_worktree_creation_policy_gate(root, run_dir),
-        test_input_and_output_closeout_gate(root, run_dir),
-        test_multi_agent_acceptance_matrix_gate(root, run_dir),
-        test_task_queue_task_id_priority(root, run_dir),
-        test_gate_pool_validate_doc_tracking_context(root, run_dir),
-        test_structured_task_record_gate(root, run_dir),
-        test_tool_flow_accepts_task_record_gate(root, run_dir),
-        test_lifecycle_input_filter_preflight(root, run_dir),
-        test_task_run_command_compression_plan(root, run_dir),
-        test_task_run_dag_cache_diagnostics(root, run_dir),
-        test_shell_adapter_scope_diagnostics(root, run_dir),
-        test_worktree_closeout_all_plan(root, run_dir),
-        test_sync_check_writes_lf_state(root, run_dir),
-        test_worktree_closeout_all_closes_coord_session(root, run_dir),
-    ]
+    previous_artifact_root = os.environ.get(SELFTEST_ARTIFACT_ENV)
+    os.environ[SELFTEST_ARTIFACT_ENV] = str(run_dir)
+    try:
+        results = [
+            test_worktree_gate(root, run_dir),
+            test_worktree_creation_policy_gate(root, run_dir),
+            test_input_and_output_closeout_gate(root, run_dir),
+            test_multi_agent_acceptance_matrix_gate(root, run_dir),
+            test_task_queue_task_id_priority(root, run_dir),
+            test_gate_pool_validate_doc_tracking_context(root, run_dir),
+            test_structured_task_record_gate(root, run_dir),
+            test_preflight_boundary_hardening(root, run_dir),
+            test_tool_flow_accepts_task_record_gate(root, run_dir),
+            test_lifecycle_input_filter_preflight(root, run_dir),
+            test_task_run_command_compression_plan(root, run_dir),
+            test_task_run_dag_cache_diagnostics(root, run_dir),
+            test_shell_adapter_scope_diagnostics(root, run_dir),
+            test_worktree_closeout_all_plan(root, run_dir),
+            test_sync_check_writes_lf_state(root, run_dir),
+            test_worktree_closeout_all_closes_coord_session(root, run_dir),
+        ]
+    finally:
+        if previous_artifact_root is None:
+            os.environ.pop(SELFTEST_ARTIFACT_ENV, None)
+        else:
+            os.environ[SELFTEST_ARTIFACT_ENV] = previous_artifact_root
+
+    unexpected_artifacts = unexpected_ai_client_artifacts(root, run_dir, before_ai_client)
+    results.append(
+        TestResult(
+            name="selftest-artifact-manifest",
+            passed=not unexpected_artifacts,
+            summary=(
+                "selftest artifacts stayed within the declared run directory"
+                if not unexpected_artifacts
+                else "unexpected selftest artifacts: " + ", ".join(unexpected_artifacts[:8])
+            ),
+            commands=[],
+        )
+    )
     passed = all(result.passed for result in results)
 
     if args.format == "json":
@@ -1990,6 +2248,7 @@ def main() -> int:
         resolved_run = run_dir.resolve()
         if resolved_tmp in resolved_run.parents:
             remove_tree(resolved_run)
+            cleanup_empty_selftest_parents(root, run_dir, before_ai_client)
     return 0 if passed else 1
 
 

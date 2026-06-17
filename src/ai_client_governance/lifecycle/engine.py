@@ -212,6 +212,49 @@ def validation_decision_for(task_types: list[str], changed_paths: list[str]) -> 
     return "Verify final response covers each requirement."
 
 
+def claim_risk_flags(text: str, task_types: list[str]) -> list[str]:
+    flags = ["source_is_user"]
+    assertion_markers = ("应该", "必须", "不应该", "不能", "可以", "bug", "问题", "会生成", "不会", "直接")
+    mutable_markers = ("push", "commit", "删除", "提交", "推送", "账本", "状态", "脚本", "selftest", "worktree")
+    stale_markers = ("现在", "当前", "之前", "刚刚", "目前", "latest", "recent")
+    if any(marker in text for marker in assertion_markers):
+        flags.append("may_be_wrong")
+    if any(marker.lower() in text.lower() for marker in stale_markers):
+        flags.append("context_or_time_dependent")
+    if any(marker.lower() in text.lower() for marker in mutable_markers) or set(task_types).intersection({"git", "rules-script"}):
+        flags.append("affects_execution_or_repository_state")
+    return unique(flags)
+
+
+def verification_action_for_claim(text: str, task_types: list[str]) -> str:
+    lowered = text.lower()
+    if any(marker in lowered or marker in text for marker in ("git", "push", "commit", "worktree", "状态", "账本", "脚本", "selftest")):
+        return "verify-local-live-state-or-script-contract-before-execution"
+    if "rules-script" in task_types:
+        return "verify-rules-and-external-practice-before-adoption"
+    return "record-claim-and-verify-if-it-steers-execution"
+
+
+def build_user_claims(segments: list[str], requirement_ids: list[str], task_types: list[str]) -> list[dict[str, Any]]:
+    claims: list[dict[str, Any]] = []
+    for index, segment in enumerate(segments, start=1):
+        claim_id = f"CLAIM-{index:02d}"
+        requirement_id = requirement_ids[index - 1] if index - 1 < len(requirement_ids) else ""
+        flags = claim_risk_flags(segment, task_types)
+        claims.append(
+            {
+                "claim_id": claim_id,
+                "requirement_id": requirement_id,
+                "claim_summary": summarize(segment, 180),
+                "source": "user",
+                "trust_level": "user-assertion-needs-verification" if len(flags) > 1 else "user-instruction",
+                "risk_flags": flags,
+                "verification_action": verification_action_for_claim(segment, task_types),
+            }
+        )
+    return claims
+
+
 def build_input_filter_task_record(args: argparse.Namespace, report: LifecycleReport) -> dict[str, Any]:
     message = message_from_args(args, Path(args.root).resolve())
     task_id = args.task_id or f"TASK-{datetime.now().strftime('%Y%m%d')}-{uuid.uuid4().hex[:8]}"
@@ -241,15 +284,20 @@ def build_input_filter_task_record(args: argparse.Namespace, report: LifecycleRe
             }
         )
 
+    claims = build_user_claims(segments, requirement_ids, report.classification.task_types)
     matched = ", ".join(requirement_ids) if requirement_ids else "none"
     task_types = report.classification.task_types
+    approval_status = "approved" if args.approved_label else ("not_required" if not report.classification.requires_approval else "missing")
+    execution_policy = "approved-local-only-no-push" if approval_status == "approved" else (
+        "execute-no-approval-required" if approval_status == "not_required" else "block-before-write"
+    )
     task = {
         "task_id": task_id,
         "title": args.title or summarize(message, 80) or "input-filter preflight task",
         "status": "active",
         "task_types": task_types,
         "task_size": report.classification.task_size,
-        "summary": report.input.summary,
+        "summary": summarize(message, 480),
         "approval_label": args.approved_label or "",
         "trace_id": report.trace_id,
     }
@@ -349,6 +397,36 @@ def build_input_filter_task_record(args: argparse.Namespace, report: LifecycleRe
                 "status": "done",
                 "trace_id": report.trace_id,
             },
+            {
+                "trigger_id": f"TRG-{id_base}-PLAN-APPROVAL-BOUNDARY",
+                "trigger_type": "plan-approval-boundary",
+                "source": "ai_client_governance.py lifecycle input-filter",
+                "matched_requirement": matched,
+                "priority": "high",
+                "applicability_scope": "plan-output/write-intent approval boundary",
+                "scope_expansion": "not expanded",
+                "reason": "User questions, approvals, local commits, and push are separate execution boundaries.",
+                "required_action": "Persist plan approval boundary before write-intent or final-output gates.",
+                "executed_steps": "Rendered plan-approval-boundary.analysis event.",
+                "quantitative_evidence": f"approval_status={approval_status}; push_policy=push_requires_separate_approval",
+                "status": "done",
+                "trace_id": report.trace_id,
+            },
+            {
+                "trigger_id": f"TRG-{id_base}-USER-CLAIM-VALIDATION",
+                "trigger_type": "user-claim-validation",
+                "source": "ai_client_governance.py lifecycle input-filter",
+                "matched_requirement": matched,
+                "priority": "high",
+                "applicability_scope": "user-message claim trust boundary",
+                "scope_expansion": "not expanded",
+                "reason": "User requirements are goals, but user assertions may be wrong, stale, or conflict with live state.",
+                "required_action": "Persist user-claim-validation.analysis before letting user assertions steer execution.",
+                "executed_steps": "Rendered claim trust, risk, and verification rows.",
+                "quantitative_evidence": f"{len(claims)} claim row(s)",
+                "status": "done",
+                "trace_id": report.trace_id,
+            },
         ],
         "outputs": outputs,
         "events": [
@@ -367,6 +445,7 @@ def build_input_filter_task_record(args: argparse.Namespace, report: LifecycleRe
                     "scope_paths": report.classification.scope_paths,
                     "filter_chain": [
                         "classify-source",
+                        "user-claim-validation",
                         "classify-common-project-scope",
                         "decompose-requirements",
                         "recordability-judgement",
@@ -391,9 +470,77 @@ def build_input_filter_task_record(args: argparse.Namespace, report: LifecycleRe
                     "scope_paths": report.classification.scope_paths,
                     "decision": "Analyze new local command candidates for dedupe, batching, cache eligibility, task-run DAG execution, gate-pool use, and ledger wrapping before write-intent.",
                     "selected_pattern": "lifecycle-preflight-command-compression",
+                    "groups": [
+                        {
+                            "group_id": "preflight-readonly",
+                            "execution": "parallel-ok",
+                            "cache": "readonly-only",
+                            "commands": ["contract describe", "runtime components", "context-extract"],
+                        },
+                        {
+                            "group_id": "stateful-write",
+                            "execution": "ordered",
+                            "cache": "disabled",
+                            "commands": ["task-record apply", "worktree-task closeout-all", "git commit"],
+                        },
+                    ],
                     "recommended_command": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-run plan --task-id <task-id> --event write-intent",
                     "recommended_runner": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-run run --task-id <task-id> --event write-intent",
                     "recommended_diagnostics": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-run diagnose --format json",
+                    "fail_policy": "fail_closed",
+                },
+            },
+            {
+                "event_id": f"EVT-{id_base}-PLAN-APPROVAL-BOUNDARY",
+                "event_type": structured_task_record.PLAN_APPROVAL_BOUNDARY_EVENT,
+                "payload": {
+                    "join_point": "plan-output",
+                    "requires_approval": report.classification.requires_approval,
+                    "approval_label": args.approved_label or "",
+                    "approval_status": approval_status,
+                    "execution_policy": execution_policy,
+                    "push_policy": "push_requires_separate_approval",
+                    "commit_policy": "local_commit_allowed_when_approved",
+                    "fail_policy": "fail_closed",
+                },
+            },
+            {
+                "event_id": f"EVT-{id_base}-USER-CLAIM-VALIDATION",
+                "event_type": structured_task_record.USER_CLAIM_VALIDATION_EVENT,
+                "payload": {
+                    "join_point": "user-message",
+                    "claims": claims,
+                    "execution_policy": "verify-first" if any(len(claim.get("risk_flags", [])) > 1 for claim in claims) else "execute-with-recorded-claims",
+                    "fail_policy": "fail_closed",
+                },
+            },
+            {
+                "event_id": f"EVT-{id_base}-STATE-ARTIFACT-OWNERSHIP",
+                "event_type": structured_task_record.STATE_ARTIFACT_OWNERSHIP_EVENT,
+                "payload": {
+                    "join_point": "write-intent",
+                    "owner_policy": "script-generated state must be repaired by its owner command or by fixing that command first",
+                    "generated_state_classes": [
+                        "coord-session",
+                        "worktree-lock",
+                        "lifecycle-state",
+                        "doc-index",
+                        "python-pycache",
+                        "selftest-artifact",
+                    ],
+                    "manual_edit_policy": "forbidden_without_break_glass",
+                    "cleanup_policy": "use owner cleanup/reconcile/finalize commands; do not hand-edit runtime ledgers",
+                    "fail_policy": "fail_closed",
+                },
+            },
+            {
+                "event_id": f"EVT-{id_base}-PATCH-PREFLIGHT",
+                "event_type": structured_task_record.PATCH_PREFLIGHT_EVENT,
+                "payload": {
+                    "join_point": "write-intent",
+                    "anchor_policy": "verify_unique_or_reextract",
+                    "apply_policy": "small_step_patch",
+                    "fallback_policy": "use structured parser or narrower context when anchors are unstable",
                     "fail_policy": "fail_closed",
                 },
             },
@@ -860,8 +1007,6 @@ def save_state(report: LifecycleReport, args: argparse.Namespace) -> None:
 
 
 def should_save_state(args: argparse.Namespace) -> bool:
-    if args.command != "classify":
-        return True
     return bool(getattr(args, "write_state", False) or getattr(args, "state_file", None))
 
 

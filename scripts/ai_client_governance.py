@@ -8,8 +8,9 @@ import sys
 
 AI_CLIENT_GOVERNANCE_ROOT = Path(__file__).resolve().parents[1]
 SRC_DIR = AI_CLIENT_GOVERNANCE_ROOT / "src"
-if str(SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(SRC_DIR))
+SRC_DIR_TEXT = str(SRC_DIR)
+sys.path = [path for path in sys.path if Path(path or ".").resolve() != SRC_DIR]
+sys.path.insert(0, SRC_DIR_TEXT)
 
 from ai_client_governance.cli import main
 

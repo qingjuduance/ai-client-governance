@@ -51,6 +51,10 @@ INPUT_FILTER_REQUIREMENT_FIELDS = (
 )
 COMMAND_COMPRESSION_EVENT = "command-compression.analysis"
 SCOPE_CLASSIFICATION_TRIGGER = "scope-classification"
+PLAN_APPROVAL_BOUNDARY_EVENT = "plan-approval-boundary.analysis"
+USER_CLAIM_VALIDATION_EVENT = "user-claim-validation.analysis"
+STATE_ARTIFACT_OWNERSHIP_EVENT = "state-artifact-ownership.analysis"
+PATCH_PREFLIGHT_EVENT = "patch-preflight.analysis"
 SCOPE_KINDS = {COMMON_SCOPE, PROJECT_SCOPE, NATIVE_SCOPE, MIXED_SCOPE, UNKNOWN_SCOPE}
 
 
@@ -624,7 +628,9 @@ def validate_command_compression_preflight(
         except json.JSONDecodeError:
             invalid_event_ids.append(event["event_id"])
             continue
-        if isinstance(payload, dict) and (payload.get("decision") or payload.get("selected_pattern")):
+        groups = payload.get("groups") if isinstance(payload, dict) else None
+        has_groups = isinstance(groups, list) and bool(groups)
+        if isinstance(payload, dict) and (payload.get("decision") or payload.get("selected_pattern")) and has_groups:
             usable = True
             break
         invalid_event_ids.append(event["event_id"])
@@ -632,7 +638,7 @@ def validate_command_compression_preflight(
         add(
             errors,
             "error",
-            "command compression analysis must record a decision or selected_pattern payload",
+            "command compression analysis must record decision or selected_pattern plus non-empty groups payload",
             "events",
             ", ".join(invalid_event_ids),
         )
@@ -695,6 +701,181 @@ def validate_scope_classification_preflight(
         add(notes, "note", "scope classification facts present", "events")
 
 
+def event_payloads(con: sqlite3.Connection, task_id: str, event_type: str) -> list[tuple[str, dict[str, Any]]]:
+    payloads: list[tuple[str, dict[str, Any]]] = []
+    for event in rows(con, "events", task_id):
+        if str(event["event_type"] or "").strip() != event_type:
+            continue
+        try:
+            payload = json.loads(event["payload_json"] or "{}")
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            payloads.append((event["event_id"], payload))
+    return payloads
+
+
+def validate_plan_approval_boundary(
+    con: sqlite3.Connection,
+    task: sqlite3.Row,
+    task_types: set[str],
+    errors: list[Finding],
+    notes: list[Finding],
+) -> None:
+    """Require an explicit plan/approval/push boundary before gated execution."""
+    task_size = str(task["task_size"] or "").strip().lower()
+    if not (task_types & MUTATING_TASK_TYPES or task_size in {"medium", "large"}):
+        return
+
+    payloads = event_payloads(con, task["task_id"], PLAN_APPROVAL_BOUNDARY_EVENT)
+    if not payloads:
+        add(
+            errors,
+            "error",
+            f"plan approval boundary requires an events row with event_type={PLAN_APPROVAL_BOUNDARY_EVENT}",
+            "events",
+        )
+        return
+
+    valid = False
+    for _event_id, payload in payloads:
+        if not payload.get("execution_policy"):
+            continue
+        if payload.get("push_policy") != "push_requires_separate_approval":
+            continue
+        if task_types & MUTATING_TASK_TYPES and payload.get("approval_status") not in {"approved", "not_required"}:
+            continue
+        valid = True
+        break
+    if not valid:
+        add(
+            errors,
+            "error",
+            "plan approval boundary must record execution_policy, approval_status, and push_policy=push_requires_separate_approval",
+            "events",
+        )
+    else:
+        add(notes, "note", f"plan approval boundary facts present: {PLAN_APPROVAL_BOUNDARY_EVENT}", "events")
+
+
+def validate_user_claim_validation(
+    con: sqlite3.Connection,
+    task: sqlite3.Row,
+    task_types: set[str],
+    errors: list[Finding],
+    notes: list[Finding],
+) -> None:
+    """Require user assertions to be classified before they steer execution."""
+    task_size = str(task["task_size"] or "").strip().lower()
+    if not (task_types & MUTATING_TASK_TYPES or task_size in {"medium", "large"}):
+        return
+
+    payloads = event_payloads(con, task["task_id"], USER_CLAIM_VALIDATION_EVENT)
+    if not payloads:
+        add(
+            errors,
+            "error",
+            f"user claim validation requires an events row with event_type={USER_CLAIM_VALIDATION_EVENT}",
+            "events",
+        )
+        return
+
+    valid = False
+    for _event_id, payload in payloads:
+        claims = payload.get("claims")
+        if not isinstance(claims, list):
+            continue
+        if payload.get("execution_policy") not in {"verify-first", "execute-with-recorded-claims", "ask-clarification", "block"}:
+            continue
+        missing_claim_fields = False
+        for claim in claims:
+            if not isinstance(claim, dict):
+                missing_claim_fields = True
+                break
+            required = ("claim_id", "claim_summary", "source", "trust_level", "risk_flags", "verification_action")
+            if any(not claim.get(field) for field in required):
+                missing_claim_fields = True
+                break
+        if not missing_claim_fields:
+            valid = True
+            break
+    if not valid:
+        add(
+            errors,
+            "error",
+            "user claim validation must record claims with trust_level, risk_flags, verification_action, and execution_policy",
+            "events",
+        )
+    else:
+        add(notes, "note", f"user claim validation facts present: {USER_CLAIM_VALIDATION_EVENT}", "events")
+
+
+def validate_state_artifact_ownership(
+    con: sqlite3.Connection,
+    task: sqlite3.Row,
+    task_types: set[str],
+    errors: list[Finding],
+    notes: list[Finding],
+) -> None:
+    """Require script-generated state to declare its owner and cleanup path."""
+    if "rules-script" not in task_types:
+        return
+    payloads = event_payloads(con, task["task_id"], STATE_ARTIFACT_OWNERSHIP_EVENT)
+    if not payloads:
+        add(
+            errors,
+            "error",
+            f"script-generated state ownership requires event_type={STATE_ARTIFACT_OWNERSHIP_EVENT}",
+            "events",
+        )
+        return
+    valid = any(
+        isinstance(payload.get("generated_state_classes"), list)
+        and payload.get("manual_edit_policy") == "forbidden_without_break_glass"
+        and payload.get("owner_policy")
+        for _event_id, payload in payloads
+    )
+    if not valid:
+        add(
+            errors,
+            "error",
+            "script-generated state ownership must record owner_policy, generated_state_classes, and manual_edit_policy=forbidden_without_break_glass",
+            "events",
+        )
+    else:
+        add(notes, "note", f"script-generated state ownership facts present: {STATE_ARTIFACT_OWNERSHIP_EVENT}", "events")
+
+
+def validate_patch_preflight(
+    con: sqlite3.Connection,
+    task: sqlite3.Row,
+    task_types: set[str],
+    errors: list[Finding],
+    notes: list[Finding],
+) -> None:
+    """Require a patch strategy before editing long or governance files."""
+    if not (task_types & {"rules-script", "docs", "correction"}):
+        return
+    payloads = event_payloads(con, task["task_id"], PATCH_PREFLIGHT_EVENT)
+    if not payloads:
+        add(errors, "error", f"patch preflight requires event_type={PATCH_PREFLIGHT_EVENT}", "events")
+        return
+    valid = any(
+        payload.get("anchor_policy") == "verify_unique_or_reextract"
+        and payload.get("apply_policy") == "small_step_patch"
+        for _event_id, payload in payloads
+    )
+    if not valid:
+        add(
+            errors,
+            "error",
+            "patch preflight must record anchor_policy=verify_unique_or_reextract and apply_policy=small_step_patch",
+            "events",
+        )
+    else:
+        add(notes, "note", f"patch preflight facts present: {PATCH_PREFLIGHT_EVENT}", "events")
+
+
 def validate_task(con: sqlite3.Connection, db: Path, task_id: str, event: str, explicit_task_types: list[str]) -> GateReport:
     errors: list[Finding] = []
     warnings: list[Finding] = []
@@ -722,6 +903,10 @@ def validate_task(con: sqlite3.Connection, db: Path, task_id: str, event: str, e
     validate_input_filter_preflight(con, task_id, errors, notes)
     validate_command_compression_preflight(con, task, task_types, errors, notes)
     validate_scope_classification_preflight(con, task, task_types, errors, notes)
+    validate_plan_approval_boundary(con, task, task_types, errors, notes)
+    validate_user_claim_validation(con, task, task_types, errors, notes)
+    validate_state_artifact_ownership(con, task, task_types, errors, notes)
+    validate_patch_preflight(con, task, task_types, errors, notes)
 
     if event == "final":
         output_types = {row["output_type"] for row in rows(con, "outputs", task_id)}

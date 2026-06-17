@@ -179,6 +179,12 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   回复前，必须先运行 `lifecycle input-filter`，把 `requirements`、`triggers`、
   `outputs` 和 `events.event_type=input-filter.preflight` 写入结构化 task record；
   缺少这些事实时 `task-record gate --event preflight` 必须 fail closed。
+- 输入过滤器还必须把用户目标和用户陈述分开：用户陈述只能作为 claim，不能直接作为事实。
+  中/大型、修改型或规则/脚本/correction 任务缺少
+  `events.event_type=user-claim-validation.analysis`、claim 的 `trust_level`、
+  `risk_flags` 和 `verification_action` 时，`task-record gate --event preflight`
+  必须 fail closed。用户说“这是 bug”“应该这样”“现在状态是...”都要先核对
+  live state、规则或外部资料，不能盲从。
 - 输入记录属于 turn-start 事实，允许在 worktree 创建前先落库；worktree 证据属于
   prewrite/final 边界，修改型任务最终收口缺 worktree 时必须 fail closed。
 - 处理拦截器负责审批、worktree、联网核对、task tracking、脚本能力适配和状态机。
@@ -193,6 +199,12 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
 - 生命周期把输入来源区分为 `user`、`web`、`file`、`tool`、`agent`、`history`。
 - 联网输入必须记录 URL 或资料路径；不能把外部资料和用户指令混作同一事实。
 - 脚本判断与人工判断不一致时，在 task tracking 记录采用、修正或阻塞原因。
+- 计划、诊断、写入、stage、commit 和 push 是不同 join point。中/大型、修改型或
+  规则/脚本/correction 任务必须写入
+  `events.event_type=plan-approval-boundary.analysis`，其中 `execution_policy`
+  说明是否已批准本地执行，`push_policy` 必须为
+  `push_requires_separate_approval`。用户只是提问、指出问题或批准当前计划，不等于
+  批准新的诊断链、写入链或远端 push。
 - 生命周期还必须把当前任务、变更路径、候选命令和记录事实分类为
   `ai-client-governance-common`、`project-specialization`、`native-project-assets`、
   `mixed` 或 `unknown`。中/大型或修改型任务缺少 `scope-classification`
@@ -204,8 +216,8 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
 - 生成、选择或运行本地命令前，必须经过 `command-compression` 前置拦截器：
   使用 `python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-run plan ...`
   或等价本地分析记录 `event_type=command-compression.analysis`，说明哪些命令被去重、
-  合并、并行、交给 gate-pool 或必须按顺序执行。中/大型或修改型任务缺该事件时
-  `task-record gate` 必须 fail closed。
+  合并、并行、交给 gate-pool 或必须按顺序执行；payload 必须包含非空 `groups`。
+  中/大型或修改型任务缺该事件或缺 `groups` 时 `task-record gate` 必须 fail closed。
 - 命令压缩分析完成后，优先使用
   `python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-run run ...`
   执行确定性本地 DAG：只读/验证组可以并行，显式 `--cache` 时只缓存只读/验证节点；
@@ -214,6 +226,11 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   `--trace-json`；`--no-ledger` 只能用于隔离测试。宿主客户端裸 shell 调用若无法自动
   拦截，必须在 task record 中记录原因或改用 `task-run`、`gate-pool`、
   `tool-invocations run` 补账。
+- 脚本生成的状态、账本、lock、coord session、trace、doc-index、pycache 或 selftest
+  artifact 必须有 owner command、allowed artifacts、cleanup/reconcile 命令和验证证据。
+  规则/脚本任务缺少 `events.event_type=state-artifact-ownership.analysis` 时
+  `task-record gate` 必须 fail closed；脚本生成的数据出问题时先修脚本或走脚本修复
+  入口，不手工改运行态账本。
 - 重要本地命令的强制适配入口是
   `python .ai-client/ai-client-governance/scripts/ai_client_governance.py shell-adapter run -- ...`。
   `shell-adapter` 会写入本地 JSONL ledger，并在事件中记录 `adapter_enforcement`、
@@ -321,7 +338,12 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   并运行 `python .ai-client/ai-client-governance/scripts/ai_client_governance.py selftest` 覆盖黑盒强制行为。
 - 脚本能力不支持当前目标时，先记录 `## 脚本能力适配门禁`；不得手工改运行态、
   锁、账本或派生报告来伪造脚本能力。
-- Python 运行产生的缓存必须重定向到 `.ai-client/project/cache/python-pycache`。
+- 修改长文件、热点治理文件或多 worktree 可能同时修改的文件前，必须先做 patch
+  preflight：用 `rg`/`context-extract` 确认锚点唯一或重新提取更窄上下文，小步应用
+  patch，并记录 `events.event_type=patch-preflight.analysis`。缺少该事件时，
+  规则/脚本、docs 或 correction 任务的 `task-record gate` 必须 fail closed。
+- Python 运行产生的缓存必须重定向到 `.ai-client/project/cache/python-pycache`；selftest
+  或隔离测试可把同类路径重定向到自己的 run directory，并在 artifact manifest 中声明。
 - 文本文件必须用 UTF-8；JSON 不应带 UTF-8 BOM。
 - 编码验证入口：
   `python .ai-client/ai-client-governance/scripts/ai_client_governance.py validate-encoding ...`。
