@@ -343,6 +343,9 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
 
 - 用户只要求 commit 时默认只本地 commit，不 push。
 - 只有用户明确说 push、推送或提交并推送时，才允许 `git push`。
+- `worktree-task closeout-all` 只能做本地收口：merge、移除 worktree、删本地任务分支、
+  刷新状态和提交宿主 gitlink/state；它不能包含 `--push` 或执行 `git push`。
+  closeout 后需要推送时，必须作为单独步骤重新说明远端、分支和风险并获得明确批准。
 - stage/commit/push 前仍要遵守审批和 worktree 规则。
 - 工作区有无关脏改动时，只 stage 本次任务相关文件。
 - commit 后检查提交号、最新提交信息和剩余工作区状态。
