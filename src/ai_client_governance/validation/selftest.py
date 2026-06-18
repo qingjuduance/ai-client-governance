@@ -1642,6 +1642,26 @@ def test_task_run_command_compression_plan(root: Path, run_dir: Path) -> TestRes
             [
                 sys.executable,
                 str(ai_client_governance_entrypoint()),
+                "runtime",
+                "components",
+                "--event",
+                "write-intent",
+                "--task-type",
+                "code-debug",
+                "--task-size",
+                "small",
+                "--kind",
+                "processing-interceptor",
+                "--format",
+                "json",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
                 "task-run",
                 "plan",
                 "--task-id",
@@ -1690,12 +1710,15 @@ def test_task_run_command_compression_plan(root: Path, run_dir: Path) -> TestRes
         ),
     ]
     component_output = commands[0].stdout + commands[0].stderr
-    plan_output = commands[1].stdout + commands[1].stderr
-    host_plan_output = commands[2].stdout + commands[2].stderr
+    mutating_component_output = commands[1].stdout + commands[1].stderr
+    plan_output = commands[2].stdout + commands[2].stderr
+    host_plan_output = commands[3].stdout + commands[3].stderr
     passed = (
         all(command.exit_code == 0 for command in commands)
         and "preflight.interceptor.command-compression" in component_output
         and "preflight.interceptor.scope-classification" in component_output
+        and "preflight.interceptor.command-compression.mutating" in mutating_component_output
+        and "preflight.interceptor.task-run-dag.mutating" in mutating_component_output
         and "\"event_type\": \"command-compression.analysis\"" in plan_output
         and "\"scope_kind\": \"ai-client-governance-common\"" in plan_output
         and "\"skipped_duplicate_count\": 1" in plan_output
@@ -1822,6 +1845,8 @@ def test_task_run_dag_cache_diagnostics(root: Path, run_dir: Path) -> TestResult
     first_summary = first.get("summary", {}) if isinstance(first.get("summary"), dict) else {}
     second_summary = second.get("summary", {}) if isinstance(second.get("summary"), dict) else {}
     telemetry = diagnose.get("telemetry", {}) if isinstance(diagnose.get("telemetry"), dict) else {}
+    records = diagnose.get("records", {}) if isinstance(diagnose.get("records"), dict) else {}
+    alignment = records.get("alignment", {}) if isinstance(records.get("alignment"), dict) else {}
     filtered_telemetry = (
         filtered_diagnose.get("telemetry", {}) if isinstance(filtered_diagnose.get("telemetry"), dict) else {}
     )
@@ -1842,6 +1867,8 @@ def test_task_run_dag_cache_diagnostics(root: Path, run_dir: Path) -> TestResult
         and "ai-client-governance-common" in str(latest_event.get("scope_reason", ""))
         and not telemetry.get("duplicate_commands")
         and not telemetry.get("failures")
+        and records.get("db")
+        and "task_record_minus_queue_total" in alignment
         and filtered_filters.get("task_id") == "TASK-RUN-DAG-SELFTEST"
         and int(filtered_telemetry.get("event_count", 0)) >= 4
     )

@@ -231,6 +231,8 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   或等价本地分析记录 `event_type=command-compression.analysis`，说明哪些命令被去重、
   合并、并行、交给 gate-pool 或必须按顺序执行；payload 必须包含非空 `groups`。
   中/大型或修改型任务缺该事件或缺 `groups` 时 `task-record gate` 必须 fail closed。
+  runtime registry 必须同时覆盖中/大型任务和所有修改型任务；小型修改不能因为
+  `task_size=small` 跳过 `command-compression` 与 `task-run-dag` 节点。
 - 命令压缩分析完成后，优先使用
   `python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-run run ...`
   执行确定性本地 DAG：只读/验证组可以并行，显式 `--cache` 时只缓存只读/验证节点；
@@ -268,7 +270,9 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
 - 运行状态和资源遗漏检查使用
   `python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-run diagnose ...`；
   它报告 execution telemetry 失败、重复终态命令、cache hit/miss、coord lock/session 和裸 shell
-  自动拦截缺口，并可用 `--task-id`、`--trace-id`、`--since`、`--until` 收敛到当前任务。
+  自动拦截缺口，同时报告 task-record 与 task-queue 的数量差、当前任务是否两边都存在；
+  可用 `--task-id`、`--trace-id`、`--since`、`--until` 收敛到当前任务。
+  该差值是恢复和监控信号，不代表二者职责必须完全相同。
 - 执行 telemetry 记录入口是
   `python .ai-client/ai-client-governance/scripts/ai_client_governance.py telemetry record ...`；
   命令只是 `span_kind=command`、`subject_type=command` 的一种载荷，模型 HTTP、子 AI、

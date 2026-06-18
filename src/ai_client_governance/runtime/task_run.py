@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import re
+import sqlite3
 import subprocess
 import time
 from collections import Counter
@@ -18,7 +19,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from ai_client_governance.records import telemetry
+from ai_client_governance.records import task_queue, telemetry
 from ai_client_governance.runtime.scope import classify_scope
 
 
@@ -1037,6 +1038,7 @@ def build_diagnostics(
                 "important commands should run through shell-adapter, task-run, gate-pool, or the command adapter."
             ),
         },
+        "records": record_alignment_summary(root, db, task_id=task_id),
         "coordination": coord_summary(coord_root),
         "run": {
             "result_count": len(run_results),
@@ -1045,6 +1047,74 @@ def build_diagnostics(
             "cache_misses": len([item for item in run_results if item.cache_key and not item.cached]),
         },
     }
+
+
+def table_exists(con: sqlite3.Connection, table: str) -> bool:
+    row = con.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)).fetchone()
+    return row is not None
+
+
+def record_alignment_summary(root: Path, db: str | None = None, *, task_id: str = "") -> dict[str, Any]:
+    path = telemetry.db_path(host_project_root(root), db)
+    payload: dict[str, Any] = {
+        "db": str(path),
+        "task_record": {"available": False, "task_count": 0, "status_counts": {}},
+        "task_queue": {"available": False, "total": 0, "counts": {}},
+        "alignment": {
+            "task_record_minus_queue_total": 0,
+            "current_task_in_task_record": False,
+            "current_task_in_queue": False,
+            "notes": [],
+        },
+    }
+    if not path.exists():
+        payload["alignment"]["notes"].append("structured DB is missing")
+        return payload
+    try:
+        con = sqlite3.connect(path)
+        con.row_factory = sqlite3.Row
+        if table_exists(con, "tasks"):
+            rows = con.execute("SELECT status, count(*) AS count FROM tasks GROUP BY status").fetchall()
+            status_counts = {str(row["status"]): int(row["count"]) for row in rows}
+            record_count = sum(status_counts.values())
+            payload["task_record"] = {
+                "available": True,
+                "task_count": record_count,
+                "status_counts": status_counts,
+            }
+            if task_id:
+                current = con.execute("SELECT status FROM tasks WHERE task_id = ?", (task_id,)).fetchone()
+                payload["alignment"]["current_task_in_task_record"] = current is not None
+                if current:
+                    payload["task_record"]["current_task_status"] = str(current["status"])
+        else:
+            payload["alignment"]["notes"].append("task-record table is missing")
+    except sqlite3.Error as exc:
+        payload["task_record"]["error"] = str(exc)
+        payload["alignment"]["notes"].append("task-record summary failed")
+    try:
+        queue_state = task_queue.load_state(path)
+        queue_summary = task_queue.queue_summary(queue_state)
+        payload["task_queue"] = {
+            "available": True,
+            "total": int(queue_summary.get("total", 0)),
+            "counts": queue_summary.get("counts", {}),
+        }
+        if task_id:
+            payload["alignment"]["current_task_in_queue"] = any(
+                item.get("id") == task_id for item in queue_summary.get("all_tasks", [])
+            )
+    except Exception as exc:  # defensive: diagnostics should report, not hide, queue drift.
+        payload["task_queue"]["error"] = str(exc)
+        payload["alignment"]["notes"].append("task-queue summary failed")
+    record_count = int(payload["task_record"].get("task_count") or 0)
+    queue_total = int(payload["task_queue"].get("total") or 0)
+    payload["alignment"]["task_record_minus_queue_total"] = record_count - queue_total
+    if record_count != queue_total:
+        payload["alignment"]["notes"].append(
+            "task-record and task-queue have different scopes; use this delta as a recovery/monitoring signal"
+        )
+    return payload
 
 
 def format_plan_text(plan: CommandCompressionPlan) -> str:
