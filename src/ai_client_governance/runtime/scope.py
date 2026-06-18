@@ -75,6 +75,12 @@ def _path_scope(path: str, root: Path) -> tuple[str, str]:
         return COMMON_SCOPE, "path is the embedded .ai-client/ai-client-governance repository"
     if any(lowered.startswith(prefix.replace("\\", "/").lower()) for prefix in COMMON_PREFIXES):
         return COMMON_SCOPE, "path is under embedded .ai-client/ai-client-governance"
+    if lowered.startswith(".ai-client/project/.worktree/"):
+        parts = normalized.split("/")
+        if len(parts) >= 4:
+            task_worktree_root = root / Path(*parts[:4])
+            if is_governance_repo_root(task_worktree_root):
+                return COMMON_SCOPE, "path is inside an ai-client-governance task worktree"
     if lowered == ".ai-client/project":
         return PROJECT_SCOPE, "path is the .ai-client/project specialization root"
     if any(lowered.startswith(prefix.replace("\\", "/").lower()) for prefix in PROJECT_PREFIXES):

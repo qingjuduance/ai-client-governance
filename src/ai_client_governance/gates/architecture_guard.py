@@ -8,6 +8,7 @@ import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from ai_client_governance.audit import file_ownership
 from ai_client_governance.common.paths import AI_CLIENT_ROOT, PROJECT_DIR, PROJECT_RULES_ENTRY, PROJECT_SKILLS_DIR
 
 
@@ -35,10 +36,19 @@ AI_CLIENT_GOVERNANCE_SKILLS_DIR = AI_CLIENT_ROOT / "ai-client-governance" / "ski
 REQUIRED_PROJECT_PATHS = [
     PROJECT_DIR / "records",
     PROJECT_DIR / "agents",
-    PROJECT_DIR / "logs",
-    PROJECT_DIR / "state",
     PROJECT_DIR / "tools",
     PROJECT_RULES_ENTRY,
+]
+GENERATED_PROJECT_PATHS = [
+    PROJECT_DIR / "cache",
+    PROJECT_DIR / "tmp",
+    PROJECT_DIR / "logs",
+    PROJECT_DIR / "state",
+    PROJECT_DIR / ".worktree",
+    PROJECT_DIR / "doc-index",
+    PROJECT_DIR / "lifecycle",
+    PROJECT_DIR / "agents" / "comm" / "groups",
+    PROJECT_DIR / "agents" / "groups",
 ]
 PROJECT_ROOT_AGENTS = Path("AGENTS.md")
 ADAPTER_REQUIRED_MARKERS = (
@@ -123,6 +133,11 @@ def build_report(root: Path) -> dict[str, object]:
     for path in REQUIRED_PROJECT_PATHS:
         if not (root / path).exists():
             errors.append(Finding("error", f"required project path is missing: {path.as_posix()}", path.as_posix()))
+    generated_present = [path.as_posix() for path in GENERATED_PROJECT_PATHS if (root / path).exists()]
+    generated_absent = [path.as_posix() for path in GENERATED_PROJECT_PATHS if not (root / path).exists()]
+    notes.append(
+        f"generated runtime paths: present={len(generated_present)}, absent-generated-on-demand={len(generated_absent)}"
+    )
 
     root_agents = root / PROJECT_ROOT_AGENTS
     if not root_agents.exists():
@@ -226,9 +241,40 @@ def build_report(root: Path) -> dict[str, object]:
                     )
                 )
 
+    file_report = file_ownership.build_report(root)
+    for item in file_report.get("errors", []):
+        if isinstance(item, dict):
+            errors.append(
+                Finding(
+                    "error",
+                    "file ownership audit: " + str(item.get("message", "")),
+                    str(item.get("path", "")),
+                )
+            )
+    for item in file_report.get("warnings", []):
+        if isinstance(item, dict):
+            warnings.append(
+                Finding(
+                    "warning",
+                    "file ownership audit: " + str(item.get("message", "")),
+                    str(item.get("path", "")),
+                )
+            )
+    notes.append(
+        "file ownership: "
+        f"tracked={file_report.get('tracked_total', 0)}, "
+        f"ignored={file_report.get('ignored_untracked_count', 0)}, "
+        f"gitignore={file_report.get('gitignore', {}).get('status', 'unknown')}"
+    )
+
     return {
         "root": root.as_posix(),
         "required_ai_client_top": sorted(REQUIRED_AI_CLIENT_TOP),
+        "required_project_paths": [path.as_posix() for path in REQUIRED_PROJECT_PATHS],
+        "generated_project_paths": {
+            "present": generated_present,
+            "absent_generated_on_demand": generated_absent,
+        },
         "ai_client_top": ai_client_top_entries,
         "forbidden_codex_top": sorted(FORBIDDEN_CODEX_TOP),
         "codex_top": codex_top_entries,
@@ -247,6 +293,7 @@ def build_report(root: Path) -> dict[str, object]:
             "native_ai_client_governance": native_ai_client_governance_duplicates,
             "project_ai_client_governance": project_ai_client_governance_duplicates,
         },
+        "file_ownership_audit": file_report,
     }
 
 

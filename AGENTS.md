@@ -39,6 +39,11 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
 - **DB 是唯一活体治理状态**：任务队列、结构化任务记录、sync-check 结果、worktree
   live-state、lifecycle 状态和可查询审计事实默认写入 `.ai-client/project/state/aicg.db`。
   JSON/Markdown 只能通过显式导出命令输出给人读，不能作为后续机器逻辑的默认输入。
+- **宿主只追踪稳定治理资产**：宿主 Git 只能追踪 `.ai-client/ai-client-governance`
+  的 gitlink、治理配置、项目规则、项目 skills/tools、人读 records 和 agent brief。
+  `.ai-client/project/state/`、`logs/`、`tmp/`、`cache/`、`.worktree/`、`doc-index/`、
+  `lifecycle/` 以及 agent 运行通信状态都是本地活体产物，必须由安装器写入
+  `.gitignore` managed block，并由 `file-ownership audit` 统计和拦截。
 - **修改必有隔离与证据**：修改型任务默认通过 worktree、结构化 task record、写锁、
   执行 telemetry、验证记录和最终状态收口；不能只依赖对话记忆或最终回复口头声称完成。
 - **项目特化不污染通用层**：目标项目的业务、简历、学习路线、源码快照、目录结构、
@@ -242,6 +247,12 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   artifact 必须有 owner command、allowed artifacts、cleanup/reconcile 命令和验证证据；
   能入 DB 的状态不得退回默认 JSON/配置文件。确需贴近 Git common dir 的底层锁文件必须
   在 owner command 中声明原因、迁移边界和后续 DB 化任务。
+- 新项目初始化或重新安装治理框架时，安装器必须创建或更新根 `.gitignore` 中的
+  `AI Client Governance generated runtime` managed block；日常审计使用
+  `python .ai-client/ai-client-governance/scripts/ai_client_governance.py file-ownership audit --strict`
+  统计 `.ai-client` 路径的追踪类别、忽略产物和违规 tracked live-state。发现脚本生成
+  产物被 Git 追踪时，先修脚本/初始化/ignore 策略，再用 `git rm --cached` 解除索引追踪；
+  不把本地 DB、日志或 worktree 作为宿主提交资产。
   规则/脚本任务缺少 `events.event_type=state-artifact-ownership.analysis` 时
   `task-record gate` 必须 fail closed；脚本生成的数据出问题时先修脚本或走脚本修复
   入口，不手工改运行态 telemetry、coord 或 lock 数据。

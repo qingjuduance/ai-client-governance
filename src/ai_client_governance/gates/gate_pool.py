@@ -379,6 +379,26 @@ def build_steps(root: Path, args: argparse.Namespace) -> list[GateStep]:
                 reason="Report Git state at the output boundary without pushing.",
             )
         )
+    if args.final and "file-ownership" in gate_steps:
+        ownership_root = host_project_root(root)
+        steps.append(
+            GateStep(
+                name="ai_client_governance.py file-ownership audit",
+                phase="final-gate",
+                command=cli_command(
+                    py,
+                    entrypoint,
+                    "file-ownership",
+                    "audit",
+                    "--root",
+                    str(ownership_root),
+                    "--strict",
+                    "--record-state",
+                ),
+                final_gate=True,
+                reason="Final host-project .ai-client file ownership, .gitignore, and tracked live-state gate.",
+            )
+        )
     if args.final and "architecture-guard" in gate_steps:
         architecture_root = host_project_root(root)
         steps.append(

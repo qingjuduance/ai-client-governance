@@ -19,6 +19,7 @@ from ai_client_governance.common.paths import (
     TMP_DIR,
     TOOL_INVOCATIONS_DIR,
     ai_client_governance_entrypoint,
+    ai_client_governance_root,
 )
 from ai_client_governance.records import state_store
 from ai_client_governance.records import task_record as structured_task_record
@@ -1611,6 +1612,7 @@ def test_lifecycle_input_filter_preflight(root: Path, run_dir: Path) -> TestResu
 def test_task_run_command_compression_plan(root: Path, run_dir: Path) -> TestResult:
     host_project = run_dir / "task-run-host-project"
     embedded = host_project / ".ai-client" / "ai-client-governance"
+    governance_root = ai_client_governance_root()
     (embedded / "scripts").mkdir(parents=True, exist_ok=True)
     (embedded / "src" / "ai_client_governance").mkdir(parents=True, exist_ok=True)
     (embedded / "scripts" / "ai_client_governance.py").write_text("# selftest embedded entry\n", encoding="utf-8")
@@ -1661,7 +1663,7 @@ def test_task_run_command_compression_plan(root: Path, run_dir: Path) -> TestRes
                 "--format",
                 "json",
             ],
-            cwd=root,
+            cwd=governance_root,
             env_root=root,
         ),
         run_command(
@@ -1717,7 +1719,7 @@ def test_task_run_dag_cache_diagnostics(root: Path, run_dir: Path) -> TestResult
     jsonl_artifact_dir = run_dir / "task-run-telemetry-jsonl"
     cache_dir = run_dir / "task-run-cache"
     validation_command = (
-        "python scripts/ai_client_governance.py "
+        f"{sys.executable} {ai_client_governance_entrypoint()} "
         "validate-encoding --root . --paths README.md --strict"
     )
     run_base = [
@@ -1823,6 +1825,7 @@ def test_task_run_dag_cache_diagnostics(root: Path, run_dir: Path) -> TestResult
     filtered_telemetry = (
         filtered_diagnose.get("telemetry", {}) if isinstance(filtered_diagnose.get("telemetry"), dict) else {}
     )
+    latest_event = telemetry.get("adapter", {}).get("latest_event", {}) if isinstance(telemetry.get("adapter"), dict) else {}
     filtered_filters = (
         filtered_telemetry.get("filters", {}) if isinstance(filtered_telemetry.get("filters"), dict) else {}
     )
@@ -1835,7 +1838,8 @@ def test_task_run_dag_cache_diagnostics(root: Path, run_dir: Path) -> TestResult
         and "\"telemetry_path\"" in first_output
         and int(telemetry.get("event_count", 0)) >= 4
         and int(telemetry.get("adapter", {}).get("event_count", 0)) >= 2
-        and "ai-client-governance-common" in telemetry.get("scope_kind_counts", {})
+        and "mixed" in telemetry.get("scope_kind_counts", {})
+        and "ai-client-governance-common" in str(latest_event.get("scope_reason", ""))
         and not telemetry.get("duplicate_commands")
         and not telemetry.get("failures")
         and filtered_filters.get("task_id") == "TASK-RUN-DAG-SELFTEST"
@@ -1940,6 +1944,83 @@ def test_shell_adapter_scope_diagnostics(root: Path, run_dir: Path) -> TestResul
             "shell-adapter run writes scoped telemetry events and diagnose reports adapter evidence"
             if passed
             else "shell-adapter scoped telemetry diagnostics regression failed"
+        ),
+        commands=commands,
+    )
+
+
+def test_file_ownership_audit(root: Path, run_dir: Path) -> TestResult:
+    project = run_dir / "file-ownership-project"
+    (project / ".ai-client" / "project" / "rules" / "project").mkdir(parents=True, exist_ok=True)
+    (project / ".ai-client" / "project" / "state").mkdir(parents=True, exist_ok=True)
+    write_text_lf(project / "README.md", "# file ownership selftest\n")
+    write_text_lf(project / ".ai-client" / "ai-client-governance-config.json", "{}\n")
+    write_text_lf(project / ".ai-client" / "project" / "rules" / "project" / "AGENTS.md", "# project rules\n")
+    write_text_lf(project / ".ai-client" / "project" / "state" / "aicg.db", "not a tracked artifact\n")
+
+    commands = [
+        run_command(["git", "init", "-b", "main"], cwd=project, env_root=root),
+        run_command(["git", "config", "user.email", "selftest@example.invalid"], cwd=project, env_root=root),
+        run_command(["git", "config", "user.name", "ai-client-governance selftest"], cwd=project, env_root=root),
+        run_command(["git", "add", "README.md", ".ai-client"], cwd=project, env_root=root),
+        run_command(["git", "commit", "-m", "init file ownership selftest"], cwd=project, env_root=root),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "file-ownership",
+                "audit",
+                "--root",
+                str(project),
+                "--strict",
+            ],
+            cwd=project,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "file-ownership",
+                "ensure-gitignore",
+                "--root",
+                str(project),
+                "--execute",
+            ],
+            cwd=project,
+            env_root=root,
+        ),
+        run_command(
+            ["git", "rm", "--cached", ".ai-client/project/state/aicg.db"],
+            cwd=project,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "file-ownership",
+                "audit",
+                "--root",
+                str(project),
+                "--strict",
+            ],
+            cwd=project,
+            env_root=root,
+        ),
+    ]
+    bad_failed = commands[5].exit_code != 0 and "aicg.db" in (commands[5].stdout + commands[5].stderr)
+    ensured = commands[6].exit_code == 0 and "Action:" in commands[6].stdout
+    untracked = commands[7].exit_code == 0
+    good_passed = commands[8].exit_code == 0 and "Gitignore managed block: ok" in commands[8].stdout
+    passed = all(command.exit_code == 0 for command in commands[:5]) and bad_failed and ensured and untracked and good_passed
+    return TestResult(
+        name="file-ownership-audit",
+        passed=passed,
+        summary=(
+            "file-ownership audit rejects tracked live state and passes after managed gitignore plus git rm --cached"
+            if passed
+            else "file-ownership audit did not enforce tracked live-state and gitignore boundaries"
         ),
         commands=commands,
     )
@@ -2283,6 +2364,7 @@ def main() -> int:
             test_task_run_command_compression_plan(root, run_dir),
             test_task_run_dag_cache_diagnostics(root, run_dir),
             test_shell_adapter_scope_diagnostics(root, run_dir),
+            test_file_ownership_audit(root, run_dir),
             test_worktree_closeout_all_plan(root, run_dir),
             test_sync_check_records_db_state(root, run_dir),
             test_worktree_closeout_all_closes_coord_session(root, run_dir),

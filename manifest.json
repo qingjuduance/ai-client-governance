@@ -367,6 +367,60 @@
     "skillConflictPolicy": "prefer-native-then-project-then-ai-client-governance-and-report-duplicate",
     "nativeProjectContentWritePolicy": "read-index-report-only-unless-user-explicitly-approves"
   },
+  "fileOwnershipPolicy": {
+    "hostTracked": {
+      "commonRepo": ".ai-client/ai-client-governance as a Git gitlink/submodule entry only",
+      "config": ".ai-client/ai-client-governance-config.json",
+      "projectStableAssets": [
+        ".ai-client/project/rules/",
+        ".ai-client/project/skills/",
+        ".ai-client/project/tools/",
+        ".ai-client/project/records/",
+        ".ai-client/project/agents/briefs/"
+      ],
+      "forbidden": [
+        "normal files under .ai-client/ai-client-governance/",
+        ".ai-client/project/state/",
+        ".ai-client/project/logs/",
+        ".ai-client/project/tmp/",
+        ".ai-client/project/cache/",
+        ".ai-client/project/.worktree/",
+        ".ai-client/project/doc-index/",
+        ".ai-client/project/lifecycle/",
+        ".ai-client/project/agents/comm/groups/",
+        ".ai-client/project/agents/comm/locks.json",
+        ".ai-client/project/agents/groups/"
+      ]
+    },
+    "gitignorePolicy": {
+      "installerMustEnsureManagedBlock": true,
+      "managedBlockBegin": "# BEGIN AI Client Governance generated runtime",
+      "managedBlockEnd": "# END AI Client Governance generated runtime",
+      "requiredPatterns": [
+        ".ai-client/project/cache/",
+        ".ai-client/project/tmp/",
+        ".ai-client/project/logs/",
+        ".ai-client/project/state/",
+        ".ai-client/project/.worktree/",
+        ".ai-client/project/doc-index/",
+        ".ai-client/project/lifecycle/",
+        ".ai-client/project/agents/comm/groups/",
+        ".ai-client/project/agents/comm/locks.json",
+        ".ai-client/project/agents/groups/"
+      ]
+    },
+    "audit": {
+      "command": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py file-ownership audit --root . --strict --record-state",
+      "gate": "architecture-guard",
+      "stateStore": ".ai-client/project/state/aicg.db",
+      "strictFailures": [
+        "tracked live generated path",
+        "tracked .ai-client/project/state/aicg.db",
+        "tracked normal file inside the common governance repo",
+        "missing or outdated managed .gitignore block"
+      ]
+    }
+  },
   "repoContents": {
     "commonRules": "AGENTS.md",
     "commonRulesSemantics": "agent-neutral governance contract exposed through the AGENTS.md adapter",
@@ -414,6 +468,7 @@
     "existingFilesPolicy": {
       "rootAgents": "create-only-when-missing; rewrite-only-with-ForceRootEntry",
       "agentAdapters": "not-generated-by-default; create-missing-with-InstallAgentAdapters; rewrite-only-with-ForceAgentAdapters",
+      "gitignore": "create-or-update-ai-client-runtime-managed-block; preserve-user-rules-outside-block",
       "config": "backup-then-rewrite",
       "projectRules": "create-only-when-missing",
       "nativeProjectSkills": "preserve-existing; never-modify-without-explicit-user-approval",

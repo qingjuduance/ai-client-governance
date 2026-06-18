@@ -10,6 +10,7 @@
 | 通用规则事实源 | `.ai-client/ai-client-governance/AGENTS.md`，文件名只是入口适配，内容是 agent-neutral 治理契约。 |
 | 项目规则入口 | 目标项目 `.ai-client/project/rules/project/AGENTS.md` |
 | 结构化事实源 | `.ai-client/project/state/aicg.db`；Markdown 只作为报告导出和历史审计。 |
+| 文件归属审计 | `file-ownership audit` 统计 `.ai-client` 追踪/忽略类别；安装器维护 `.gitignore` runtime block。 |
 | 入口适配器 | `AGENTS.md`、`CLAUDE.md`、`GEMINI.md`、Copilot/Cursor/Cline/Windsurf/Continue/Roo/Aider 等工具原生规则入口。 |
 | 机器清单 | `manifest.json` |
 | 嵌入脚本 | `install-ai-client-governance.ps1`，一键嵌入、生成目标项目配置，默认只生成 `AGENTS.md` 薄入口；其它平台 adapter 需显式开启。 |
@@ -469,6 +470,32 @@ target-project/
 - `.ai-client/project/rules/project/`：目标项目维护的本地规则，不写回本仓库。
 - schema 4 不提供 common 规则、scripts 或 skills 的分散复制目标；需要通用内容时，
   直接读取 `.ai-client/ai-client-governance/` 内的仓库文件。
+
+## 文件归属和 `.gitignore`
+
+宿主仓库只应追踪稳定治理资产：`.ai-client/ai-client-governance` 的 Git
+gitlink、`.ai-client/ai-client-governance-config.json`、项目规则、项目
+skills/tools、人读 records 和 agent briefs。`.ai-client/ai-client-governance/`
+内部普通文件属于嵌入式通用仓库自身，不应作为宿主普通文件提交。
+
+本地活体产物不进入宿主 Git：`.ai-client/project/state/`、`logs/`、`tmp/`、
+`cache/`、`.worktree/`、`doc-index/`、`lifecycle/`、agent 通信运行目录和
+`agents/groups/`。安装器会在根 `.gitignore` 中创建或更新
+`AI Client Governance generated runtime` managed block；用户自定义 ignore
+规则不会被覆盖。
+
+审计和统计入口：
+
+```powershell
+python .ai-client\ai-client-governance\scripts\ai_client_governance.py file-ownership audit `
+  --root . `
+  --strict `
+  --record-state
+```
+
+审计报告会按类别统计 tracked `.ai-client` 文件、ignored 运行态路径、违规 tracked
+live-state 和 `.gitignore` managed block 状态；`--record-state` 将摘要写入
+`.ai-client/project/state/aicg.db`，不生成新的 JSON 快照。
 
 ## 脚本包结构与统一入口
 
@@ -1020,6 +1047,10 @@ $pyRoots = @(
 $pyFiles = Get-ChildItem -Recurse -Filter *.py $pyRoots
 python -m py_compile ($pyFiles | ForEach-Object { $_.FullName })
 python .ai-client\ai-client-governance\scripts\ai_client_governance.py --list
+python .ai-client\ai-client-governance\scripts\ai_client_governance.py file-ownership audit `
+  --root . `
+  --strict `
+  --record-state
 python .ai-client\ai-client-governance\scripts\ai_client_governance.py validate-encoding `
   --paths .ai-client\ai-client-governance\AGENTS.md `
   .ai-client\ai-client-governance\README.md `

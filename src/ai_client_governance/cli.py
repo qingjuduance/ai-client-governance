@@ -8,7 +8,7 @@ from collections.abc import Callable
 
 from ai_client_governance.agents import comm as agent_comm
 from ai_client_governance.agents import group_status
-from ai_client_governance.audit import rule_tooling_audit
+from ai_client_governance.audit import file_ownership, rule_tooling_audit
 from ai_client_governance.docs import doc_index, validate_doc_task
 from ai_client_governance.gates import architecture_guard, gate_pool, session_gate, task_gate
 from ai_client_governance.io import context_extract
@@ -30,6 +30,7 @@ COMMANDS: dict[str, tuple[str, Callable[[], int]]] = {
     "contract": ("Describe typed structured record contracts before execution.", contract.main),
     "context-extract": ("Extract safe slices from long context files.", context_extract.main),
     "doc-index": ("Build and check Markdown document reference indexes.", doc_index.main),
+    "file-ownership": ("Audit .ai-client host-project tracked and ignored paths.", file_ownership.main),
     "gate-pool": ("Run a traceable pool of gates.", gate_pool.main),
     "lifecycle": ("Run lifecycle preflight/finalize/status.", lifecycle.main),
     "rule-audit": ("Audit rule-entry and README sections for tooling migration.", rule_tooling_audit.main),
