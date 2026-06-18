@@ -558,7 +558,7 @@ def default_components() -> list[ComponentDefinition]:
             205,
             "Require a clear task analysis contract before write-intent.",
             task_sizes=("medium", "large"),
-            events=("plan-output", "write-intent", "resume"),
+            events=("plan-output", "write-intent", "resume", "final-output"),
             requires_facts=("task_id", "changed_paths", "acceptance_criteria"),
             produces_facts=("analysis_contract", "validation_budget"),
             mechanism_label="ai_client_governance.py completion-test --require-analysis",
@@ -1442,7 +1442,7 @@ def default_components() -> list[ComponentDefinition]:
         ),
         component(
             "reporter.framework-debt",
-            "reporter",
+            "cross-cutting-gate",
             "report",
             906,
             "Report open framework design debt before architecture passes.",

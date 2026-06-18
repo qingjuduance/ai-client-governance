@@ -614,6 +614,42 @@ def percentile(values: list[int], pct: float) -> int | None:
     return ordered[index]
 
 
+def duration_stats(values: list[int]) -> dict[str, int | float | None]:
+    return {
+        "sum": sum(values),
+        "avg": round(sum(values) / len(values), 2) if values else None,
+        "p50": percentile(values, 0.50),
+        "p95": percentile(values, 0.95),
+        "max": max(values) if values else None,
+    }
+
+
+def compact_span(span: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "name": span.get("name") or "",
+        "phase": span.get("phase") or "",
+        "event_type": span.get("event_type") or "",
+        "duration_ms": span.get("duration_ms"),
+        "status": span.get("status") or "",
+        "exit_code": span.get("exit_code"),
+        "cached": bool(span.get("cached")),
+        "summary": span.get("summary") or "",
+        "subject": span.get("subject_redacted") or "",
+    }
+
+
+def is_validation_span(span: dict[str, Any]) -> bool:
+    phase = str(span.get("phase") or "")
+    event_type = str(span.get("event_type") or "")
+    name = str(span.get("name") or "").lower()
+    return (
+        phase in {"validation", "completion", "final-gate"}
+        or event_type in {"validation", "gate", "gate-pool"}
+        or "validation" in name
+        or "completion-test" in name
+    )
+
+
 def build_report(args: argparse.Namespace) -> dict[str, Any]:
     root = Path(args.root).resolve()
     spans = span_rows(
@@ -626,6 +662,18 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
     )
     terminal = [span for span in spans if span.get("status") != "started"]
     durations = [int(span["duration_ms"]) for span in terminal if span.get("duration_ms") is not None]
+    validation_spans = [span for span in terminal if span.get("duration_ms") is not None and is_validation_span(span)]
+    phases = sorted({str(span.get("phase") or "unknown") for span in terminal})
+    duration_by_phase = {
+        phase: duration_stats(
+            [
+                int(span["duration_ms"])
+                for span in terminal
+                if str(span.get("phase") or "unknown") == phase and span.get("duration_ms") is not None
+            ]
+        )
+        for phase in phases
+    }
     failures = [
         span
         for span in terminal
@@ -649,13 +697,20 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
         "terminal_span_count": len(terminal),
         "failed_count": len(failures),
         "failure_rate": (len(failures) / len(terminal)) if terminal else 0,
-        "duration_ms": {
-            "sum": sum(durations),
-            "avg": round(sum(durations) / len(durations), 2) if durations else None,
-            "p50": percentile(durations, 0.50),
-            "p95": percentile(durations, 0.95),
-            "max": max(durations) if durations else None,
-        },
+        "duration_ms": duration_stats(durations),
+        "duration_by_phase": duration_by_phase,
+        "slowest_spans": [
+            compact_span(span)
+            for span in sorted(
+                [span for span in terminal if span.get("duration_ms") is not None],
+                key=lambda item: int(item.get("duration_ms") or 0),
+                reverse=True,
+            )[: args.top]
+        ],
+        "slowest_validation_spans": [
+            compact_span(span)
+            for span in sorted(validation_spans, key=lambda item: int(item.get("duration_ms") or 0), reverse=True)[: args.top]
+        ],
         "cache": {
             "hits": len([span for span in terminal if span.get("cached")]),
             "misses": len([span for span in terminal if span.get("cache_key") and not span.get("cached")]),
@@ -704,6 +759,22 @@ def format_text(report: dict[str, Any]) -> str:
     for row in report["top_subjects"]:
         lines.append(f"  count={row['count']} {row['subject']}")
     lines.append("")
+    lines.append("Duration by phase:")
+    for phase, stats in report["duration_by_phase"].items():
+        lines.append(
+            f"  {phase}: sum={stats['sum']} avg={stats['avg']} p50={stats['p50']} "
+            f"p95={stats['p95']} max={stats['max']}"
+        )
+    lines.append("")
+    lines.append("Slowest validation spans:")
+    if report["slowest_validation_spans"]:
+        for row in report["slowest_validation_spans"]:
+            lines.append(
+                f"  {row['duration_ms']}ms {row['name']} [{row['phase']}/{row['event_type']}] status={row['status']}"
+            )
+    else:
+        lines.append("  none")
+    lines.append("")
     lines.append("Duplicate subjects:")
     if report["duplicate_subjects"]:
         for row in report["duplicate_subjects"]:
@@ -746,6 +817,16 @@ def format_markdown(report: dict[str, Any]) -> str:
     lines.extend(["", "## Top Subjects", "", "| Count | Subject |", "| ---: | --- |"])
     for row in report["top_subjects"]:
         lines.append(f"| {row['count']} | `{row['subject']}` |")
+    lines.extend(["", "## Duration By Phase", "", "| Phase | Sum ms | Avg ms | P50 | P95 | Max |", "| --- | ---: | ---: | ---: | ---: | ---: |"])
+    for phase, stats in report["duration_by_phase"].items():
+        lines.append(f"| {phase} | {stats['sum']} | {stats['avg']} | {stats['p50']} | {stats['p95']} | {stats['max']} |")
+    lines.extend(["", "## Slowest Validation Spans", ""])
+    if report["slowest_validation_spans"]:
+        lines.extend(["| Duration ms | Name | Phase | Event | Status |", "| ---: | --- | --- | --- | --- |"])
+        for row in report["slowest_validation_spans"]:
+            lines.append(f"| {row['duration_ms']} | `{row['name']}` | {row['phase']} | {row['event_type']} | {row['status']} |")
+    else:
+        lines.append("None.")
     lines.extend(["", "## Duplicate Subjects", ""])
     if report["duplicate_subjects"]:
         lines.extend(["| Count | Subject |", "| ---: | --- |"])

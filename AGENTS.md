@@ -334,6 +334,10 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   `python .ai-client/ai-client-governance/scripts/ai_client_governance.py framework-debt ...`；
   记录至少包含问题、影响、期望改法、为什么需要框架改造、当前 workaround、
   下次触发条件和关联任务。
+- 计划、恢复或收口治理架构任务时，必须让开放架构债可见：使用
+  `framework-debt report` 或由 `gate-pool` 自动触发的 `framework-debt` report-only gate
+  汇总 P0/P1 和当前范围相关项。已修复或被新架构替代的 debt 必须及时标记为
+  resolved/rejected/deferred；在专用清理命令实现前，用 `add --replace` 更新状态。
 - 多分支任务必须记录 `## 主任务分支状态门禁`，覆盖每个分支的状态、证据和下一步。
 - 模板由程序输出：
   `python .ai-client/ai-client-governance/scripts/ai_client_governance.py templates task-tracking`。
@@ -499,6 +503,11 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   检查，完整 selftest 只在 full profile、高风险/发布级变更或显式升级预算时强制。
   如果 required checks 超出预算，先缩小范围、拆任务或显式升级，不允许反复补跑
   expensive checks 直到收口。
+- `lifecycle preflight` 和 `gate-pool` 命中 `analysis-contract` 组件时，必须 fail closed
+  地要求 `analysis-summary`、`analysis-scope`、`non-goal`、`risk`、`acceptance` 和验证预算；
+  final-output 的 completion-test 也要复核该契约。`completion-test` 和 `telemetry report`
+  必须暴露计划慢项、实际最慢 validation/completion/final-gate span 和预算压力，避免只用
+  “跑了很多测试”替代耗时根因分析。
 - Git push 状态不是定时任务；它属于输出边界审计。计划、状态和最终答复前只报告
   dirty/ahead/behind/push 边界，不自动 push，除非用户明确批准推送。
 - 规则/脚本/文档链路变更后，最终记录必须覆盖治理节点是否可见、门禁是否执行、

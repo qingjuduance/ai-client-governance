@@ -1625,6 +1625,16 @@ def test_lifecycle_input_filter_preflight(root: Path, run_dir: Path) -> TestResu
                 "code-debug",
                 "--db",
                 str(db),
+                "--analysis-summary",
+                "Verify lifecycle input-filter facts before preflight.",
+                "--analysis-scope",
+                "src/ai_client_governance/lifecycle/engine.py",
+                "--non-goal",
+                "Do not exercise repository writes in this selftest.",
+                "--risk",
+                "Analysis-contract gates must not hide missing input-filter facts.",
+                "--acceptance",
+                "Preflight passes when task-record facts and analysis contract are complete.",
                 "--format",
                 "json",
             ],
@@ -1651,6 +1661,7 @@ def test_lifecycle_input_filter_preflight(root: Path, run_dir: Path) -> TestResu
         and "scope-classification" in input_filter_output
         and "input-filter preflight facts present" in gate_output
         and "task-record preflight gate passed" in lifecycle_output
+        and "analysis contract passed" in lifecycle_output
     )
     return TestResult(
         name="lifecycle-input-filter-preflight",
@@ -2433,6 +2444,8 @@ def test_completion_test_analysis_budget(root: Path, run_dir: Path) -> TestResul
         and "analysis-summary" in missing_payload.get("missing_analysis", [])
         and complete_payload.get("analysis_contract", {}).get("ready_for_write") is True
         and complete_payload.get("validation_budget", {}).get("blocked_by_budget") is False
+        and complete_payload.get("validation_attribution", {}).get("budget_pressure") in {"low", "medium", "high"}
+        and complete_payload.get("validation_attribution", {}).get("planned_slowest_required")
         and "validation-budget" in over_budget_payload.get("budget_errors", [])
     )
     return TestResult(
@@ -2537,6 +2550,259 @@ def test_framework_debt_register(root: Path, run_dir: Path) -> TestResult:
             else "framework-debt register did not persist the expected row"
         ),
         commands=commands,
+    )
+
+
+def test_framework_debt_report(root: Path, run_dir: Path) -> TestResult:
+    db = run_dir / "framework-debt-report.db"
+    commands = [
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "framework-debt",
+                "--db",
+                str(db),
+                "add",
+                "--item-id",
+                "FD-SELFTEST-P0",
+                "--title",
+                "P0 surfacing smoke",
+                "--category",
+                "validation",
+                "--severity",
+                "P0",
+                "--problem",
+                "Important debt must surface automatically.",
+                "--impact",
+                "Agents can miss critical architecture issues.",
+                "--desired-change",
+                "Report important debt during planning and closeout.",
+                "--framework-change-required",
+                "The fix spans report, registry, and gate-pool.",
+                "--next-trigger",
+                "selftest",
+                "--replace",
+                "--format",
+                "json",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "framework-debt",
+                "--db",
+                str(db),
+                "add",
+                "--item-id",
+                "FD-SELFTEST-P2",
+                "--title",
+                "P2 low priority smoke",
+                "--category",
+                "docs",
+                "--severity",
+                "P2",
+                "--problem",
+                "Lower priority debt should remain recorded.",
+                "--impact",
+                "It should not crowd out P0/P1 surfacing.",
+                "--desired-change",
+                "Keep it below the P1 report cutoff.",
+                "--framework-change-required",
+                "The fix depends on debt report filtering.",
+                "--next-trigger",
+                "selftest",
+                "--replace",
+                "--format",
+                "json",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "framework-debt",
+                "--db",
+                str(db),
+                "report",
+                "--min-severity",
+                "P1",
+                "--task-type",
+                "rules-script",
+                "--changed-path",
+                "src/ai_client_governance/validation/completion.py",
+                "--format",
+                "json",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "gate-pool",
+                "--dry-run",
+                "--task-id",
+                "TASK-SELFTEST-DEBT",
+                "--task-type",
+                "rules-script",
+                "--changed-path",
+                "src/ai_client_governance/validation/completion.py",
+                "--event",
+                "final-output",
+                "--final",
+                "--format",
+                "json",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+    ]
+    try:
+        report_payload = json.loads(commands[2].stdout)
+        gate_payload = json.loads(commands[3].stdout)
+    except json.JSONDecodeError:
+        report_payload = {}
+        gate_payload = {}
+    report_ids = [item.get("item_id") for item in report_payload.get("items", []) if isinstance(item, dict)]
+    gate_commands = [" ".join(step.get("command", [])) for step in gate_payload.get("steps", []) if isinstance(step, dict)]
+    passed = (
+        all(command.exit_code == 0 for command in commands)
+        and "FD-SELFTEST-P0" in report_ids
+        and "FD-SELFTEST-P2" not in report_ids
+        and any("framework-debt" in command and "report" in command for command in gate_commands)
+    )
+    return TestResult(
+        name="framework-debt-report",
+        passed=passed,
+        summary=(
+            "framework-debt report surfaces important debt and gate-pool plans it"
+            if passed
+            else "framework-debt report/gate-pool surfacing regressed"
+        ),
+        commands=commands,
+    )
+
+
+def test_lifecycle_analysis_contract_preflight(root: Path, run_dir: Path) -> TestResult:
+    db = run_dir / "analysis-contract.db"
+    task_id = "TASK-SELFTEST-ANALYSIS-CONTRACT"
+    input_filter = run_command(
+        [
+            sys.executable,
+            str(ai_client_governance_entrypoint()),
+            "lifecycle",
+            "input-filter",
+            "--root",
+            str(root),
+            "--db",
+            str(db),
+            "--task-id",
+            task_id,
+            "--title",
+            "Analysis contract selftest",
+            "--message",
+            "Implement a rules-script change with a preflight analysis contract.",
+            "--task-type",
+            "rules-script",
+            "--changed-path",
+            "src/ai_client_governance/validation/completion.py",
+            "--approved-label",
+            "批准：selftest-analysis-contract",
+            "--apply-task-record",
+            "--replace",
+            "--format",
+            "json",
+        ],
+        cwd=root,
+        env_root=root,
+    )
+    missing = run_command(
+        [
+            sys.executable,
+            str(ai_client_governance_entrypoint()),
+            "lifecycle",
+            "preflight",
+            "--root",
+            str(root),
+            "--db",
+            str(db),
+            "--task-id",
+            task_id,
+            "--task-type",
+            "rules-script",
+            "--changed-path",
+            "src/ai_client_governance/validation/completion.py",
+            "--format",
+            "json",
+        ],
+        cwd=root,
+        env_root=root,
+    )
+    complete = run_command(
+        [
+            sys.executable,
+            str(ai_client_governance_entrypoint()),
+            "lifecycle",
+            "preflight",
+            "--root",
+            str(root),
+            "--db",
+            str(db),
+            "--task-id",
+            task_id,
+            "--task-type",
+            "rules-script",
+            "--changed-path",
+            "src/ai_client_governance/validation/completion.py",
+            "--analysis-summary",
+            "Implement lifecycle analysis contract enforcement.",
+            "--analysis-scope",
+            "src/ai_client_governance/lifecycle/engine.py",
+            "--non-goal",
+            "Do not run full selftest in this preflight smoke.",
+            "--risk",
+            "Budget enforcement must fail before writes.",
+            "--acceptance",
+            "Preflight passes only when analysis fields are complete.",
+            "--budget-seconds",
+            "90",
+            "--format",
+            "json",
+        ],
+        cwd=root,
+        env_root=root,
+    )
+    try:
+        missing_payload = json.loads(missing.stdout)
+        complete_payload = json.loads(complete.stdout)
+    except json.JSONDecodeError:
+        missing_payload = {}
+        complete_payload = {}
+    missing_messages = [item.get("message", "") for item in missing_payload.get("errors", []) if isinstance(item, dict)]
+    complete_messages = [item.get("message", "") for item in complete_payload.get("notes", []) if isinstance(item, dict)]
+    passed = (
+        input_filter.exit_code == 0
+        and missing.exit_code == 1
+        and complete.exit_code == 0
+        and any("analysis contract is incomplete" in message for message in missing_messages)
+        and any("analysis contract passed" in message for message in complete_messages)
+    )
+    return TestResult(
+        name="lifecycle-analysis-contract-preflight",
+        passed=passed,
+        summary=(
+            "lifecycle preflight fails closed without analysis and passes with complete analysis"
+            if passed
+            else "lifecycle analysis contract preflight regressed"
+        ),
+        commands=[input_filter, missing, complete],
     )
 
 
@@ -2888,6 +3154,8 @@ def main() -> int:
             test_completion_test_profiles(root, run_dir),
             test_completion_test_analysis_budget(root, run_dir),
             test_framework_debt_register(root, run_dir),
+            test_framework_debt_report(root, run_dir),
+            test_lifecycle_analysis_contract_preflight(root, run_dir),
             test_sync_check_records_db_state(root, run_dir),
             test_worktree_closeout_all_closes_coord_session(root, run_dir),
         ]

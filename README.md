@@ -961,16 +961,32 @@ python scripts\ai_client_governance.py gate-pool `
 
 python scripts\ai_client_governance.py completion-test `
   --task-type rules-script `
+  --changed-path src\ai_client_governance\runtime\registry.py `
+  --require-analysis `
+  --analysis-summary "..." `
+  --analysis-scope src\ai_client_governance\runtime\registry.py `
+  --non-goal "..." `
+  --risk "..." `
+  --acceptance "..." `
+  --budget-seconds 90
+
+python scripts\ai_client_governance.py framework-debt report `
+  --min-severity P1 `
+  --task-type rules-script `
   --changed-path src\ai_client_governance\runtime\registry.py
 ```
 
 `gate-pool --dry-run` 是只读规划入口；没有 `--task-id` 或 `--task-tracking` 时会用
 `<task-id>` 占位展示门禁链路，真正执行时仍必须提供结构化 task id 或历史 tracking。
+当 registry 命中 `analysis-contract` 时，`gate-pool` 会自动给 completion-test 加
+`--require-analysis`；当命中 `framework-debt` 时，会自动计划 `framework-debt report`。
 
 验收时至少看五件事：`runtime components` 能看到相关节点，`task-run plan/run/diagnose`
 和 `telemetry report` 能证明本地命令压缩、telemetry 和 cache 行为，`gate-pool --dry-run`
-能看到一次聚合后的 `ai_client_governance.py doc-index` 和 completion/worktree 节点，
-`completion-test` 能生成测试计划，`tool-flow` 能看到最终门禁和报告。
+能看到一次聚合后的 `ai_client_governance.py doc-index`、completion/worktree 节点和
+`framework-debt report`，`completion-test` 能生成测试计划、分析契约和验证耗时归因，
+`telemetry report` 能列出最慢 validation/completion/final-gate spans，`tool-flow`
+能看到最终门禁和报告。
 如果链路没有触发、重复触发或明显拖慢任务，必须在结构化 task record 记录原因并修正
 触发条件或 `gate_step` 去重策略。
 

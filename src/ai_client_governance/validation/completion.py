@@ -21,6 +21,7 @@ import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from ai_client_governance.records import telemetry
 from ai_client_governance.records.task_record import connect, db_path, rows, task_row
 
 
@@ -64,6 +65,16 @@ class ValidationBudget:
     expensive_required_checks: list[str]
     blocked_by_budget: bool
     decision: str
+
+
+@dataclass(frozen=True)
+class ValidationAttribution:
+    planned_slowest_required: list[dict[str, object]]
+    planned_slowest_optional: list[dict[str, object]]
+    actual_slowest_validation_spans: list[dict[str, object]]
+    budget_pressure: str
+    likely_bottlenecks: list[str]
+    recommendations: list[str]
 
 
 PROFILE_BUDGET_SECONDS = {
@@ -301,6 +312,105 @@ def build_validation_budget(
     )
 
 
+def actual_validation_spans(root: Path, task_id: str | None, trace_id: str | None, db_override: str | None, top: int) -> list[dict[str, object]]:
+    if not task_id and not trace_id:
+        return []
+    try:
+        spans = telemetry.span_rows(root, db=db_override, task_id=task_id or "", trace_id=trace_id or "")
+    except (sqlite3.Error, ValueError, OSError):
+        return []
+    validation_phases = {"validation", "completion", "final-gate"}
+    validation_events = {"validation", "gate", "gate-pool"}
+    candidates = [
+        span
+        for span in spans
+        if span.get("duration_ms") is not None
+        and (
+            str(span.get("phase") or "") in validation_phases
+            or str(span.get("event_type") or "") in validation_events
+            or "validation" in str(span.get("name") or "").lower()
+            or "completion-test" in str(span.get("name") or "").lower()
+        )
+    ]
+    candidates.sort(key=lambda item: int(item.get("duration_ms") or 0), reverse=True)
+    result: list[dict[str, object]] = []
+    for span in candidates[:top]:
+        result.append(
+            {
+                "name": span.get("name") or "",
+                "phase": span.get("phase") or "",
+                "event_type": span.get("event_type") or "",
+                "duration_ms": span.get("duration_ms"),
+                "status": span.get("status") or "",
+                "exit_code": span.get("exit_code"),
+                "cached": bool(span.get("cached")),
+                "summary": span.get("summary") or "",
+            }
+        )
+    return result
+
+
+def planned_check_dict(check: PlannedCheck) -> dict[str, object]:
+    return {
+        "id": check.id,
+        "command": check.command,
+        "required": check.required,
+        "estimated_seconds": check.estimated_seconds,
+        "cost": check.cost,
+        "reason": check.reason,
+    }
+
+
+def build_validation_attribution(
+    checks: list[PlannedCheck],
+    budget: ValidationBudget,
+    *,
+    root: Path,
+    task_id: str | None,
+    trace_id: str | None,
+    db_override: str | None,
+    top: int,
+) -> ValidationAttribution:
+    required = sorted((check for check in checks if check.required), key=lambda item: item.estimated_seconds, reverse=True)
+    optional = sorted((check for check in checks if not check.required), key=lambda item: item.estimated_seconds, reverse=True)
+    actual = actual_validation_spans(root, task_id, trace_id, db_override, top)
+    pressure_ratio = budget.estimated_required_seconds / budget.budget_seconds if budget.budget_seconds else 0
+    if budget.blocked_by_budget:
+        pressure = "blocked"
+    elif pressure_ratio >= 0.8:
+        pressure = "high"
+    elif pressure_ratio >= 0.5:
+        pressure = "medium"
+    else:
+        pressure = "low"
+    likely: list[str] = []
+    if required:
+        likely.append(f"largest-planned-required-check={required[0].id}:{required[0].estimated_seconds}s")
+    if budget.expensive_required_checks:
+        likely.append("expensive-required-checks=" + ",".join(budget.expensive_required_checks))
+    if actual:
+        likely.append(f"slowest-actual-validation={actual[0]['name']}:{actual[0]['duration_ms']}ms")
+    if not actual:
+        likely.append("actual-validation-telemetry-missing")
+    recommendations: list[str] = []
+    if budget.blocked_by_budget:
+        recommendations.append("split scope, lower required checks, or explicitly upgrade the validation budget")
+    if optional and optional[0].cost == "expensive":
+        recommendations.append(f"keep {optional[0].id} optional unless the task is high-risk, release-like, or explicitly full-profile")
+    if actual:
+        recommendations.append("optimize or cache the slowest actual validation spans before adding more checks")
+    else:
+        recommendations.append("run validations through gate-pool/task-run/tool-invocations so duration_ms evidence exists")
+    return ValidationAttribution(
+        planned_slowest_required=[planned_check_dict(check) for check in required[:top]],
+        planned_slowest_optional=[planned_check_dict(check) for check in optional[:top]],
+        actual_slowest_validation_spans=actual,
+        budget_pressure=pressure,
+        likely_bottlenecks=likely,
+        recommendations=recommendations,
+    )
+
+
 def structured_evidence_text(root: Path, task_id: str | None, db_override: str | None) -> str:
     if not task_id:
         return ""
@@ -339,6 +449,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--task-tracking", help="Task tracking file used for optional evidence scan.")
     parser.add_argument("--task-id", help="Structured task id used for optional SQLite evidence scan.")
     parser.add_argument("--db", help="Structured task-record SQLite path.")
+    parser.add_argument("--trace-id", help="Trace id used to load actual validation telemetry.")
     parser.add_argument(
         "--profile",
         choices=("fast", "full"),
@@ -354,6 +465,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--risk", action="append", default=[], help="Known risk or uncertainty before execution; repeatable.")
     parser.add_argument("--acceptance", action="append", default=[], help="User-visible acceptance criterion; repeatable.")
     parser.add_argument("--require-evidence", action="store_true", help="Fail if required planned checks are not mentioned in task tracking.")
+    parser.add_argument("--attribution-top", type=int, default=5, help="Number of slow planned/actual validation items to explain.")
     parser.add_argument("--format", choices=("text", "json"), default="text")
     return parser.parse_args()
 
@@ -371,6 +483,15 @@ def main() -> int:
         budget_seconds=args.budget_seconds,
         allow_expensive=args.allow_expensive,
     )
+    validation_attribution = build_validation_attribution(
+        checks,
+        validation_budget,
+        root=root,
+        task_id=args.task_id,
+        trace_id=args.trace_id,
+        db_override=args.db,
+        top=max(1, args.attribution_top),
+    )
     tracking = Path(args.task_tracking) if args.task_tracking else None
     if tracking and not tracking.is_absolute():
         tracking = root / tracking
@@ -387,6 +508,7 @@ def main() -> int:
         "changed_paths": changed_paths,
         "analysis_contract": asdict(analysis_contract),
         "validation_budget": asdict(validation_budget),
+        "validation_attribution": asdict(validation_attribution),
         "planned_checks": [asdict(check) | {"evidence_found": hits.get(check.id, False)} for check in checks],
         "missing_evidence": missing,
         "missing_analysis": analysis_missing,
@@ -405,6 +527,12 @@ def main() -> int:
             f"optional={validation_budget.estimated_optional_seconds}s budget={validation_budget.budget_seconds}s"
         )
         print(f"- decision: {validation_budget.decision}")
+        print("Validation attribution:")
+        print(f"- budget pressure: {validation_attribution.budget_pressure}")
+        for item in validation_attribution.likely_bottlenecks:
+            print(f"- bottleneck: {item}")
+        for item in validation_attribution.recommendations:
+            print(f"- recommendation: {item}")
         print("Completion test plan:")
         for check in checks:
             marker = "evidence=yes" if hits.get(check.id) else "evidence=no"

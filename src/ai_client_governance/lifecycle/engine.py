@@ -29,6 +29,7 @@ from ai_client_governance.records import task_record as structured_task_record
 from ai_client_governance.runtime import AgentExecutionContext, default_registry, requires_approval_for, requires_tracking_for
 from ai_client_governance.runtime.registry import MUTATING_TASK_TYPES, NODE_EVENTS, TASK_TYPE_KEYWORDS
 from ai_client_governance.runtime.scope import classify_scope
+from ai_client_governance.validation import completion
 
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -749,6 +750,14 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--db", help="Structured task-record SQLite path.")
     parser.add_argument("--approved-label", help="Approval label, for example 批准：计划-生命周期状态机门禁.")
     parser.add_argument("--trace-id", help="Trace id. Default: generated.")
+    parser.add_argument("--completion-profile", choices=("fast", "full"), default="fast", help="Validation profile used by analysis-contract preflight.")
+    parser.add_argument("--budget-seconds", type=int, help="Maximum required validation seconds allowed before write-intent.")
+    parser.add_argument("--allow-expensive", action="store_true", help="Allow required validation checks to exceed the declared budget.")
+    parser.add_argument("--analysis-summary", default="", help="One-sentence task understanding before write-intent.")
+    parser.add_argument("--analysis-scope", action="append", default=[], help="Explicit analysis scope before write-intent.")
+    parser.add_argument("--non-goal", action="append", default=[], help="Explicit non-goal or excluded scope.")
+    parser.add_argument("--risk", action="append", default=[], help="Known risk or uncertainty before execution.")
+    parser.add_argument("--acceptance", action="append", default=[], help="User-visible acceptance criterion.")
     parser.add_argument(
         "--record-state",
         action="store_true",
@@ -881,6 +890,69 @@ def validate_structured_record(
         notes.append(Finding("note", f"task-record {event} gate passed for {task_id}"))
 
 
+def validate_analysis_contract(
+    root: Path,
+    args: argparse.Namespace,
+    classification: Classification,
+    errors: list[Finding],
+    notes: list[Finding],
+) -> None:
+    """Fail preflight when analysis scope, risk, acceptance, or budget is unclear."""
+    context = AgentExecutionContext(
+        input_source=getattr(args, "input_source", "user"),
+        task_types=tuple(classification.task_types),
+        task_size=classification.task_size,
+        changed_paths=tuple(classification.changed_paths),
+        final=False,
+        event=classification.runtime_event,
+    )
+    if "analysis-contract" not in default_registry().gate_step_ids_for_context(context):
+        return
+    contract_args = argparse.Namespace(
+        analysis_summary=getattr(args, "analysis_summary", ""),
+        analysis_scope=getattr(args, "analysis_scope", []),
+        non_goal=getattr(args, "non_goal", []),
+        risk=getattr(args, "risk", []),
+        acceptance=getattr(args, "acceptance", []),
+    )
+    contract = completion.build_analysis_contract(contract_args, classification.changed_paths)
+    checks = completion.planned_checks(
+        classification.task_types,
+        classification.changed_paths,
+        profile=getattr(args, "completion_profile", "fast"),
+    )
+    budget = completion.build_validation_budget(
+        checks,
+        profile=getattr(args, "completion_profile", "fast"),
+        budget_seconds=getattr(args, "budget_seconds", None),
+        allow_expensive=bool(getattr(args, "allow_expensive", False)),
+    )
+    if contract.missing_fields:
+        errors.append(
+            Finding(
+                "error",
+                "analysis contract is incomplete before write-intent: " + ", ".join(contract.missing_fields),
+                "ai_client_governance.py lifecycle",
+            )
+        )
+    if budget.blocked_by_budget:
+        errors.append(
+            Finding(
+                "error",
+                "validation budget is exceeded before write-intent: "
+                f"required={budget.estimated_required_seconds}s budget={budget.budget_seconds}s",
+                "ai_client_governance.py lifecycle",
+            )
+        )
+    if not contract.missing_fields and not budget.blocked_by_budget:
+        notes.append(
+            Finding(
+                "note",
+                f"analysis contract passed; validation budget {budget.estimated_required_seconds}s/{budget.budget_seconds}s",
+            )
+        )
+
+
 def build_report(args: argparse.Namespace, phase: str, state: str) -> LifecycleReport:
     root = Path(args.root).resolve()
     trace_id = args.trace_id or default_trace_id()
@@ -892,6 +964,8 @@ def build_report(args: argparse.Namespace, phase: str, state: str) -> LifecycleR
     if phase in {"preflight", "finalize"}:
         validate_tracking(root, args, classification, errors, warnings)
         validate_structured_record(root, args, classification, phase, errors, warnings, notes)
+    if phase == "preflight":
+        validate_analysis_contract(root, args, classification, errors, notes)
     if input_record.needs_citation and not input_record.derived_from:
         warnings.append(Finding("warning", "web input should record --derived-from source URL(s)."))
     if classification.task_size == "large":

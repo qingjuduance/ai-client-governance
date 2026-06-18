@@ -22,6 +22,8 @@ from ai_client_governance.common.paths import STRUCTURED_DB_PATH
 
 STATUSES = ("open", "planned", "in_progress", "resolved", "deferred", "rejected")
 SEVERITIES = ("P0", "P1", "P2", "P3")
+SEVERITY_RANK = {severity: index for index, severity in enumerate(SEVERITIES)}
+OPEN_STATUSES = {"open", "planned", "in_progress", "deferred"}
 
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -159,6 +161,106 @@ def list_items(con: sqlite3.Connection, *, statuses: list[str], category: str, i
     return [dict(row) for row in con.execute(query, params)]
 
 
+def min_severity_items(items: list[dict[str, Any]], min_severity: str) -> list[dict[str, Any]]:
+    cutoff = SEVERITY_RANK[min_severity]
+    return [item for item in items if SEVERITY_RANK.get(str(item["severity"]), 99) <= cutoff]
+
+
+def count_by(items: list[dict[str, Any]], field: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in items:
+        key = str(item.get(field) or "")
+        counts[key] = counts.get(key, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def infer_categories(task_types: list[str], changed_paths: list[str]) -> list[str]:
+    categories: list[str] = []
+    mapping = {
+        "rules-script": ("runtime", "lifecycle", "validation", "framework-debt", "policy"),
+        "docs": ("docs", "framework-debt"),
+        "git": ("worktree", "policy", "lifecycle"),
+        "multi-agent": ("multi-agent",),
+        "correction": ("correction", "lifecycle"),
+    }
+    for task_type in task_types:
+        for category in mapping.get(task_type, ()):
+            if category not in categories:
+                categories.append(category)
+    path_blob = "\n".join(path.replace("\\", "/") for path in changed_paths)
+    path_mapping = {
+        "src/ai_client_governance/validation/": "validation",
+        "src/ai_client_governance/lifecycle/": "lifecycle",
+        "src/ai_client_governance/runtime/": "runtime",
+        "src/ai_client_governance/gates/": "policy",
+        "src/ai_client_governance/worktree/": "worktree",
+        "src/ai_client_governance/records/framework_debt.py": "framework-debt",
+        "README.md": "docs",
+        "AGENTS.md": "docs",
+    }
+    for marker, category in path_mapping.items():
+        if marker in path_blob and category not in categories:
+            categories.append(category)
+    return categories
+
+
+def build_report(
+    items: list[dict[str, Any]],
+    *,
+    min_severity: str,
+    max_items: int,
+    task_types: list[str],
+    changed_paths: list[str],
+) -> dict[str, Any]:
+    open_items = [item for item in items if item["status"] in OPEN_STATUSES]
+    important = min_severity_items(open_items, min_severity)
+    relevant_categories = infer_categories(task_types, changed_paths)
+    relevant = [
+        item
+        for item in important
+        if item["severity"] in {"P0", "P1"} or not relevant_categories or item["category"] in relevant_categories
+    ]
+    return {
+        "count": len(items),
+        "open_count": len(open_items),
+        "important_count": len(important),
+        "min_severity": min_severity,
+        "by_severity": count_by(open_items, "severity"),
+        "by_category": count_by(open_items, "category"),
+        "relevant_categories": relevant_categories,
+        "task_types": task_types,
+        "changed_paths": changed_paths,
+        "items": relevant[:max_items],
+        "has_p0": any(item["severity"] == "P0" for item in open_items),
+        "decision": (
+            "surface-before-write-or-closeout: open P0/P1 framework debt is visible"
+            if relevant
+            else "no-important-open-framework-debt-for-current-scope"
+        ),
+    }
+
+
+def render_report_text(report: dict[str, Any]) -> str:
+    lines = [
+        "Framework debt report:",
+        f"- open: {report['open_count']} important({report['min_severity']}+): {report['important_count']}",
+        f"- by severity: {json.dumps(report['by_severity'], ensure_ascii=False, sort_keys=True)}",
+        f"- by category: {json.dumps(report['by_category'], ensure_ascii=False, sort_keys=True)}",
+        f"- decision: {report['decision']}",
+    ]
+    if report["relevant_categories"]:
+        lines.append(f"- relevant categories: {', '.join(report['relevant_categories'])}")
+    if not report["items"]:
+        lines.append("- no matching important open items")
+        return "\n".join(lines)
+    lines.append("Important open items:")
+    for item in report["items"]:
+        lines.append(f"- {item['item_id']} [{item['severity']}/{item['status']}] {item['title']}")
+        lines.append(f"  impact: {item['impact']}")
+        lines.append(f"  next: {item['next_trigger']}")
+    return "\n".join(lines)
+
+
 def render_text(items: list[dict[str, Any]]) -> str:
     lines = ["Framework debt register:"]
     if not items:
@@ -219,6 +321,21 @@ def parse_args() -> argparse.Namespace:
     list_cmd.add_argument("--category", default="")
     list_cmd.add_argument("--include-closed", action="store_true")
 
+    report = sub.add_parser("report", help="Summarize important open framework debt for planning or closeout.")
+    common_cli_args.add_common_global_args(report, suppress_default=True)
+    report.add_argument("--status", action="append", choices=STATUSES, default=[])
+    report.add_argument("--category", default="")
+    report.add_argument("--include-closed", action="store_true")
+    report.add_argument("--min-severity", choices=SEVERITIES, default="P1")
+    report.add_argument("--max-items", type=int, default=12)
+    report.add_argument("--task-type", action="append", default=[], help="Task type used to infer relevant debt categories.")
+    report.add_argument("--changed-path", action="append", default=[], help="Changed path used to infer relevant debt categories.")
+    report.add_argument(
+        "--fail-on-open-p0",
+        action="store_true",
+        help="Exit 1 when any open P0 item exists. Use only for release-style gates.",
+    )
+
     export = sub.add_parser("export-md", help="Export matching debt items as Markdown.")
     common_cli_args.add_common_global_args(export, suppress_default=True)
     export.add_argument("--status", action="append", choices=STATUSES, default=[])
@@ -249,6 +366,18 @@ def main() -> int:
             payload = {"db": str(path), "count": len(items), "items": items}
             print(json.dumps(payload, ensure_ascii=False, indent=2) if args.format == "json" else render_text(items))
             return 0
+        if args.command == "report":
+            items = list_items(con, statuses=args.status, category=args.category, include_closed=args.include_closed)
+            report = build_report(
+                items,
+                min_severity=args.min_severity,
+                max_items=max(1, args.max_items),
+                task_types=args.task_type,
+                changed_paths=args.changed_path,
+            )
+            payload = {"db": str(path), **report}
+            print(json.dumps(payload, ensure_ascii=False, indent=2) if args.format == "json" else render_report_text(payload))
+            return 1 if args.fail_on_open_p0 and payload["has_p0"] else 0
         if args.command == "export-md":
             items = list_items(con, statuses=args.status, category=args.category, include_closed=args.include_closed)
             text = render_markdown(items)
