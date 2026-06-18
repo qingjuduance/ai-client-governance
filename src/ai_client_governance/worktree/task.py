@@ -1196,13 +1196,22 @@ def execute_closeout_all(plan: dict[str, Any], args: argparse.Namespace) -> int:
             )
 
             stage_paths = sorted(closeout_owned_host_paths(project_root, args.task_tracking))
+            existing_stage_paths = [path for path in stage_paths if (project_root / path).exists()]
             run_closeout_process(
                 plan,
-                ["git", "add", "-f", "--", *stage_paths],
+                ["git", "add", "-A", "--", *stage_paths],
                 cwd=project_root,
-                action="stage-host-closeout",
+                action="stage-host-closeout-tracked",
                 repo="self",
             )
+            if existing_stage_paths:
+                run_closeout_process(
+                    plan,
+                    ["git", "add", "-f", "--", *existing_stage_paths],
+                    cwd=project_root,
+                    action="stage-host-closeout-ignored",
+                    repo="self",
+                )
             run_closeout_process(
                 plan,
                 ["git", "diff", "--cached", "--check"],
