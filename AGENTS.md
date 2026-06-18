@@ -252,7 +252,9 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   `python .ai-client/ai-client-governance/scripts/ai_client_governance.py file-ownership audit --strict`
   统计 `.ai-client` 路径的追踪类别、忽略产物和违规 tracked live-state。发现脚本生成
   产物被 Git 追踪时，先修脚本/初始化/ignore 策略，再用 `git rm --cached` 解除索引追踪；
-  不把本地 DB、日志或 worktree 作为宿主提交资产。
+  不把本地 DB、日志或 worktree 作为宿主提交资产。closeout/host-closeout 只能刷新
+  ignored DB 运行态，不能把 `.ai-client/project/state/` 或其他 live-state 通过
+  `git add -f` 重新纳入宿主提交。
   规则/脚本任务缺少 `events.event_type=state-artifact-ownership.analysis` 时
   `task-record gate` 必须 fail closed；脚本生成的数据出问题时先修脚本或走脚本修复
   入口，不手工改运行态 telemetry、coord 或 lock 数据。

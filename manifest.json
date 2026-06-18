@@ -413,6 +413,7 @@
       "command": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py file-ownership audit --root . --strict --record-state",
       "gate": "architecture-guard",
       "stateStore": ".ai-client/project/state/aicg.db",
+      "closeoutPolicy": "closeout-all may stage the embedded governance gitlink and explicit task-tracking paths only; it must not git add -f live DB, legacy JSON state, logs, caches, or task worktrees.",
       "strictFailures": [
         "tracked live generated path",
         "tracked .ai-client/project/state/aicg.db",

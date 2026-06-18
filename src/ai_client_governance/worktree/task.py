@@ -640,11 +640,7 @@ def status_lines_outside(status_text: str, allowed_paths: set[str]) -> list[str]
 
 def closeout_owned_host_paths(project_root: Path, task_tracking: list[str] | None = None) -> set[str]:
     """Return host paths that closeout-all is allowed to stage and commit."""
-    paths = {
-        ".ai-client/project/state/aicg.db",
-        ".ai-client/project/state/ai-client-governance-state.json",
-        ".ai-client/project/state/worktrees.json",
-    }
+    paths: set[str] = set()
     if host_gitlink_record(project_root, ".ai-client/ai-client-governance").get("mode") == "160000":
         paths.add(".ai-client/ai-client-governance")
     for path in resolve_project_paths(project_root, task_tracking):

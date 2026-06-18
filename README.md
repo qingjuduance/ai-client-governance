@@ -497,6 +497,10 @@ python .ai-client\ai-client-governance\scripts\ai_client_governance.py file-owne
 live-state 和 `.gitignore` managed block 状态；`--record-state` 将摘要写入
 `.ai-client/project/state/aicg.db`，不生成新的 JSON 快照。
 
+`worktree-task closeout-all` 只能提交稳定宿主资产，例如嵌入式治理仓库 gitlink 或显式
+传入的 task-tracking 文件；它不得把 `.ai-client/project/state/aicg.db`、旧 JSON
+状态、日志、缓存或 task worktree 通过 `git add -f` 重新纳入宿主 Git。
+
 ## 脚本包结构与统一入口
 
 `ai-client-governance` 的实现代码采用类似 Spring Boot 根包的组织方式：

@@ -1950,6 +1950,8 @@ def test_shell_adapter_scope_diagnostics(root: Path, run_dir: Path) -> TestResul
 
 
 def test_file_ownership_audit(root: Path, run_dir: Path) -> TestResult:
+    from ai_client_governance.worktree.task import closeout_owned_host_paths
+
     project = run_dir / "file-ownership-project"
     (project / ".ai-client" / "project" / "rules" / "project").mkdir(parents=True, exist_ok=True)
     (project / ".ai-client" / "project" / "state").mkdir(parents=True, exist_ok=True)
@@ -2013,14 +2015,23 @@ def test_file_ownership_audit(root: Path, run_dir: Path) -> TestResult:
     ensured = commands[6].exit_code == 0 and "Action:" in commands[6].stdout
     untracked = commands[7].exit_code == 0
     good_passed = commands[8].exit_code == 0 and "Gitignore managed block: ok" in commands[8].stdout
-    passed = all(command.exit_code == 0 for command in commands[:5]) and bad_failed and ensured and untracked and good_passed
+    closeout_paths = closeout_owned_host_paths(project)
+    closeout_excludes_live_state = ".ai-client/project/state/aicg.db" not in closeout_paths
+    passed = (
+        all(command.exit_code == 0 for command in commands[:5])
+        and bad_failed
+        and ensured
+        and untracked
+        and good_passed
+        and closeout_excludes_live_state
+    )
     return TestResult(
         name="file-ownership-audit",
         passed=passed,
         summary=(
-            "file-ownership audit rejects tracked live state and passes after managed gitignore plus git rm --cached"
+            "file-ownership audit rejects tracked live state, closeout excludes live DB, and passes after managed gitignore plus git rm --cached"
             if passed
-            else "file-ownership audit did not enforce tracked live-state and gitignore boundaries"
+            else "file-ownership audit or closeout live-state exclusion did not enforce tracked live-state and gitignore boundaries"
         ),
         commands=commands,
     )
