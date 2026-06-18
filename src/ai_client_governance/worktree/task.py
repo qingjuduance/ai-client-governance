@@ -652,6 +652,30 @@ def closeout_owned_host_paths(project_root: Path, task_tracking: list[str] | Non
     return paths
 
 
+def discard_legacy_host_state_dirt(plan: dict[str, Any], project_root: Path) -> None:
+    """Discard dirty legacy JSON state before a DB-only self merge deletes it."""
+    legacy_paths = [
+        ".ai-client/project/state/ai-client-governance-state.json",
+        ".ai-client/project/state/worktrees.json",
+    ]
+    status_text = short_status(project_root)
+    dirty_legacy = [
+        path
+        for path in legacy_paths
+        if any(status_path_from_line(line) == path for line in status_text.splitlines())
+    ]
+    if not dirty_legacy:
+        return
+    run_closeout_process(
+        plan,
+        ["git", "restore", "--worktree", "--", *dirty_legacy],
+        cwd=project_root,
+        action="discard-legacy-host-state",
+        repo="self",
+        task_slug="",
+    )
+
+
 def governance_script_for_project(project_root: Path) -> Path:
     """Return the embedded governance script, falling back to the current source tree."""
     embedded = project_root / ".ai-client" / "ai-client-governance" / "scripts" / "ai_client_governance.py"
@@ -1033,6 +1057,8 @@ def execute_closeout_all(plan: dict[str, Any], args: argparse.Namespace) -> int:
             if not repo_tasks:
                 continue
             source_repo = Path(str(plan["repositories"][repo_name]["source_repo"]))
+            if repo_name == "self":
+                discard_legacy_host_state_dirt(plan, project_root)
             for task in repo_tasks:
                 task_slug = str(task["task_slug"])
                 branch = str(task["branch"])
