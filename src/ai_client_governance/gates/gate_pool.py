@@ -83,6 +83,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--non-goal", action="append", default=[], help="Non-goal passed to completion-test.")
     parser.add_argument("--risk", action="append", default=[], help="Risk boundary passed to completion-test.")
     parser.add_argument("--acceptance", action="append", default=[], help="Acceptance criterion passed to completion-test.")
+    parser.add_argument("--debt-min-severity", choices=("P0", "P1", "P2", "P3"), default="P1", help="Minimum framework-debt severity surfaced by report gates.")
     parser.add_argument(
         "--event",
         choices=(
@@ -365,12 +366,14 @@ def build_steps(root: Path, args: argparse.Namespace) -> list[GateStep]:
             completion_args.extend(["--task-id", args.task_id])
         if args.db:
             completion_args.extend(["--db", args.db])
+        if args.trace_id:
+            completion_args.extend(["--trace-id", args.trace_id])
         completion_args.extend(["--profile", args.completion_profile])
         if args.budget_seconds is not None:
             completion_args.extend(["--budget-seconds", str(args.budget_seconds)])
         if args.allow_expensive:
             completion_args.append("--allow-expensive")
-        if args.require_analysis:
+        if args.require_analysis or "analysis-contract" in gate_steps:
             completion_args.append("--require-analysis")
         if args.analysis_summary:
             completion_args.extend(["--analysis-summary", args.analysis_summary])
@@ -393,6 +396,30 @@ def build_steps(root: Path, args: argparse.Namespace) -> list[GateStep]:
                 command=cli_command(py, entrypoint, "completion-test", *completion_args),
                 final_gate=args.final,
                 reason="Plan completion tests from changed paths and task types.",
+            )
+        )
+    if "framework-debt" in gate_steps:
+        debt_root = host_project_root(root)
+        debt_args = [
+            "--root",
+            str(debt_root),
+            "report",
+            "--min-severity",
+            args.debt_min_severity,
+            "--max-items",
+            str(args.top),
+        ]
+        for task_type in task_types:
+            debt_args.extend(["--task-type", task_type])
+        for path in changed_paths:
+            debt_args.extend(["--changed-path", path])
+        steps.append(
+            GateStep(
+                name="ai_client_governance.py framework-debt report",
+                phase="report",
+                command=cli_command(py, entrypoint, "framework-debt", *debt_args),
+                final_gate=args.final,
+                reason="Surface important open framework debt before planning or closeout.",
             )
         )
     if "git-state-audit" in gate_steps:
