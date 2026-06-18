@@ -596,14 +596,14 @@ def default_components() -> list[ComponentDefinition]:
             dedupe_key="task_id:event:changed_paths:command_candidates",
             condition=(
                 "Run before write-intent or final-output for every medium/large or mutating task; "
-                "prefer one local task-run/gate-pool/tool-ledger pass over repeated model-mediated command selection."
+                "prefer one local task-run/gate-pool/telemetry pass over repeated model-mediated command selection."
             ),
             performance_budget="local command list normalization and grouping only; no repository scan unless explicit commands do it",
             metadata={
                 "join_point": "write-intent",
                 "required_event": "command-compression.analysis",
                 "aop_role": "around-advice",
-                "ledger_policy": "wrap important shell commands with tool-invocations run until host shell interception exists",
+                "telemetry_policy": "write execution spans to aicg.db through task-run, gate-pool, shell-adapter, telemetry record, or the command adapter until host shell interception exists",
             },
         ),
         component(
@@ -657,7 +657,7 @@ def default_components() -> list[ComponentDefinition]:
             dedupe_key="task_id:event:state-artifact-ownership",
             condition=(
                 "Run when scripts generate coord sessions, locks, lifecycle state, doc-index, pycache, or selftest artifacts; "
-                "generated ledgers must be repaired by scripts, not hand-edited."
+                "generated telemetry must be repaired by scripts, not hand-edited."
             ),
             performance_budget="constant-time manifest check plus optional owner-command validation",
             metadata={
@@ -701,7 +701,7 @@ def default_components() -> list[ComponentDefinition]:
             task_sizes=("medium", "large"),
             events=("write-intent", "after-change", "resume", "final-output"),
             requires_facts=("task_id", "command_compression_analysis", "command_candidates"),
-            produces_facts=("task_run_report", "tool_invocation_ledger", "cache_decision"),
+            produces_facts=("task_run_report", "execution_telemetry", "cache_decision"),
             mechanism_label="ai_client_governance.py task-run run",
             gate_label="ai_client_governance.py task-run diagnose",
             gate_step="task-run-diagnostics",
@@ -712,7 +712,7 @@ def default_components() -> list[ComponentDefinition]:
                 "Run after command-compression analysis when local commands are deterministic enough to execute; "
                 "readonly and validation groups may parallelize/cache, stateful groups remain ordered and no-cache."
             ),
-            performance_budget="single local DAG pass; cache only readonly/validation nodes with declared inputs; ledger writes are mandatory by default",
+            performance_budget="single local DAG pass; cache only readonly/validation nodes with declared inputs; telemetry writes to aicg.db are mandatory by default",
             dependencies=("preflight.interceptor.command-compression",),
             metadata={
                 "join_point": "write-intent",
@@ -729,7 +729,7 @@ def default_components() -> list[ComponentDefinition]:
                     "git_head",
                 ),
                 "uncacheable": "stateful/sequential commands and live worktree probes such as git status/git diff",
-                "observability": "trace_json plus tool-invocations JSONL ledger",
+                "observability": "trace_json plus execution telemetry spans in aicg.db",
             },
         ),
         component(
@@ -1240,14 +1240,35 @@ def default_components() -> list[ComponentDefinition]:
             fail_policy="fail_closed",
         ),
         component(
-            "reporter.tool-invocations",
+            "reporter.telemetry",
             "reporter",
             "report",
-            900,
-            "Report traced tool and gate invocations.",
+            895,
+            "Report unified execution telemetry from aicg.db.",
+            events=("status-output", "resume", "final-output"),
             final_only=True,
-            gate_step="tool-invocations",
+            mechanism_label="ai_client_governance.py telemetry report",
+            gate_step="telemetry",
             fail_policy="report_only",
+            produces_facts=("execution_telemetry_report",),
+            effect="readonly",
+            condition="Run when execution volume, duration, cache, duplicate, failure, or trace statistics are needed.",
+            performance_budget="read indexed SQLite execution_spans/execution_events only; no command execution",
+            metadata={
+                "reports": (
+                    "top operations",
+                    "top subjects",
+                    "duplicate subjects",
+                    "span kind counts",
+                    "subject type counts",
+                    "failure rate",
+                    "duration p50/p95/max",
+                    "cache hit/miss counts",
+                    "scope kind counts",
+                    "adapter enforcement counts",
+                ),
+                "fact_source": ".ai-client/project/state/aicg.db",
+            },
         ),
         component(
             "reporter.tool-flow",
@@ -1264,7 +1285,7 @@ def default_components() -> list[ComponentDefinition]:
             "reporter",
             "report",
             920,
-            "Report task-run cache, command ledger, and worktree coordination diagnostics.",
+            "Report task-run cache, execution telemetry, and worktree coordination diagnostics.",
             events=("status-output", "resume", "final-output"),
             mechanism_label="ai_client_governance.py task-run diagnose",
             gate_step="task-run-diagnostics",
@@ -1272,11 +1293,11 @@ def default_components() -> list[ComponentDefinition]:
             produces_facts=("task_run_diagnostics",),
             effect="readonly",
             condition="Run when reporting current execution health, final closeout, or resumed task state.",
-            performance_budget="read local JSONL ledgers and coord state only; no command execution",
+            performance_budget="read SQLite telemetry and coord state only; no command execution",
             metadata={
                 "reports": (
                     "duplicate terminal commands",
-                    "failed ledger events",
+                    "failed telemetry events",
                     "cache hit/miss counts",
                     "active locks",
                     "missing worktree sessions",

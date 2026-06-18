@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Render AI Client Governance tool invocation flow from the local JSONL ledger.
+"""Render AI Client Governance execution flow from unified telemetry.
 
-The script is read-only. It turns .ai-client/project/logs/tool-invocations/*.jsonl
-records into a time-sequence flow today, and it can use optional parent fields
-when the ledger grows trace/tree support later.
+The default source is .ai-client/project/state/aicg.db. A JSONL directory may be
+provided explicitly for isolated tests or one-off exports.
 """
 
 from __future__ import annotations
@@ -18,8 +17,9 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from ai_client_governance.common.paths import TOOL_INVOCATIONS_DIR
+from ai_client_governance.records import telemetry
 
-DEFAULT_LEDGER_DIR = TOOL_INVOCATIONS_DIR
+DEFAULT_JSONL_ARTIFACT_DIR = TOOL_INVOCATIONS_DIR
 SUCCESS_STATUSES = {"success", "succeeded", "passed", "ok"}
 FAILURE_STATUSES = {"failed", "error", "invalid"}
 FINAL_GATE_NAMES = {
@@ -62,7 +62,7 @@ class FlowIssue:
 @dataclass(frozen=True)
 class FlowReport:
     root: str
-    ledger_files: list[str]
+    telemetry_sources: list[str]
     invocations: list[Invocation]
     issues: list[FlowIssue]
     summary: dict[str, Any]
@@ -71,13 +71,14 @@ class FlowReport:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Render a flow graph from AI Client Governance tool invocation JSONL ledgers."
+        description="Render a flow graph from AI Client Governance execution telemetry."
     )
     parser.add_argument("--root", default=".", help="Repository root.")
     parser.add_argument(
-        "--ledger-dir",
-        help="Ledger directory. Defaults to .ai-client/project/logs/tool-invocations under root.",
+        "--jsonl-artifact-dir",
+        help="Explicit JSONL artifact directory for isolated tests or exports. Default reads aicg.db.",
     )
+    parser.add_argument("--db", help="SQLite telemetry DB. Default: <root>/.ai-client/project/state/aicg.db.")
     parser.add_argument("--task-tracking", help="Filter by task tracking substring.")
     parser.add_argument("--trace-id", help="Filter by trace id.")
     parser.add_argument("--since", help="Only include invocations after this date/time.")
@@ -102,7 +103,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--require-report",
         action="store_true",
-        help="Exit non-zero when no invocation records an ai_client_governance.py tool-invocations report.",
+        help="Exit non-zero when no invocation records an ai_client_governance.py telemetry report.",
     )
     parser.add_argument(
         "--require-trace",
@@ -137,11 +138,11 @@ def event_time(event: dict[str, Any]) -> datetime:
     return parse_dt(str(event.get("timestamp", ""))) or datetime.min.replace(tzinfo=timezone.utc)
 
 
-def ledger_dir(root: Path, ledger_dir_arg: str | None) -> Path:
-    if ledger_dir_arg:
-        path = Path(ledger_dir_arg)
+def jsonl_artifact_dir(root: Path, jsonl_artifact_dir_arg: str | None) -> Path:
+    if jsonl_artifact_dir_arg:
+        path = Path(jsonl_artifact_dir_arg)
         return path if path.is_absolute() else root / path
-    return root / DEFAULT_LEDGER_DIR
+    return root / DEFAULT_JSONL_ARTIFACT_DIR
 
 
 def display_path(path: Path, root: Path) -> str:
@@ -152,16 +153,18 @@ def display_path(path: Path, root: Path) -> str:
         return resolved.as_posix()
 
 
-def iter_ledger_files(root: Path, ledger_dir_arg: str | None) -> list[Path]:
-    directory = ledger_dir(root, ledger_dir_arg)
+def iter_jsonl_artifact_files(root: Path, jsonl_artifact_dir_arg: str | None) -> list[Path]:
+    directory = jsonl_artifact_dir(root, jsonl_artifact_dir_arg)
     if not directory.exists():
         return []
     return sorted(directory.glob("*.jsonl"))
 
 
-def read_events(root: Path, ledger_dir_arg: str | None) -> tuple[list[dict[str, Any]], list[str]]:
+def read_events(root: Path, jsonl_artifact_dir_arg: str | None, db_arg: str | None = None) -> tuple[list[dict[str, Any]], list[str]]:
+    if not jsonl_artifact_dir_arg:
+        return telemetry.read_events(root, db=db_arg), [str(telemetry.db_path(root, db_arg))]
     events: list[dict[str, Any]] = []
-    files = iter_ledger_files(root, ledger_dir_arg)
+    files = iter_jsonl_artifact_files(root, jsonl_artifact_dir_arg)
     for path in files:
         for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
             stripped = line.strip()
@@ -187,7 +190,7 @@ def read_events(root: Path, ledger_dir_arg: str | None) -> tuple[list[dict[str, 
 def collapse_invocations(events: list[dict[str, Any]]) -> list[Invocation]:
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for index, event in enumerate(events):
-        invocation_id = str(event.get("invocation_id") or f"missing:{index}")
+        invocation_id = str(event.get("invocation_id") or event.get("span_id") or f"missing:{index}")
         grouped[invocation_id].append(event)
 
     invocations: list[Invocation] = []
@@ -210,7 +213,7 @@ def collapse_invocations(events: list[dict[str, Any]]) -> list[Invocation]:
                 final_gate=final_gate,
                 exit_code=chosen.get("exit_code"),
                 summary=str(chosen.get("summary") or ""),
-                parent_invocation_id=str(chosen.get("parent_invocation_id") or ""),
+                parent_invocation_id=str(chosen.get("parent_invocation_id") or chosen.get("parent_span_id") or ""),
                 trace_id=str(chosen.get("trace_id") or ""),
                 task_node_id=str(chosen.get("task_node_id") or ""),
                 parent_task_node_id=str(chosen.get("parent_task_node_id") or ""),
@@ -265,7 +268,7 @@ def is_task_gate_invocation(item: Invocation) -> bool:
 def records_report(item: Invocation) -> bool:
     command = item.command.lower()
     haystack = f"{item.name} {command}"
-    return bool("ai_client_governance.py" in haystack and "tool-invocations" in haystack and re.search(
+    return bool("ai_client_governance.py" in haystack and "telemetry" in haystack and re.search(
         r"(^|\s)report(\s|$)",
         command,
     ))
@@ -296,7 +299,7 @@ def analyze_flow(
     report_count = len(report_indexes)
     if report_count == 0:
         level = "error" if require_report else "warning"
-        issues.append(issue(level, "No recorded ai_client_governance.py tool-invocations report invocation found."))
+        issues.append(issue(level, "No recorded ai_client_governance.py telemetry report invocation found."))
 
     trace_missing = [item for item in invocations if not item.trace_id]
     if require_trace and trace_missing:
@@ -455,7 +458,7 @@ def build_summary(invocations: list[Invocation], issues: list[FlowIssue], mode: 
         "report_count": sum(1 for item in invocations if records_report(item)),
         "has_trace_fields": any(item.trace_id or item.parent_invocation_id for item in invocations),
         "has_task_tree_fields": any(item.task_node_id or item.parent_task_node_id for item in invocations),
-        "top_tools": [
+        "top_operations": [
             {"name": name, "count": count, "failures": failures.get(name, 0)}
             for name, count in by_name.most_common(10)
         ],
@@ -465,7 +468,7 @@ def build_summary(invocations: list[Invocation], issues: list[FlowIssue], mode: 
 
 def build_report(args: argparse.Namespace) -> FlowReport:
     root = Path(args.root).resolve()
-    events, ledger_files = read_events(root, args.ledger_dir)
+    events, telemetry_sources = read_events(root, args.jsonl_artifact_dir, args.db)
     invocations = collapse_invocations(events)
     invocations = filter_invocations(
         invocations,
@@ -484,7 +487,7 @@ def build_report(args: argparse.Namespace) -> FlowReport:
     )
     return FlowReport(
         root=root.as_posix(),
-        ledger_files=ledger_files,
+        telemetry_sources=telemetry_sources,
         invocations=invocations,
         issues=issues,
         summary=build_summary(invocations, issues, mode),
@@ -505,16 +508,16 @@ def render_issue_lines(issues: list[FlowIssue]) -> list[str]:
 
 def render_text(report: FlowReport, top: int) -> str:
     lines = [
-        "AI Client Governance Tool Flow Report",
+        "AI Client Governance Execution Flow Report",
         f"Root: {report.root}",
         f"Flow mode: {report.flow_mode}",
         f"Invocations: {len(report.invocations)}",
         f"Final gates: {report.summary['final_gate_count']}",
         f"Failures: {report.summary['failure_count']}",
         "",
-        "Top tools:",
+        "Top operations:",
     ]
-    for row in report.summary["top_tools"]:
+    for row in report.summary["top_operations"]:
         lines.append(f"  {row['name']}: count={row['count']} failures={row['failures']}")
     lines.append("")
     lines.extend(render_issue_lines(report.issues))
@@ -530,7 +533,7 @@ def render_text(report: FlowReport, top: int) -> str:
 def render_markdown(report: FlowReport, top: int) -> str:
     mermaid = render_mermaid(report.invocations, report.flow_mode, top)
     lines = [
-        "# AI Client Governance Tool Flow Report",
+        "# AI Client Governance Execution Flow Report",
         "",
         f"- Root: `{report.root}`",
         f"- Flow mode: `{report.flow_mode}`",

@@ -27,10 +27,11 @@
   "structuredRecords": {
     "store": ".ai-client/project/state/aicg.db",
     "engine": "sqlite",
+    "isolationEnv": "AICG_STATE_DB",
     "schemaVersion": 1,
     "factSourcePriority": [
       "structured-sqlite-task-record",
-      "tool-ledger-jsonl",
+      "execution-telemetry-sqlite",
       "markdown-report-or-history"
     ],
     "commands": {
@@ -40,6 +41,7 @@
       "taskRunPlan": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-run plan --task-id <task-id> --event write-intent",
       "taskRunRun": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-run run --task-id <task-id> --event write-intent",
       "taskRunDiagnose": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-run diagnose --format json",
+      "telemetryReport": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py telemetry report --format json",
       "taskRecordInit": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-record init",
       "taskRecordApply": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-record apply --json <task-record.json>",
       "taskRecordGate": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-record gate --task-id <task-id> --event preflight",
@@ -69,7 +71,7 @@
       ],
       "failPolicy": "fail_closed",
       "cachePolicy": "Cache is opt-in and limited to readonly/validation nodes; stateful, sequential, Git write, lock, task-record apply, git status, git diff, and git worktree list commands are no-cache.",
-      "ledgerPolicy": "task-run run writes tool-invocations JSONL by default; use --no-ledger only for isolated tests. Prefer task-run run, gate-pool, or tool-invocations run for important shell commands; raw host shell calls must be justified when not automatically intercepted."
+      "telemetryPolicy": "task-run run, gate-pool, shell-adapter, telemetry record, and the command adapter write execution telemetry spans/events to aicg.db by default; --jsonl-artifact-dir is only an explicit isolated artifact/export path and --no-telemetry is only for isolated tests. Commands use span_kind=command and subject_type=command; future model HTTP, sub-agent, token usage, and external API statistics must extend the same execution_spans/execution_events schema. Prefer task-run run, gate-pool, shell-adapter, or the command adapter for important shell commands; raw host shell calls must be justified when not automatically intercepted."
     },
     "markdownPolicy": "Markdown task tracking is a human-readable export or historical audit artifact, not a gate input for new tasks.",
     "readOnlyPolicy": "task-record status never creates the SQLite database; missing DB returns an empty summary."
@@ -93,11 +95,11 @@
     },
     {
       "id": "compress-local-commands-before-model-roundtrips",
-      "summary": "Analyze new local command candidates for dedupe, batching, gate-pool aggregation, ledger wrapping, or cache reuse before spending additional model turns."
+      "summary": "Analyze new local command candidates for dedupe, batching, gate-pool aggregation, telemetry wrapping, or cache reuse before spending additional model turns."
     },
     {
       "id": "changes-need-isolation-and-evidence",
-      "summary": "Require worktrees, task tracking, locks, tool ledgers, validation evidence, and final state reporting for modification tasks."
+      "summary": "Require worktrees, task tracking, locks, tool telemetry, validation evidence, and final state reporting for modification tasks."
     },
     {
       "id": "project-specialization-stays-out-of-common",
@@ -188,9 +190,9 @@
       "worktreeLiveStatePolicy": "worktree-task reconcile treats Git worktree list as the source of truth and blocks active coord sessions whose worktree disappeared",
       "inputFilterPreflightPolicy": "user-message must pass lifecycle input-filter and task-record gate --event preflight before later processing; missing input-filter.preflight facts fail closed",
       "commandCompressionPolicy": "medium, large, or mutating tasks must record command-compression.analysis before write-intent or final gates; task-run plan provides the local dedupe and grouping event payload",
-      "taskRunExecutionPolicy": "task-run run executes one compressed local DAG, parallelizes only readonly/validation groups, writes ledger events by default, and stores trace JSON when requested",
-      "taskRunCachePolicy": "task-run cache keys include runner version, command, cwd, node kind, task types, changed paths, declared input hashes, and Git HEAD; cache hits still write ledger events",
-      "taskRunDiagnosticsPolicy": "task-run diagnose reports terminal duplicate commands, ledger failures, cache hit/miss counts, coord locks/sessions, missing worktrees, and raw shell interception gaps; --task-id/--trace-id/--since/--until narrow reports to current scope",
+      "taskRunExecutionPolicy": "task-run run executes one compressed local DAG, parallelizes only readonly/validation groups, writes telemetry events to aicg.db by default, and stores trace JSON when requested",
+      "taskRunCachePolicy": "task-run cache keys include runner version, command, cwd, node kind, task types, changed paths, declared input hashes, and Git HEAD; cache hits still write telemetry events",
+      "taskRunDiagnosticsPolicy": "task-run diagnose reports terminal duplicate commands, telemetry failures, cache hit/miss counts, coord locks/sessions, missing worktrees, and raw shell interception gaps; --task-id/--trace-id/--since/--until narrow reports to current scope",
       "structuredRecordPolicy": "new tasks should call contract describe before execution and write typed SQLite task records before preflight/final gates; input-filter records can be applied before worktree creation, while final gates require worktree evidence for mutating tasks; task-id mode does not require Markdown task tracking",
       "entrypointResolutionPolicy": "runtime command generators and diagnostics resolve only embedded .ai-client/ai-client-governance or governance-repo-local scripts/ai_client_governance.py; host-root scripts/ai_client_governance.py is not a fallback",
       "hostSubmoduleCloseoutPolicy": "after merging an embedded ai-client-governance worktree, host closeout must verify and commit the .ai-client/ai-client-governance gitlink, aicg.db worktree state, and related task tracking",
@@ -342,7 +344,8 @@
       ".ai-client/project/records/task-tracking/",
       ".ai-client/project/records/pending-tasks/",
       ".ai-client/project/records/corrections/",
-      ".ai-client/project/logs/tool-invocations/",
+      ".ai-client/project/logs/",
+      ".ai-client/project/state/",
       ".ai-client/project/records/project-status/",
       "project-specific-documents"
     ]

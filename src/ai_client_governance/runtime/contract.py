@@ -246,12 +246,12 @@ def build_contract(task_types: list[str], event: str) -> Contract:
             f"Mutating work must persist events.event_type={USER_CLAIM_VALIDATION_EVENT} before user assertions steer execution."
         )
         gate_requirements.append(
-            "Important local commands should run through task-run run, gate-pool, or tool-invocations so command ledger evidence exists."
+            "Important local commands should run through task-run run, gate-pool, shell-adapter, or the command adapter; non-command execution should use telemetry record so execution spans exist in aicg.db."
         )
     if "rules-script" in normalized:
         gate_requirements.append("rules-script tasks require task.approval_label plus an approved approvals[] row with the same label.")
         gate_requirements.append(
-            f"rules-script tasks require events.event_type={STATE_ARTIFACT_OWNERSHIP_EVENT} for script-generated ledgers and artifacts."
+            f"rules-script tasks require events.event_type={STATE_ARTIFACT_OWNERSHIP_EVENT} for script-generated telemetry and artifacts."
         )
     if set(normalized) & {"rules-script", "docs", "correction"}:
         gate_requirements.append(

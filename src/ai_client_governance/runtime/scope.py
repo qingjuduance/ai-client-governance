@@ -102,7 +102,7 @@ def classify_scope(
     command: str = "",
     cwd: str | Path | None = None,
 ) -> ScopeClassification:
-    """Return a stable common/project/native classification for lifecycle and ledger facts."""
+    """Return a stable common/project/native classification for lifecycle and telemetry facts."""
 
     root = root.resolve()
     observed: list[str] = []

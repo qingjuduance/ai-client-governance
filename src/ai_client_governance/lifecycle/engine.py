@@ -215,7 +215,7 @@ def validation_decision_for(task_types: list[str], changed_paths: list[str]) -> 
 def claim_risk_flags(text: str, task_types: list[str]) -> list[str]:
     flags = ["source_is_user"]
     assertion_markers = ("应该", "必须", "不应该", "不能", "可以", "bug", "问题", "会生成", "不会", "直接")
-    mutable_markers = ("push", "commit", "删除", "提交", "推送", "账本", "状态", "脚本", "selftest", "worktree")
+    mutable_markers = ("push", "commit", "删除", "提交", "推送", "telemetry", "审计记录", "状态", "脚本", "selftest", "worktree")
     stale_markers = ("现在", "当前", "之前", "刚刚", "目前", "latest", "recent")
     if any(marker in text for marker in assertion_markers):
         flags.append("may_be_wrong")
@@ -228,7 +228,7 @@ def claim_risk_flags(text: str, task_types: list[str]) -> list[str]:
 
 def verification_action_for_claim(text: str, task_types: list[str]) -> str:
     lowered = text.lower()
-    if any(marker in lowered or marker in text for marker in ("git", "push", "commit", "worktree", "状态", "账本", "脚本", "selftest")):
+    if any(marker in lowered or marker in text for marker in ("git", "push", "commit", "worktree", "状态", "telemetry", "审计记录", "脚本", "selftest")):
         return "verify-local-live-state-or-script-contract-before-execution"
     if "rules-script" in task_types:
         return "verify-rules-and-external-practice-before-adoption"
@@ -468,7 +468,7 @@ def build_input_filter_task_record(args: argparse.Namespace, report: LifecycleRe
                     "scope_kind": report.classification.scope_kind,
                     "scope_reason": report.classification.scope_reason,
                     "scope_paths": report.classification.scope_paths,
-                    "decision": "Analyze new local command candidates for dedupe, batching, cache eligibility, task-run DAG execution, gate-pool use, and ledger wrapping before write-intent.",
+                    "decision": "Analyze new local command candidates for dedupe, batching, cache eligibility, task-run DAG execution, gate-pool use, and telemetry wrapping before write-intent.",
                     "selected_pattern": "lifecycle-preflight-command-compression",
                     "groups": [
                         {
@@ -529,7 +529,7 @@ def build_input_filter_task_record(args: argparse.Namespace, report: LifecycleRe
                         "selftest-artifact",
                     ],
                     "manual_edit_policy": "forbidden_without_break_glass",
-                    "cleanup_policy": "use owner cleanup/reconcile/finalize commands; do not hand-edit runtime ledgers",
+                    "cleanup_policy": "use owner cleanup/reconcile/finalize commands; do not hand-edit runtime telemetry",
                     "fail_policy": "fail_closed",
                 },
             },

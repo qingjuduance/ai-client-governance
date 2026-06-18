@@ -2,8 +2,8 @@
 """Plan and run a small pool of AI Client Governance maintenance gates.
 
 The runner is intentionally conservative: it dispatches through the unified
-``ai_client_governance.py`` CLI, records every child command through the tool-invocation
-subcommand, and then asks tool-flow to verify the trace. It does not edit
+``ai_client_governance.py`` CLI, records every child command through unified
+telemetry, and then asks tool-flow to verify the trace. It does not edit
 tracking, rules, corrections, pending files, or Git state.
 """
 
@@ -42,7 +42,6 @@ TEXT_EXTENSIONS = {
 }
 
 PLACEHOLDER_TASK_ID = "<task-id>"
-LEDGER_DIR_ENV = "AICG_TOOL_INVOCATIONS_DIR"
 PYCACHE_PREFIX_ENV = "AICG_PYTHONPYCACHEPREFIX"
 
 
@@ -61,10 +60,6 @@ def configured_path(root: Path, env_name: str, fallback: Path) -> Path:
         path = Path(configured)
         return path if path.is_absolute() else root / path
     return root / fallback
-
-
-def invocation_ledger_dir(root: Path) -> Path:
-    return configured_path(root, LEDGER_DIR_ENV, Path(".ai-client/project/logs/tool-invocations"))
 
 
 def pycache_prefix(root: Path) -> Path:
@@ -495,27 +490,24 @@ def build_steps(root: Path, args: argparse.Namespace) -> list[GateStep]:
 
     trace_id = args.trace_id or ""
     if trace_id:
-        ledger_root = host_project_root(root)
-        ledger_dir = invocation_ledger_dir(ledger_root)
+        telemetry_root = host_project_root(root)
         steps.append(
             GateStep(
-                name="ai_client_governance.py tool-invocations",
+                name="ai_client_governance.py telemetry",
                 phase="report",
                 command=cli_command(
                     py,
                     entrypoint,
-                    "tool-invocations",
+                    "telemetry",
                     "--root",
-                    str(ledger_root),
-                    "--ledger-dir",
-                    str(ledger_dir),
+                    str(telemetry_root),
                     "report",
                     "--trace-id",
                     trace_id,
                     "--top",
                     str(args.top),
                 ),
-                reason="Summarize traced gate invocations.",
+                reason="Summarize execution telemetry for the trace.",
             )
         )
         steps.append(
@@ -527,9 +519,7 @@ def build_steps(root: Path, args: argparse.Namespace) -> list[GateStep]:
                     entrypoint,
                     "tool-flow",
                     "--root",
-                    str(ledger_root),
-                    "--ledger-dir",
-                    str(ledger_dir),
+                    str(telemetry_root),
                     "--trace-id",
                     trace_id,
                     "--top",
@@ -582,16 +572,13 @@ def run_record(
     summary: str,
     exit_code: int | None = None,
 ) -> int:
-    ledger_root = host_project_root(root)
-    ledger_dir = invocation_ledger_dir(ledger_root)
+    telemetry_root = host_project_root(root)
     command = [
         sys.executable,
         str(entrypoint),
         "tool-invocations",
         "--root",
-        str(ledger_root),
-        "--ledger-dir",
-        str(ledger_dir),
+        str(telemetry_root),
         "record",
         "--name",
         "ai_client_governance.py gate-pool",
@@ -617,7 +604,7 @@ def run_record(
     if exit_code is not None:
         command.extend(["--exit-code", str(exit_code)])
     env = os.environ.copy()
-    env["PYTHONPYCACHEPREFIX"] = str(pycache_prefix(ledger_root))
+    env["PYTHONPYCACHEPREFIX"] = str(pycache_prefix(telemetry_root))
     env["PYTHONIOENCODING"] = "utf-8"
     env["PYTHONUTF8"] = "1"
     return subprocess.run(command, cwd=root, env=env).returncode
@@ -634,16 +621,13 @@ def run_step(
     task_types: list[str],
     attempt: int,
 ) -> int:
-    ledger_root = host_project_root(root)
-    ledger_dir = invocation_ledger_dir(ledger_root)
+    telemetry_root = host_project_root(root)
     wrapper = [
         sys.executable,
         str(entrypoint),
         "tool-invocations",
         "--root",
-        str(ledger_root),
-        "--ledger-dir",
-        str(ledger_dir),
+        str(telemetry_root),
         "run",
         "--name",
         step.name,
@@ -671,7 +655,7 @@ def run_step(
     wrapper.append("--")
     wrapper.extend(step.command)
     env = os.environ.copy()
-    env["PYTHONPYCACHEPREFIX"] = str(pycache_prefix(ledger_root))
+    env["PYTHONPYCACHEPREFIX"] = str(pycache_prefix(telemetry_root))
     env["PYTHONIOENCODING"] = "utf-8"
     env["PYTHONUTF8"] = "1"
     return subprocess.run(wrapper, cwd=root, env=env).returncode

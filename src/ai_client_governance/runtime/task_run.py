@@ -18,14 +18,15 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from ai_client_governance.records import telemetry
 from ai_client_governance.runtime.scope import classify_scope
 
 
 COMMAND_COMPRESSION_EVENT = "command-compression.analysis"
 RUNNER_VERSION = "task-run-dag-v1"
 STDIO_LIMIT = 4000
-LEDGER_SCHEMA_VERSION = 2
-DEFAULT_LEDGER_DIR = Path(".ai-client") / "project" / "logs" / "tool-invocations"
+TELEMETRY_EVENT_SCHEMA_VERSION = 2
+DEFAULT_JSONL_ARTIFACT_DIR = Path(".ai-client") / "project" / "logs" / "tool-invocations"
 
 READONLY_PREFIXES = (
     "git status",
@@ -169,7 +170,7 @@ class CommandCompressionPlan:
     parallel_group_count: int
     stateful_group_count: int
     selected_pattern: str
-    ledger_policy: str
+    telemetry_policy: str
     model_http_reduction: str
     groups: list[CommandGroup]
     skipped_duplicates: list[SkippedDuplicate]
@@ -193,7 +194,7 @@ class ExecutionResult:
     stderr_tail: str
     started_at: str
     ended_at: str
-    ledger_path: str = ""
+    telemetry_path: str = ""
 
 
 @dataclass(frozen=True)
@@ -275,9 +276,9 @@ def classify_command(command: str) -> tuple[str, str]:
     if any(stripped.startswith(prefix) for prefix in READONLY_PREFIXES):
         return "readonly", "read-only inspection can run in one local batch"
     if " shell-adapter run " in lowered:
-        return "ledger-wrapped", "already routed through the shell adapter ledger"
+        return "telemetry-wrapped", "already routed through the shell adapter telemetry"
     if " tool-invocations run " in lowered:
-        return "ledger-wrapped", "already routed through the local command ledger"
+        return "telemetry-wrapped", "already routed through local execution telemetry"
     return "sequential", "unknown side effects, keep ordering conservative"
 
 
@@ -346,7 +347,7 @@ def group_commands(commands: list[PlannedCommand]) -> list[CommandGroup]:
             return
         can_parallel = current_kind in {"readonly", "validation"}
         strategy = "parallel-batch" if can_parallel and len(current) > 1 else "single-step"
-        if current_kind in {"stateful", "sequential", "ledger-wrapped"}:
+        if current_kind in {"stateful", "sequential", "telemetry-wrapped"}:
             strategy = "ordered-step"
         groups.append(
             CommandGroup(
@@ -361,7 +362,7 @@ def group_commands(commands: list[PlannedCommand]) -> list[CommandGroup]:
         current_kind = ""
 
     for command in commands:
-        if command.kind in {"stateful", "sequential", "ledger-wrapped"}:
+        if command.kind in {"stateful", "sequential", "telemetry-wrapped"}:
             flush()
             current = [command]
             current_kind = command.kind
@@ -383,7 +384,7 @@ def build_plan(args: argparse.Namespace) -> CommandCompressionPlan:
     groups = group_commands(planned)
     scope = classify_scope(root=root, paths=args.changed_path, command="\n".join(commands), cwd=cwd).to_dict()
     parallel_groups = [group for group in groups if group.can_parallel and len(group.commands) > 1]
-    stateful_groups = [group for group in groups if group.kind in {"stateful", "sequential", "ledger-wrapped"}]
+    stateful_groups = [group for group in groups if group.kind in {"stateful", "sequential", "telemetry-wrapped"}]
     payload: dict[str, Any] = {
         "task_id": args.task_id,
         "join_point": args.event,
@@ -397,7 +398,7 @@ def build_plan(args: argparse.Namespace) -> CommandCompressionPlan:
         "skipped_duplicate_count": len(skipped),
         "parallel_group_count": len(parallel_groups),
         "stateful_group_count": len(stateful_groups),
-        "ledger_policy": "Wrap important shell commands with tool-invocations run until host shell calls are automatically intercepted.",
+        "telemetry_policy": "Write execution spans to aicg.db through task-run, gate-pool, shell-adapter, telemetry record, or the command adapter; use JSONL only as an explicit isolated artifact.",
         "model_http_reduction": "One local planner output replaces repeated model turns for deterministic command selection, dedupe, and grouping.",
         "groups": [
             {
@@ -429,7 +430,7 @@ def build_plan(args: argparse.Namespace) -> CommandCompressionPlan:
         parallel_group_count=len(parallel_groups),
         stateful_group_count=len(stateful_groups),
         selected_pattern=payload["selected_pattern"],
-        ledger_policy=payload["ledger_policy"],
+        telemetry_policy=payload["telemetry_policy"],
         model_http_reduction=payload["model_http_reduction"],
         groups=groups,
         skipped_duplicates=skipped,
@@ -530,8 +531,6 @@ def read_cache(path: Path) -> ExecutionResult | None:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
-    if isinstance(raw, dict):
-        raw.setdefault("ledger_path", "")
     return ExecutionResult(**raw)
 
 
@@ -540,24 +539,31 @@ def write_cache(path: Path, result: ExecutionResult) -> None:
     path.write_text(json.dumps(asdict(result), ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def ledger_directory(root: Path, value: str | None) -> Path:
+def jsonl_artifact_directory(root: Path, value: str | None) -> Path:
     if value:
         path = Path(value)
         return path if path.is_absolute() else root / path
-    return host_project_root(root) / DEFAULT_LEDGER_DIR
+    return host_project_root(root) / DEFAULT_JSONL_ARTIFACT_DIR
 
 
-def append_ledger_event(root: Path, ledger_dir: str | None, event: dict[str, Any]) -> Path:
-    directory = ledger_directory(root, ledger_dir)
+def append_telemetry_event(root: Path, jsonl_artifact_dir: str | None, event: dict[str, Any], db: str | None = None) -> Path:
+    if not jsonl_artifact_dir:
+        return telemetry.append_event(
+            host_project_root(root),
+            event,
+            db=db,
+            source_command="ai_client_governance.py task-run",
+        )
+    directory = jsonl_artifact_directory(root, jsonl_artifact_dir)
     now = datetime.now().astimezone()
     path = directory / f"{now.year:04d}-{now.month:02d}.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8", newline="\n") as handle:
-        handle.write(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n")
+        handle.write(json.dumps(telemetry.sanitized_event(event), ensure_ascii=False, sort_keys=True) + "\n")
     return path
 
 
-def ledger_event(
+def telemetry_event(
     *,
     result: ExecutionResult,
     status: str,
@@ -573,7 +579,7 @@ def ledger_event(
     timestamp = ended_at or result.started_at
     scope = classify_scope(root=Path(result.cwd), paths=[], command=result.command, cwd=result.cwd)
     return {
-        "schema_version": LEDGER_SCHEMA_VERSION,
+        "schema_version": TELEMETRY_EVENT_SCHEMA_VERSION,
         "invocation_id": invocation_id,
         "timestamp": timestamp,
         "name": "ai_client_governance.py task-run",
@@ -603,11 +609,11 @@ def ledger_event(
         "scope_kind": scope.scope_kind,
         "scope_reason": scope.scope_reason,
         "scope_paths": scope.paths,
-        "adapter_enforcement": os.environ.get("AICG_COMMAND_LEDGER_ENFORCEMENT", "task-run-ledger"),
+        "adapter_enforcement": os.environ.get("AICG_EXECUTION_TELEMETRY_ENFORCEMENT", "task-run-telemetry"),
     }
 
 
-def record_ledger_status(
+def record_telemetry_status(
     root: Path,
     args: argparse.Namespace,
     result: ExecutionResult,
@@ -619,7 +625,7 @@ def record_ledger_status(
     summary: str,
     ended_at: str | None = None,
 ) -> Path:
-    event = ledger_event(
+    event = telemetry_event(
         result=result,
         status=status,
         trace_id=trace_id,
@@ -631,10 +637,10 @@ def record_ledger_status(
         exit_code=exit_code,
         ended_at=ended_at,
     )
-    return append_ledger_event(root, getattr(args, "ledger_dir", None), event)
+    return append_telemetry_event(root, getattr(args, "jsonl_artifact_dir", None), event, getattr(args, "db", None))
 
 
-def with_final_ledger(
+def with_final_telemetry(
     root: Path,
     args: argparse.Namespace,
     result: ExecutionResult,
@@ -642,10 +648,10 @@ def with_final_ledger(
     trace_id: str,
     invocation_id: str,
 ) -> ExecutionResult:
-    if getattr(args, "no_ledger", False):
+    if getattr(args, "no_telemetry", False):
         return result
     try:
-        path = record_ledger_status(
+        path = record_telemetry_status(
             root,
             args,
             result,
@@ -657,14 +663,14 @@ def with_final_ledger(
             ended_at=result.ended_at,
         )
     except OSError as exc:
-        stderr = tail_text((result.stderr_tail + "\n" if result.stderr_tail else "") + f"ledger write failed: {exc}")
+        stderr = tail_text((result.stderr_tail + "\n" if result.stderr_tail else "") + f"telemetry write failed: {exc}")
         return replace(
             result,
             status="failed",
             exit_code=result.exit_code if result.exit_code != 0 else 126,
             stderr_tail=stderr,
         )
-    return replace(result, ledger_path=str(path))
+    return replace(result, telemetry_path=str(path))
 
 
 def run_one_command(
@@ -699,9 +705,9 @@ def run_one_command(
         started_at=started_at,
         ended_at="",
     )
-    if not getattr(args, "no_ledger", False):
+    if not getattr(args, "no_telemetry", False):
         try:
-            record_ledger_status(
+            record_telemetry_status(
                 root,
                 args,
                 start_result,
@@ -716,7 +722,7 @@ def run_one_command(
                 start_result,
                 status="failed",
                 exit_code=126,
-                stderr_tail=f"ledger write failed before command: {exc}",
+                stderr_tail=f"telemetry write failed before command: {exc}",
                 ended_at=utc_now(),
             )
     if args.cache and cacheable:
@@ -741,7 +747,7 @@ def run_one_command(
                 started_at=started_at,
                 ended_at=utc_now(),
             )
-            return with_final_ledger(root, args, result, trace_id=trace_id, invocation_id=invocation_id)
+            return with_final_telemetry(root, args, result, trace_id=trace_id, invocation_id=invocation_id)
         cache_reason = reason
     elif args.cache:
         cache_reason = reason
@@ -797,7 +803,7 @@ def run_one_command(
     )
     if args.cache and cache_path and result.exit_code == 0:
         write_cache(cache_path, result)
-    return with_final_ledger(root, args, result, trace_id=trace_id, invocation_id=invocation_id)
+    return with_final_telemetry(root, args, result, trace_id=trace_id, invocation_id=invocation_id)
 
 
 def execute_plan(plan: CommandCompressionPlan, args: argparse.Namespace) -> TaskRunReport:
@@ -846,7 +852,8 @@ def execute_plan(plan: CommandCompressionPlan, args: argparse.Namespace) -> Task
         root=root,
         coord_root=Path(args.coord_root).resolve() if args.coord_root else root,
         results=results,
-        ledger_dir=args.ledger_dir,
+        jsonl_artifact_dir=args.jsonl_artifact_dir,
+        db=args.db,
     )
     report = TaskRunReport(
         schema_version=1,
@@ -865,14 +872,16 @@ def execute_plan(plan: CommandCompressionPlan, args: argparse.Namespace) -> Task
     return report
 
 
-def ledger_files(root: Path, ledger_dir: str | None = None) -> list[Path]:
-    directory = ledger_directory(root, ledger_dir)
+def jsonl_artifact_files(root: Path, jsonl_artifact_dir: str | None = None) -> list[Path]:
+    directory = jsonl_artifact_directory(root, jsonl_artifact_dir)
     return sorted(directory.glob("*.jsonl")) if directory.exists() else []
 
 
-def read_ledger_events(root: Path, ledger_dir: str | None = None) -> list[dict[str, Any]]:
+def read_telemetry_events(root: Path, jsonl_artifact_dir: str | None = None, db: str | None = None) -> list[dict[str, Any]]:
+    if not jsonl_artifact_dir:
+        return telemetry.read_events(host_project_root(root), db=db)
     events: list[dict[str, Any]] = []
-    for path in ledger_files(root, ledger_dir):
+    for path in jsonl_artifact_files(root, jsonl_artifact_dir):
         with path.open("r", encoding="utf-8", errors="replace") as handle:
             for line in handle:
                 stripped = line.strip()
@@ -887,7 +896,7 @@ def read_ledger_events(root: Path, ledger_dir: str | None = None) -> list[dict[s
     return events
 
 
-def filter_ledger_events(
+def filter_telemetry_events(
     events: list[dict[str, Any]],
     *,
     task_id: str = "",
@@ -961,14 +970,15 @@ def build_diagnostics(
     root: Path,
     coord_root: Path,
     results: list[ExecutionResult] | None = None,
-    ledger_dir: str | None = None,
+    jsonl_artifact_dir: str | None = None,
+    db: str | None = None,
     task_id: str = "",
     trace_id: str = "",
     since: str = "",
     until: str = "",
 ) -> dict[str, Any]:
-    all_events = read_ledger_events(root, ledger_dir)
-    events = filter_ledger_events(all_events, task_id=task_id, trace_id=trace_id, since=since, until=until)
+    all_events = read_telemetry_events(root, jsonl_artifact_dir, db)
+    events = filter_telemetry_events(all_events, task_id=task_id, trace_id=trace_id, since=since, until=until)
     terminal_events = [event for event in events if event.get("status") != "started"]
     executed_events = [event for event in terminal_events if not event.get("cached")]
     commands = [str(event.get("command", "")).strip() for event in executed_events if event.get("command")]
@@ -999,8 +1009,8 @@ def build_diagnostics(
     ]
     run_results = results or []
     return {
-        "ledger": {
-            "directory": str(ledger_directory(root, ledger_dir)),
+        "telemetry": {
+            "source": str(jsonl_artifact_directory(root, jsonl_artifact_dir)) if jsonl_artifact_dir else str(telemetry.db_path(host_project_root(root), db)),
             "filters": {
                 "task_id": task_id,
                 "trace_id": trace_id,
@@ -1024,7 +1034,7 @@ def build_diagnostics(
             if adapter_installed or adapter_events
             else (
                 "The host client shell is not automatically intercepted by ai-client-governance; "
-                "important commands should run through shell-adapter, task-run, gate-pool, or tool-invocations."
+                "important commands should run through shell-adapter, task-run, gate-pool, or the command adapter."
             ),
         },
         "coordination": coord_summary(coord_root),
@@ -1049,7 +1059,7 @@ def format_plan_text(plan: CommandCompressionPlan) -> str:
         f"Stateful/ordered groups: {plan.stateful_group_count}",
         "",
         f"Selected pattern: {plan.selected_pattern}",
-        f"Ledger policy: {plan.ledger_policy}",
+        f"Telemetry policy: {plan.telemetry_policy}",
         f"Model HTTP reduction: {plan.model_http_reduction}",
         "",
         "Groups:",
@@ -1079,38 +1089,39 @@ def format_run_text(report: TaskRunReport) -> str:
         f"Cache hits: {report.summary.cache_hits}",
         f"Cache misses: {report.summary.cache_misses}",
         f"Failures: {report.summary.failed_count}",
-        f"Ledger events: {report.diagnostics.get('ledger', {}).get('event_count', 0)}",
+        f"Telemetry events: {report.diagnostics.get('telemetry', {}).get('event_count', 0)}",
         "",
         "Results:",
     ]
     for item in report.results:
         cache = " cache" if item.cached else ""
-        ledger = f" ledger={item.ledger_path}" if item.ledger_path else ""
-        lines.append(f"  - {item.node_id} {item.status}{cache} exit={item.exit_code}{ledger} {item.command}")
+        telemetry_ref = f" telemetry={item.telemetry_path}" if item.telemetry_path else ""
+        lines.append(f"  - {item.node_id} {item.status}{cache} exit={item.exit_code}{telemetry_ref} {item.command}")
     return "\n".join(lines)
 
 
 def format_diagnostics_text(diagnostics: dict[str, Any]) -> str:
-    ledger = diagnostics.get("ledger", {})
-    filters = ledger.get("filters", {})
+    telemetry_report = diagnostics.get("telemetry", {})
+    filters = telemetry_report.get("filters", {})
     coord = diagnostics.get("coordination", {})
     run = diagnostics.get("run", {})
     lines = [
         "AI Client Governance Task Run Diagnostics",
         (
-            "Ledger filters: "
+            "Telemetry filters: "
             f"task_id={filters.get('task_id') or '<all>'} "
             f"trace_id={filters.get('trace_id') or '<all>'} "
             f"since={filters.get('since') or '<none>'} "
             f"until={filters.get('until') or '<none>'}"
         ),
-        f"Ledger events: {ledger.get('event_count', 0)}",
-        f"Ledger events total: {filters.get('total_event_count', ledger.get('event_count', 0))}",
-        f"Ledger duplicate commands: {len(ledger.get('duplicate_commands', []))}",
-        f"Ledger failures: {len(ledger.get('failures', []))}",
-        f"Raw shell auto intercepted: {ledger.get('raw_shell_auto_intercepted')}",
-        f"Shell adapter events: {ledger.get('adapter', {}).get('event_count', 0)}",
-        f"Scope kinds: {json.dumps(ledger.get('scope_kind_counts', {}), ensure_ascii=False, sort_keys=True)}",
+        f"Telemetry source: {telemetry_report.get('source', '')}",
+        f"Telemetry events: {telemetry_report.get('event_count', 0)}",
+        f"Telemetry events total: {filters.get('total_event_count', telemetry_report.get('event_count', 0))}",
+        f"Telemetry duplicate commands: {len(telemetry_report.get('duplicate_commands', []))}",
+        f"Telemetry failures: {len(telemetry_report.get('failures', []))}",
+        f"Raw shell auto intercepted: {telemetry_report.get('raw_shell_auto_intercepted')}",
+        f"Shell adapter events: {telemetry_report.get('adapter', {}).get('event_count', 0)}",
+        f"Scope kinds: {json.dumps(telemetry_report.get('scope_kind_counts', {}), ensure_ascii=False, sort_keys=True)}",
         f"Coord available: {coord.get('available')}",
         f"Active locks: {coord.get('locks_active', 0)}",
         f"Active sessions: {coord.get('sessions_active', 0)}",
@@ -1156,18 +1167,20 @@ def parse_args() -> argparse.Namespace:
     run.add_argument("--trace-id", default="", help="Trace id for report output.")
     run.add_argument("--trace-json", help="Write full run report JSON to this path.")
     run.add_argument("--coord-root", help="Repository root whose worktree-coord state should be diagnosed.")
-    run.add_argument("--ledger-dir", help="Tool invocation ledger directory. Default: host .ai-client/project/logs/tool-invocations.")
-    run.add_argument("--task-tracking", default="", help="Optional historical task tracking path for ledger compatibility.")
-    run.add_argument("--no-ledger", action="store_true", help="Do not write command ledger events. Use only for isolated tests.")
+    run.add_argument("--jsonl-artifact-dir", help="Explicit JSONL artifact directory for isolated tests or exports.")
+    run.add_argument("--db", help="SQLite telemetry DB. Default: <root>/.ai-client/project/state/aicg.db.")
+    run.add_argument("--task-tracking", default="", help="Optional historical task tracking path.")
+    run.add_argument("--no-telemetry", action="store_true", help="Do not write execution telemetry events. Use only for isolated tests.")
     run.add_argument("--format", choices=("text", "json"), default="text")
 
-    diagnose = sub.add_parser("diagnose", help="Report command ledger, cache, and coordination diagnostics.")
+    diagnose = sub.add_parser("diagnose", help="Report execution telemetry, cache, and coordination diagnostics.")
     diagnose.add_argument("--coord-root", help="Repository root whose worktree-coord state should be diagnosed.")
-    diagnose.add_argument("--ledger-dir", help="Tool invocation ledger directory. Default: host .ai-client/project/logs/tool-invocations.")
-    diagnose.add_argument("--task-id", default="", help="Only diagnose ledger events for one structured task id.")
-    diagnose.add_argument("--trace-id", default="", help="Only diagnose ledger events for one trace id.")
-    diagnose.add_argument("--since", default="", help="Only include ledger events at or after this ISO timestamp.")
-    diagnose.add_argument("--until", default="", help="Only include ledger events at or before this ISO timestamp.")
+    diagnose.add_argument("--jsonl-artifact-dir", help="Explicit JSONL artifact directory for isolated tests or exports.")
+    diagnose.add_argument("--db", help="SQLite telemetry DB. Default: <root>/.ai-client/project/state/aicg.db.")
+    diagnose.add_argument("--task-id", default="", help="Only diagnose telemetry events for one structured task id.")
+    diagnose.add_argument("--trace-id", default="", help="Only diagnose telemetry events for one trace id.")
+    diagnose.add_argument("--since", default="", help="Only include telemetry events at or after this ISO timestamp.")
+    diagnose.add_argument("--until", default="", help="Only include telemetry events at or before this ISO timestamp.")
     diagnose.add_argument("--format", choices=("text", "json"), default="text")
     return parser.parse_args()
 
@@ -1195,7 +1208,8 @@ def main() -> int:
         diagnostics = build_diagnostics(
             root=root,
             coord_root=coord_root,
-            ledger_dir=args.ledger_dir,
+            jsonl_artifact_dir=args.jsonl_artifact_dir,
+            db=args.db,
             task_id=args.task_id,
             trace_id=args.trace_id,
             since=args.since,

@@ -68,7 +68,8 @@ KEYWORDS: dict[str, tuple[str, ...]] = {
         "检查",
         "统计",
         "脚本",
-        "账本",
+        "telemetry",
+        "审计记录",
         "验证",
         "门禁",
     ),
@@ -379,4 +380,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

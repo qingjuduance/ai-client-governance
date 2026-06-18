@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Shell adapter entry point for fail-closed command ledger enforcement."""
+"""Shell adapter entry point for fail-closed execution telemetry enforcement."""
 
 from __future__ import annotations
 
@@ -110,11 +110,11 @@ def run_command(args: argparse.Namespace) -> int:
         started_at=started_at,
         summary=args.summary or "shell adapter command started",
     )
-    tool_invocations.append_event(root, args.ledger_dir, start_event)
+    tool_invocations.append_event(root, args.jsonl_artifact_dir, start_event, args.db)
 
     child_env = os.environ.copy()
     child_env["AICG_SHELL_ADAPTER"] = "shell-adapter"
-    child_env["AICG_COMMAND_LEDGER_ENFORCEMENT"] = args.adapter_enforcement or "shell-adapter"
+    child_env["AICG_EXECUTION_TELEMETRY_ENFORCEMENT"] = args.adapter_enforcement or "shell-adapter"
     child_env["CODEX_TRACE_ID"] = args.trace_id or child_env.get("CODEX_TRACE_ID", invocation_id)
     child_env["CODEX_PARENT_INVOCATION_ID"] = invocation_id
     child_env["PYTHONIOENCODING"] = "utf-8"
@@ -135,14 +135,14 @@ def run_command(args: argparse.Namespace) -> int:
         duration_ms=duration_ms,
         summary=args.summary or f"shell adapter command {status}",
     )
-    path = tool_invocations.append_event(root, args.ledger_dir, end_event)
+    path = tool_invocations.append_event(root, args.jsonl_artifact_dir, end_event, args.db)
     if args.format == "json":
         print(
             json.dumps(
                 {
                     "status": status,
                     "exit_code": completed.returncode,
-                    "ledger_path": str(path),
+                    "telemetry_path": str(path),
                     "invocation_id": invocation_id,
                     "scope_kind": end_event.get("scope_kind"),
                 },
@@ -151,7 +151,7 @@ def run_command(args: argparse.Namespace) -> int:
             )
         )
     else:
-        print(f"shell-adapter {status} exit={completed.returncode} ledger={path}")
+        print(f"shell-adapter {status} exit={completed.returncode} telemetry={path}")
     return completed.returncode
 
 
@@ -160,7 +160,7 @@ def profile_snippet(args: argparse.Namespace) -> int:
     script = str(Path(args.script_path).resolve()).replace("\\", "/") if args.script_path else "ai_client_governance.py"
     snippet = f"""{ADAPTER_MARKER_BEGIN}
 $env:AICG_SHELL_ADAPTER = "powershell-profile"
-$env:AICG_COMMAND_LEDGER_ENFORCEMENT = "shell-adapter"
+$env:AICG_EXECUTION_TELEMETRY_ENFORCEMENT = "shell-adapter"
 function Invoke-AicgShellCommand {{
     param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Command)
     if (-not $Command -or $Command.Count -eq 0) {{ return }}
@@ -180,7 +180,7 @@ def install_powershell(args: argparse.Namespace) -> int:
     script = str(Path(snippet_args.script_path).resolve()).replace("\\", "/") if snippet_args.script_path else "ai_client_governance.py"
     snippet = f"""{ADAPTER_MARKER_BEGIN}
 $env:AICG_SHELL_ADAPTER = "powershell-profile"
-$env:AICG_COMMAND_LEDGER_ENFORCEMENT = "shell-adapter"
+$env:AICG_EXECUTION_TELEMETRY_ENFORCEMENT = "shell-adapter"
 function Invoke-AicgShellCommand {{
     param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Command)
     if (-not $Command -or $Command.Count -eq 0) {{ return }}
@@ -216,7 +216,7 @@ Set-Alias aicgsh Invoke-AicgShellCommand
 
 def diagnose(args: argparse.Namespace) -> int:
     root = Path(args.root).resolve()
-    events = tool_invocations.read_events(root, args.ledger_dir)
+    events = tool_invocations.read_events(root, args.jsonl_artifact_dir, args.db)
     terminal = [event for event in events if event.get("status") != "started"]
     if args.task_id:
         terminal = [event for event in terminal if str(event.get("task_id") or "") == args.task_id]
@@ -258,12 +258,13 @@ def diagnose(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run local shell commands through an AI Client Governance ledger adapter.")
+    parser = argparse.ArgumentParser(description="Run local shell commands through an AI Client Governance telemetry adapter.")
     parser.add_argument("--root", default=".", help="Host project root. Default: current directory.")
-    parser.add_argument("--ledger-dir", help="Ledger directory. Defaults to host .ai-client/project/logs/tool-invocations.")
+    parser.add_argument("--jsonl-artifact-dir", help="Explicit JSONL artifact directory for isolated tests or exports.")
+    parser.add_argument("--db", help="SQLite telemetry DB. Default: <root>/.ai-client/project/state/aicg.db.")
     sub = parser.add_subparsers(dest="command_name", required=True)
 
-    run = sub.add_parser("run", help="Run a command through the shell adapter and write ledger events.")
+    run = sub.add_parser("run", help="Run a command through the shell adapter and write telemetry events.")
     run.add_argument("--name", help="Tool or command name.")
     run.add_argument("--task-id", help="Structured task id.")
     run.add_argument("--task-tracking", help="Related task tracking file.")
@@ -276,7 +277,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--scope-path", action="append", help="Path used for common/project/native scope classification.")
     run.add_argument("--scope-kind", help="Explicit governance scope kind.")
     run.add_argument("--scope-reason", help="Explicit governance scope reason.")
-    run.add_argument("--adapter-enforcement", help="Ledger enforcement label. Default: shell-adapter.")
+    run.add_argument("--adapter-enforcement", help="Telemetry enforcement label. Default: shell-adapter.")
     run.add_argument("--powershell-command", help="Run a PowerShell command string through powershell -NoProfile -Command.")
     run.add_argument("--powershell-exe", help="PowerShell executable for --powershell-command.")
     run.add_argument("--format", choices=("text", "json"), default="text")
@@ -293,10 +294,10 @@ def build_parser() -> argparse.ArgumentParser:
     install.add_argument("--execute", action="store_true", help="Actually write the profile file. Without this, print a plan.")
     install.set_defaults(func=install_powershell)
 
-    diag = sub.add_parser("diagnose", help="Report shell adapter installation and ledger evidence.")
+    diag = sub.add_parser("diagnose", help="Report shell adapter installation and telemetry evidence.")
     diag.add_argument("--task-id", help="Only include adapter events for one structured task id.")
     diag.add_argument("--profile-path", help="PowerShell profile file to inspect for the adapter marker.")
-    diag.add_argument("--require-adapter", action="store_true", help="Exit non-zero unless adapter env/profile or ledger evidence exists.")
+    diag.add_argument("--require-adapter", action="store_true", help="Exit non-zero unless adapter env/profile or telemetry evidence exists.")
     diag.add_argument("--format", choices=("text", "json"), default="text")
     diag.set_defaults(func=diagnose)
     return parser

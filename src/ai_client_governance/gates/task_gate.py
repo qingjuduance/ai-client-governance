@@ -169,7 +169,7 @@ OUTPUT_INFO_REQUIRED_GROUPS = [
     ("applicability scope", ["适用范围", "覆盖", "适用"]),
     ("exclusions", ["排除范围", "非本轮范围", "不适用", "不覆盖"]),
     ("objects", ["涉及对象", "仓库", "路径", "文件", "脚本", "文档", "项目", "分支", "remote"]),
-    ("fact source", ["事实源", "证据", "git status", "验证", "账本", "trace", "report"]),
+    ("fact source", ["事实源", "证据", "git status", "验证", "telemetry", "审计记录", "trace", "report"]),
     ("completed items", ["已完成", "完成项"]),
     ("unfinished items", ["未完成", "剩余", "无未完成"]),
     ("unverified items", ["未验证", "未验", "无未验证"]),
@@ -711,7 +711,7 @@ def validate_applicability_gate(text: str, errors: list[Finding], tracking: str)
         ("practicality", ["实用性", "可操作", "人工步骤", "成本"]),
         ("efficiency", ["效率", "提速", "耗时", "读取文件数", "脚本化检查项数"]),
         ("extensibility", ["扩展性", "可扩展", "可演进", "后续升级", "树形", "trace"]),
-        ("quantitative source", ["量化", "指标", "统计口径", "事实源", "账本"]),
+        ("quantitative source", ["量化", "指标", "统计口径", "事实源", "telemetry", "审计记录"]),
     ]
     for label, patterns in required_groups:
         if not contains_any(section, patterns):
@@ -1168,7 +1168,7 @@ def validate_output_information_gate(text: str, errors: list[Finding], tracking:
             add(errors, "error", f"{output_id} lacks applicability scope.", tracking)
         if not contains_any(current_row_text, ["排除", "非本轮", "不适用", "不覆盖"]):
             add(errors, "error", f"{output_id} lacks exclusions or non-scope boundary.", tracking)
-        if not contains_any(current_row_text, ["事实源", "证据", "git status", "验证", "账本", "trace", "report"]):
+        if not contains_any(current_row_text, ["事实源", "证据", "git status", "验证", "telemetry", "审计记录", "trace", "report"]):
             add(errors, "error", f"{output_id} lacks fact source or evidence.", tracking)
         if not contains_any(current_row_text, ["未完成", "剩余", "无未完成"]):
             add(errors, "error", f"{output_id} lacks unfinished-item statement.", tracking)
@@ -1212,7 +1212,7 @@ def validate_script_capability_gate(text: str, errors: list[Finding], tracking: 
     required_groups = [
         ("current objective", ["当前目标", "目标"]),
         ("script gap", ["脚本缺口", "不支持", "参数", "输出", "失败"]),
-        ("bypass risk", ["绕过", "风险", "产物", "运行态", "锁", "账本"]),
+        ("bypass risk", ["绕过", "风险", "产物", "运行态", "锁", "telemetry", "审计记录"]),
         ("quality/applicability", ["质量目标", "适用范围", "实用性", "效率"]),
         ("decision", ["修脚本", "记录阻塞", "受控入口", "决策"]),
         ("validation", ["验证", "最小真实用例", "py_compile", "--help", "task gate"]),

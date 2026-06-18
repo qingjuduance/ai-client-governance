@@ -14,7 +14,7 @@ from ai_client_governance.gates import architecture_guard, gate_pool, session_ga
 from ai_client_governance.io import context_extract
 from ai_client_governance import templates
 from ai_client_governance.lifecycle import engine as lifecycle
-from ai_client_governance.records import scan_corrections, task_queue, task_record, tool_flow, tool_invocations
+from ai_client_governance.records import scan_corrections, task_queue, task_record, telemetry, tool_flow, tool_invocations
 from ai_client_governance.runtime import contract, registry as runtime_registry, shell_adapter, task_run
 from ai_client_governance.sync import check as sync_check
 from ai_client_governance.validation import completion, encoding, selftest
@@ -36,16 +36,17 @@ COMMANDS: dict[str, tuple[str, Callable[[], int]]] = {
     "runtime": ("Inspect agent governance runtime components.", runtime_registry.main),
     "scan-corrections": ("Scan correction records.", scan_corrections.main),
     "session-gate": ("Validate session closeout evidence.", session_gate.main),
-    "shell-adapter": ("Run local shell commands through a governance ledger adapter.", shell_adapter.main),
+    "shell-adapter": ("Run local shell commands through a governance telemetry adapter.", shell_adapter.main),
     "sync-check": ("Check embedded ai-client-governance synchronization state.", sync_check.main),
     "task-gate": ("Validate task-type evidence.", task_gate.main),
     "task-queue": ("Manage task workflow state.", task_queue.main),
     "task-record": ("Manage typed SQLite task records.", task_record.main),
     "task-run": ("Plan compressed local task command execution.", task_run.main),
+    "telemetry": ("Analyze unified execution telemetry.", telemetry.main),
     "templates": ("Render Markdown templates.", templates.main),
     "selftest": ("Run ai-client-governance black-box self-tests.", selftest.main),
     "tool-flow": ("Report invocation trace flow.", tool_flow.main),
-    "tool-invocations": ("Record and report tool invocations.", tool_invocations.main),
+    "tool-invocations": ("Run or record command-adapter telemetry spans.", tool_invocations.main),
     "validate-doc": ("Validate document task evidence.", validate_doc_task.main),
     "validate-encoding": ("Validate text encoding and source hygiene.", encoding.main),
     "worktree-coord": ("Coordinate sessions across git worktrees.", worktree_coord.main),

@@ -26,7 +26,7 @@ from ai_client_governance.worktree.coord import StateStore as CoordStateStore
 
 
 SELFTEST_ARTIFACT_ENV = "AICG_SELFTEST_ARTIFACT_ROOT"
-TOOL_INVOCATIONS_LEDGER_ENV = "AICG_TOOL_INVOCATIONS_DIR"
+STATE_DB_ENV = "AICG_STATE_DB"
 PYCACHE_PREFIX_ENV = "AICG_PYTHONPYCACHEPREFIX"
 
 
@@ -71,7 +71,7 @@ def run_command(command: list[str], cwd: Path, env_root: Path) -> CommandResult:
             "PYTHONIOENCODING": "utf-8",
             "PYTHONPYCACHEPREFIX": str(artifact_root / PYTHON_PYCACHE_DIR),
             PYCACHE_PREFIX_ENV: str(artifact_root / PYTHON_PYCACHE_DIR),
-            TOOL_INVOCATIONS_LEDGER_ENV: str(artifact_root / TOOL_INVOCATIONS_DIR),
+            STATE_DB_ENV: str(artifact_root / "state" / "aicg-selftest.db"),
             "AICG_DOC_INDEX_OUTPUT": str(artifact_root / "doc-index" / "graph.json"),
         },
     )
@@ -1416,8 +1416,8 @@ def test_preflight_boundary_hardening(root: Path, run_dir: Path) -> TestResult:
 
 
 def test_tool_flow_accepts_task_record_gate(root: Path, run_dir: Path) -> TestResult:
-    ledger_dir = run_dir / "tool-flow-task-record-ledger"
-    ledger_dir.mkdir(parents=True, exist_ok=True)
+    jsonl_artifact_dir = run_dir / "tool-flow-task-record-jsonl"
+    jsonl_artifact_dir.mkdir(parents=True, exist_ok=True)
     trace_id = "trace-selftest-tool-flow-task-record"
     events = [
         {
@@ -1443,18 +1443,18 @@ def test_tool_flow_accepts_task_record_gate(root: Path, run_dir: Path) -> TestRe
             "trace_id": trace_id,
         },
         {
-            "invocation_id": "selftest-tool-invocations-report",
+            "invocation_id": "selftest-telemetry-report",
             "timestamp": "2026-06-17T12:00:02+00:00",
-            "name": "ai_client_governance.py tool-invocations",
+            "name": "ai_client_governance.py telemetry",
             "status": "succeeded",
-            "command": "ai_client_governance.py tool-invocations report --trace-id " + trace_id,
+            "command": "ai_client_governance.py telemetry report --trace-id " + trace_id,
             "exit_code": 0,
             "phase": "report",
             "trace_id": trace_id,
         },
     ]
     write_text_lf(
-        ledger_dir / "2026-06.jsonl",
+        jsonl_artifact_dir / "2026-06.jsonl",
         "\n".join(json.dumps(event, ensure_ascii=False) for event in events) + "\n",
     )
     commands = [
@@ -1465,8 +1465,8 @@ def test_tool_flow_accepts_task_record_gate(root: Path, run_dir: Path) -> TestRe
                 "tool-flow",
                 "--root",
                 str(root),
-                "--ledger-dir",
-                str(ledger_dir),
+                "--jsonl-artifact-dir",
+                str(jsonl_artifact_dir),
                 "--trace-id",
                 trace_id,
                 "--format",
@@ -1695,7 +1695,7 @@ def test_task_run_command_compression_plan(root: Path, run_dir: Path) -> TestRes
         and "preflight.interceptor.command-compression" in component_output
         and "preflight.interceptor.scope-classification" in component_output
         and "\"event_type\": \"command-compression.analysis\"" in plan_output
-        and "\"scope_kind\": \"native-project-assets\"" in plan_output
+        and "\"scope_kind\": \"ai-client-governance-common\"" in plan_output
         and "\"skipped_duplicate_count\": 1" in plan_output
         and "local-command-compression" in plan_output
         and ".ai-client/ai-client-governance/scripts/ai_client_governance.py selftest" in host_plan_output
@@ -1714,10 +1714,10 @@ def test_task_run_command_compression_plan(root: Path, run_dir: Path) -> TestRes
 
 
 def test_task_run_dag_cache_diagnostics(root: Path, run_dir: Path) -> TestResult:
-    ledger_dir = run_dir / "task-run-ledger"
+    jsonl_artifact_dir = run_dir / "task-run-telemetry-jsonl"
     cache_dir = run_dir / "task-run-cache"
     validation_command = (
-        "python .ai-client/ai-client-governance/scripts/ai_client_governance.py "
+        "python scripts/ai_client_governance.py "
         "validate-encoding --root . --paths README.md --strict"
     )
     run_base = [
@@ -1738,8 +1738,8 @@ def test_task_run_dag_cache_diagnostics(root: Path, run_dir: Path) -> TestResult
         str(cache_dir),
         "--input-path",
         "README.md",
-        "--ledger-dir",
-        str(ledger_dir),
+        "--jsonl-artifact-dir",
+        str(jsonl_artifact_dir),
         "--format",
         "json",
         "--command",
@@ -1776,8 +1776,8 @@ def test_task_run_dag_cache_diagnostics(root: Path, run_dir: Path) -> TestResult
                 "--root",
                 str(root),
                 "diagnose",
-                "--ledger-dir",
-                str(ledger_dir),
+                "--jsonl-artifact-dir",
+                str(jsonl_artifact_dir),
                 "--format",
                 "json",
             ],
@@ -1792,8 +1792,8 @@ def test_task_run_dag_cache_diagnostics(root: Path, run_dir: Path) -> TestResult
                 "--root",
                 str(root),
                 "diagnose",
-                "--ledger-dir",
-                str(ledger_dir),
+                "--jsonl-artifact-dir",
+                str(jsonl_artifact_dir),
                 "--task-id",
                 "TASK-RUN-DAG-SELFTEST",
                 "--format",
@@ -1819,29 +1819,33 @@ def test_task_run_dag_cache_diagnostics(root: Path, run_dir: Path) -> TestResult
         pass
     first_summary = first.get("summary", {}) if isinstance(first.get("summary"), dict) else {}
     second_summary = second.get("summary", {}) if isinstance(second.get("summary"), dict) else {}
-    ledger = diagnose.get("ledger", {}) if isinstance(diagnose.get("ledger"), dict) else {}
-    filtered_ledger = filtered_diagnose.get("ledger", {}) if isinstance(filtered_diagnose.get("ledger"), dict) else {}
-    filtered_filters = filtered_ledger.get("filters", {}) if isinstance(filtered_ledger.get("filters"), dict) else {}
+    telemetry = diagnose.get("telemetry", {}) if isinstance(diagnose.get("telemetry"), dict) else {}
+    filtered_telemetry = (
+        filtered_diagnose.get("telemetry", {}) if isinstance(filtered_diagnose.get("telemetry"), dict) else {}
+    )
+    filtered_filters = (
+        filtered_telemetry.get("filters", {}) if isinstance(filtered_telemetry.get("filters"), dict) else {}
+    )
     passed = (
         all(command.exit_code == 0 for command in commands)
         and "preflight.interceptor.task-run-dag" in component_output
         and int(first_summary.get("cache_misses", 0)) == 1
         and int(second_summary.get("cache_hits", 0)) == 1
         and "\"status\": \"cache-hit\"" in second_output
-        and "\"ledger_path\"" in first_output
-        and int(ledger.get("event_count", 0)) >= 4
-        and int(ledger.get("adapter", {}).get("event_count", 0)) >= 2
-        and "mixed" in ledger.get("scope_kind_counts", {})
-        and not ledger.get("duplicate_commands")
-        and not ledger.get("failures")
+        and "\"telemetry_path\"" in first_output
+        and int(telemetry.get("event_count", 0)) >= 4
+        and int(telemetry.get("adapter", {}).get("event_count", 0)) >= 2
+        and "ai-client-governance-common" in telemetry.get("scope_kind_counts", {})
+        and not telemetry.get("duplicate_commands")
+        and not telemetry.get("failures")
         and filtered_filters.get("task_id") == "TASK-RUN-DAG-SELFTEST"
-        and int(filtered_ledger.get("event_count", 0)) >= 4
+        and int(filtered_telemetry.get("event_count", 0)) >= 4
     )
     return TestResult(
         name="task-run-dag-cache-diagnostics",
         passed=passed,
         summary=(
-            "task-run run writes ledger events, reuses safe cache on the second validation, and diagnose reports clean ledger health"
+            "task-run run writes telemetry events, reuses safe cache on the second validation, and diagnose reports clean telemetry health"
             if passed
             else "task-run DAG/cache/diagnostics regression failed"
         ),
@@ -1850,7 +1854,7 @@ def test_task_run_dag_cache_diagnostics(root: Path, run_dir: Path) -> TestResult
 
 
 def test_shell_adapter_scope_diagnostics(root: Path, run_dir: Path) -> TestResult:
-    ledger_dir = run_dir / "shell-adapter-ledger"
+    jsonl_artifact_dir = run_dir / "shell-adapter-telemetry-jsonl"
     profile_path = run_dir / "Microsoft.PowerShell_profile.ps1"
     commands = [
         run_command(
@@ -1860,8 +1864,8 @@ def test_shell_adapter_scope_diagnostics(root: Path, run_dir: Path) -> TestResul
                 "shell-adapter",
                 "--root",
                 str(root),
-                "--ledger-dir",
-                str(ledger_dir),
+                "--jsonl-artifact-dir",
+                str(jsonl_artifact_dir),
                 "run",
                 "--task-id",
                 "SHELL-ADAPTER-SELFTEST",
@@ -1886,8 +1890,8 @@ def test_shell_adapter_scope_diagnostics(root: Path, run_dir: Path) -> TestResul
                 "shell-adapter",
                 "--root",
                 str(root),
-                "--ledger-dir",
-                str(ledger_dir),
+                "--jsonl-artifact-dir",
+                str(jsonl_artifact_dir),
                 "diagnose",
                 "--task-id",
                 "SHELL-ADAPTER-SELFTEST",
@@ -1933,9 +1937,9 @@ def test_shell_adapter_scope_diagnostics(root: Path, run_dir: Path) -> TestResul
         name="shell-adapter-scope-diagnostics",
         passed=passed,
         summary=(
-            "shell-adapter run writes scoped ledger events and diagnose reports adapter evidence"
+            "shell-adapter run writes scoped telemetry events and diagnose reports adapter evidence"
             if passed
-            else "shell-adapter scoped ledger diagnostics regression failed"
+            else "shell-adapter scoped telemetry diagnostics regression failed"
         ),
         commands=commands,
     )
@@ -2026,6 +2030,8 @@ def test_sync_check_records_db_state(root: Path, run_dir: Path) -> TestResult:
                 "sync-check",
                 "--target-project-path",
                 str(project),
+                "--db",
+                str(state_db),
                 "--no-fetch",
                 "--format",
                 "json",
@@ -2252,13 +2258,13 @@ def main() -> int:
     run_dir.mkdir(parents=True, exist_ok=True)
 
     previous_artifact_root = os.environ.get(SELFTEST_ARTIFACT_ENV)
-    previous_tool_invocations_ledger = os.environ.get(TOOL_INVOCATIONS_LEDGER_ENV)
+    previous_state_db = os.environ.get(STATE_DB_ENV)
     previous_pycache_prefix_env = os.environ.get(PYCACHE_PREFIX_ENV)
     previous_python_pycache = os.environ.get("PYTHONPYCACHEPREFIX")
     previous_sys_pycache_prefix = sys.pycache_prefix
     os.environ[SELFTEST_ARTIFACT_ENV] = str(run_dir)
     pycache_root = run_dir / PYTHON_PYCACHE_DIR
-    os.environ[TOOL_INVOCATIONS_LEDGER_ENV] = str(run_dir / TOOL_INVOCATIONS_DIR)
+    os.environ[STATE_DB_ENV] = str(run_dir / "state" / "aicg-selftest.db")
     os.environ[PYCACHE_PREFIX_ENV] = str(pycache_root)
     os.environ["PYTHONPYCACHEPREFIX"] = str(pycache_root)
     sys.pycache_prefix = str(pycache_root)
@@ -2286,10 +2292,10 @@ def main() -> int:
             os.environ.pop(SELFTEST_ARTIFACT_ENV, None)
         else:
             os.environ[SELFTEST_ARTIFACT_ENV] = previous_artifact_root
-        if previous_tool_invocations_ledger is None:
-            os.environ.pop(TOOL_INVOCATIONS_LEDGER_ENV, None)
+        if previous_state_db is None:
+            os.environ.pop(STATE_DB_ENV, None)
         else:
-            os.environ[TOOL_INVOCATIONS_LEDGER_ENV] = previous_tool_invocations_ledger
+            os.environ[STATE_DB_ENV] = previous_state_db
         if previous_pycache_prefix_env is None:
             os.environ.pop(PYCACHE_PREFIX_ENV, None)
         else:

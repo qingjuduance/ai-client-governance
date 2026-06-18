@@ -40,7 +40,7 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   live-state、lifecycle 状态和可查询审计事实默认写入 `.ai-client/project/state/aicg.db`。
   JSON/Markdown 只能通过显式导出命令输出给人读，不能作为后续机器逻辑的默认输入。
 - **修改必有隔离与证据**：修改型任务默认通过 worktree、结构化 task record、写锁、
-  工具账本、验证记录和最终状态收口；不能只依赖对话记忆或最终回复口头声称完成。
+  执行 telemetry、验证记录和最终状态收口；不能只依赖对话记忆或最终回复口头声称完成。
 - **项目特化不污染通用层**：目标项目的业务、简历、学习路线、源码快照、目录结构、
   本地交付规则和私有偏好留在 `.ai-client/project/` 或项目原生资产中；通用仓库只收纳
   跨项目可复用的治理流程和工具。
@@ -88,7 +88,7 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
 - 一切可重复、易遗漏、会影响仓库状态或会跨会话协作的流程，都必须优先脚本化、
   状态化和门禁化；不能只依赖单次对话记忆或人工口头约定。
 - 每个修改型任务必须留下可复盘证据：任务输入拆解、审批、worktree、写锁、
-  操作账本、验证、提交、合并、清理和下一步状态，都要能被后续 AI 会话读取。
+  操作 telemetry、验证、提交、合并、清理和下一步状态，都要能被后续 AI 会话读取。
 - worktree 创建、状态同步、收口检查和安全清理优先使用
   `python .ai-client/ai-client-governance/scripts/ai_client_governance.py worktree-task ...`；当前 worktree
   总览用 `worktree-task status --record-state` 写入 `.ai-client/project/state/aicg.db`。
@@ -153,7 +153,7 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   `stale_or_missing_worktree` 并释放相关 active lock。
 - `worktree-task closeout-all` 移除任务 worktree 后，必须在同一脚本链路关闭该
   worktree 对应的 active coord session 并释放 active lock；脚本生成的 closeout
-  残留不能要求 AI 或用户手工改运行态账本。
+  残留不能要求 AI 或用户手工改运行态数据。
 - worktree 合并收口任务的最终 live gate 必须使用
   `worktree-task finalize --require-merged --require-no-task-worktrees` 或等价检查，
   确认没有残留任务 worktree；如因明确保留策略跳过该强门禁，必须记录原因和恢复方式。
@@ -197,7 +197,7 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   prewrite/final 边界，修改型任务最终收口缺 worktree 时必须 fail closed。
 - 处理拦截器负责审批、worktree、联网核对、task tracking、脚本能力适配和状态机。
 - 输出拦截器负责最终回复覆盖、worktree 完成状态、未合并/未提交/未 push 边界和下一步提示。
-- 横切门禁负责编码、文档引用、Git 边界、脚本账本、trace flow 和 correction 扫描。
+- 横切门禁负责编码、文档引用、Git 边界、脚本 telemetry、trace flow 和 correction 扫描。
 - 强制输入过滤器入口：
   `python .ai-client/ai-client-governance/scripts/ai_client_governance.py lifecycle input-filter ...`。
 - 写入前必须运行 lifecycle preflight，并用 `--task-id` 验证结构化 task record：
@@ -230,28 +230,43 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   `python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-run run ...`
   执行确定性本地 DAG：只读/验证组可以并行，显式 `--cache` 时只缓存只读/验证节点；
   状态变更、Git 写入、锁、task-record apply 和未知副作用命令必须顺序执行且不缓存。
-- `task-run run` 默认写入 `.ai-client/project/logs/tool-invocations/*.jsonl`，并可输出
-  `--trace-json`；`--no-ledger` 只能用于隔离测试。宿主客户端裸 shell 调用若无法自动
-  拦截，必须在 task record 中记录原因或改用 `task-run`、`gate-pool`、
+- `task-run run`、`gate-pool`、`shell-adapter`、`telemetry record` 和命令适配器
+  `tool-invocations run/record`
+  默认把执行 span、事件、耗时、失败、cache、scope 和 trace 写入
+  `.ai-client/project/state/aicg.db` 的 telemetry 表；`--trace-json` 只作为显式报告输出，
+  `--jsonl-artifact-dir` 只允许作为隔离测试或一次性导出 artifact，不能作为默认机器事实源。
+  `--no-telemetry` 只能用于隔离测试。宿主客户端裸 shell 调用若无法自动拦截，必须在
+  task record 中记录原因或改用 `task-run`、`gate-pool`、`shell-adapter`、
   `tool-invocations run` 补账。
-- 脚本生成的状态、账本、lock、coord session、trace、doc-index、pycache 或 selftest
+- 脚本生成的状态、telemetry、lock、coord session、trace、doc-index、pycache 或 selftest
   artifact 必须有 owner command、allowed artifacts、cleanup/reconcile 命令和验证证据；
   能入 DB 的状态不得退回默认 JSON/配置文件。确需贴近 Git common dir 的底层锁文件必须
   在 owner command 中声明原因、迁移边界和后续 DB 化任务。
   规则/脚本任务缺少 `events.event_type=state-artifact-ownership.analysis` 时
   `task-record gate` 必须 fail closed；脚本生成的数据出问题时先修脚本或走脚本修复
-  入口，不手工改运行态账本。
+  入口，不手工改运行态 telemetry、coord 或 lock 数据。
 - 重要本地命令的强制适配入口是
   `python .ai-client/ai-client-governance/scripts/ai_client_governance.py shell-adapter run -- ...`。
-  `shell-adapter` 会写入本地 JSONL ledger，并在事件中记录 `adapter_enforcement`、
+  `shell-adapter` 会写入 SQLite telemetry，并在事件中记录 `adapter_enforcement`、
   `scope_kind`、`scope_reason` 和 task id。PowerShell 可用
   `shell-adapter profile-snippet` 或 `shell-adapter install-powershell --execute`
   安装 profile shim；profile shim 是显式适配器，不声称能拦截宿主客户端内部所有裸
-  shell。收口诊断必须区分 adapter evidence、ledger-wrapped command 和 raw shell gap。
+  shell。收口诊断必须区分 adapter evidence、telemetry-wrapped command 和 raw shell gap。
 - 运行状态和资源遗漏检查使用
   `python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-run diagnose ...`；
-  它报告命令账本失败、重复终态命令、cache hit/miss、coord lock/session 和裸 shell
+  它报告 execution telemetry 失败、重复终态命令、cache hit/miss、coord lock/session 和裸 shell
   自动拦截缺口，并可用 `--task-id`、`--trace-id`、`--since`、`--until` 收敛到当前任务。
+- 执行 telemetry 记录入口是
+  `python .ai-client/ai-client-governance/scripts/ai_client_governance.py telemetry record ...`；
+  命令只是 `span_kind=command`、`subject_type=command` 的一种载荷，模型 HTTP、子 AI、
+  token usage 和外部 API 统计必须扩展同一 `execution_spans`/`execution_events` schema。
+- 执行统计和数据分析入口是
+  `python .ai-client/ai-client-governance/scripts/ai_client_governance.py telemetry report ...`；
+  它读取 `execution_spans` 和 `execution_events`，统计 top operations、top subjects、span kind、
+  subject type、重复执行、失败率、duration p50/p95/max、cache hit/miss、scope 分布和
+  adapter enforcement 分布。
+  新增模型 HTTP、子 AI、token usage 或外部 API 调用统计时，必须扩展同一 telemetry
+  span/event 模型，不能再新增并行日志体系。
 - 设计新的治理执行结构、缓存策略或观测模型前，必须先联网核对官方或一手资料，
   并在 task record 记录来源、采用结论和不采用边界。
 - 治理节点采用强制执行单元模型，至少声明 `id`、`phase`、`events`、
@@ -274,7 +289,7 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
 - 执行前必须先用 `contract describe` 明确本任务必填字段、枚举、gate 和
   写入命令；不要靠最终 `task-gate` 从 Markdown 里反推缺什么。
 - 中/大型或修改型任务还必须写入 `events.event_type=command-compression.analysis`。
-  该事件记录本轮候选命令的压缩决策、去重数量、并行/顺序分组、账本策略和是否选择
+  该事件记录本轮候选命令的压缩决策、去重数量、并行/顺序分组、telemetry 策略和是否选择
   gate-pool/task-run 本地路径。
 - `task-record apply --json <file>` 是结构化写入入口；它必须在落库前校验
   `tasks`、`requirements`、`triggers`、`outputs`、`events`、`worktrees`、`validations`
@@ -285,10 +300,10 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
 - task tracking Markdown 导出或历史记录放在 `.ai-client/project/records/task-tracking/`。
 - pending 恢复入口放在 `.ai-client/project/records/pending-tasks/`。
 - correction 记录放在 `.ai-client/project/records/corrections/`。
-- 运行态、日志和账本放在 `.ai-client/project/state/`、`.ai-client/project/logs/`
+- 运行态、日志和 telemetry 放在 `.ai-client/project/state/`、`.ai-client/project/logs/`
   和 `.ai-client/project/tmp/`，不写回通用仓库。
 - 结构化 task record 至少记录：用户输入拆解、用户要求、触发日志、任务类型、
-  worktree 证据、Worktree 完成记录、影响面、操作账本、验证记录、DoD、Git 状态
+  worktree 证据、Worktree 完成记录、影响面、操作 telemetry、验证记录、DoD、Git 状态
   和恢复现场。
 - 多分支任务必须记录 `## 主任务分支状态门禁`，覆盖每个分支的状态、证据和下一步。
 - 模板由程序输出：
@@ -326,7 +341,7 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   `## 用户要求追踪门禁`。
 - 每条要求使用稳定 ID，记录状态、动作、实现证据、验证证据和最终回复覆盖口径。
 - 同一轮多个要求不能只处理最近一条；最终回复前逐条回看。
-- 触发用户要求、任务类型、安全要求、脚本能力适配、命令压缩、上下文压缩、脚本账本
+- 触发用户要求、任务类型、安全要求、脚本能力适配、命令压缩、上下文压缩、脚本 telemetry
   或最终门禁时，必须在 `## 要求触发日志` 记录 TRG 行。
 - 最终回复前必须用 `## 输出信息门禁` 或等价记录覆盖已完成项、未处理项、
   未验证项、阻塞项、active pending、Git/worktree 状态和下一步。
@@ -347,13 +362,15 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
 - 新增或修改脚本后，必须验证 `--help`、一个真实成功路径、必要的失败/警告路径，
   并运行 `python .ai-client/ai-client-governance/scripts/ai_client_governance.py selftest` 覆盖黑盒强制行为。
 - 脚本能力不支持当前目标时，先记录 `## 脚本能力适配门禁`；不得手工改运行态、
-  锁、账本或派生报告来伪造脚本能力。
+  锁、telemetry 或派生报告来伪造脚本能力。
 - 修改长文件、热点治理文件或多 worktree 可能同时修改的文件前，必须先做 patch
   preflight：用 `rg`/`context-extract` 确认锚点唯一或重新提取更窄上下文，小步应用
   patch，并记录 `events.event_type=patch-preflight.analysis`。缺少该事件时，
   规则/脚本、docs 或 correction 任务的 `task-record gate` 必须 fail closed。
 - Python 运行产生的缓存必须重定向到 `.ai-client/project/cache/python-pycache`；selftest
   或隔离测试可把同类路径重定向到自己的 run directory，并在 artifact manifest 中声明。
+- selftest 或隔离测试需要写治理状态时，必须用 `AICG_STATE_DB` 或显式 `--db` 指向
+  run directory 内的临时 SQLite；不能为了测试方便把默认 DB 降级成 JSON/JSONL 状态源。
 - 文本文件必须用 UTF-8；JSON 不应带 UTF-8 BOM。
 - 编码验证入口：
   `python .ai-client/ai-client-governance/scripts/ai_client_governance.py validate-encoding ...`。
@@ -439,8 +456,12 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   是否发生去重、是否有跳过理由和是否存在明显性能问题。
 - 规则/脚本强制执行能力变更后，收口前必须运行：
   `python .ai-client/ai-client-governance/scripts/ai_client_governance.py selftest --root <target-project>`。
-- 工具调用账本入口：
-  `python .ai-client/ai-client-governance/scripts/ai_client_governance.py tool-invocations ...`。
+- 通用 execution telemetry 记录入口：
+  `python .ai-client/ai-client-governance/scripts/ai_client_governance.py telemetry record ...`。
+- 命令适配器入口：
+  `python .ai-client/ai-client-governance/scripts/ai_client_governance.py tool-invocations run/record ...`。
+- 执行统计分析入口：
+  `python .ai-client/ai-client-governance/scripts/ai_client_governance.py telemetry report ...`。
 - 调用链路报告入口：
   `python .ai-client/ai-client-governance/scripts/ai_client_governance.py tool-flow ...`。
 - 最终回复必须说明：本轮任务完成状态、原主任务状态、active pending、验证结果、

@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Record and report AI Client Governance maintenance script invocations.
+"""Run or record command-adapter telemetry spans.
 
-The ledger is local project state under .ai-client/project/logs/tool-invocations/*.jsonl.
-This script intentionally avoids external dependencies and never edits rules,
-tracking, corrections, or Git state.
+The default machine fact source is .ai-client/project/state/aicg.db. JSONL output
+is only an explicit isolated artifact path for tests or one-off exports.
 """
 
 from __future__ import annotations
@@ -23,11 +22,12 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from ai_client_governance.common.paths import PYTHON_PYCACHE_DIR, TOOL_INVOCATIONS_DIR
+from ai_client_governance.records import telemetry
 from ai_client_governance.runtime.scope import classify_scope
 
-DEFAULT_LEDGER_DIR = TOOL_INVOCATIONS_DIR
-LEDGER_DIR_ENV = "AICG_TOOL_INVOCATIONS_DIR"
+DEFAULT_JSONL_ARTIFACT_DIR = TOOL_INVOCATIONS_DIR
 PYCACHE_PREFIX_ENV = "AICG_PYTHONPYCACHEPREFIX"
+EXECUTION_TELEMETRY_ENFORCEMENT_ENV = "AICG_EXECUTION_TELEMETRY_ENFORCEMENT"
 SCHEMA_VERSION = 2
 FINAL_GATE_NAMES = {
     "ai_client_governance.py session-gate",
@@ -123,12 +123,11 @@ def is_final_gate(name: str, explicit: bool) -> bool:
     return explicit or name in FINAL_GATE_NAMES
 
 
-def ledger_dir(root: Path, ledger_dir_arg: str | None) -> Path:
-    configured = ledger_dir_arg or os.environ.get(LEDGER_DIR_ENV, "")
-    if configured:
-        path = Path(configured)
+def jsonl_artifact_dir(root: Path, jsonl_artifact_dir_arg: str | None) -> Path:
+    if jsonl_artifact_dir_arg:
+        path = Path(jsonl_artifact_dir_arg)
         return path if path.is_absolute() else root / path
-    return root / DEFAULT_LEDGER_DIR
+    return root / DEFAULT_JSONL_ARTIFACT_DIR
 
 
 def pycache_prefix(root: Path) -> Path:
@@ -139,17 +138,24 @@ def pycache_prefix(root: Path) -> Path:
     return root / PYTHON_PYCACHE_DIR
 
 
-def ledger_file(root: Path, ledger_dir_arg: str | None, timestamp: str) -> Path:
+def jsonl_artifact_file(root: Path, jsonl_artifact_dir_arg: str | None, timestamp: str) -> Path:
     dt = parse_dt(timestamp) or datetime.now().astimezone()
-    directory = ledger_dir(root, ledger_dir_arg)
+    directory = jsonl_artifact_dir(root, jsonl_artifact_dir_arg)
     return directory / f"{dt.year:04d}-{dt.month:02d}.jsonl"
 
 
-def append_event(root: Path, ledger_dir_arg: str | None, event: dict[str, Any]) -> Path:
-    path = ledger_file(root, ledger_dir_arg, str(event["timestamp"]))
+def append_event(root: Path, jsonl_artifact_dir_arg: str | None, event: dict[str, Any], db_arg: str | None = None) -> Path:
+    if not jsonl_artifact_dir_arg:
+        return telemetry.append_event(
+            root,
+            event,
+            db=db_arg,
+            source_command="ai_client_governance.py tool-invocations",
+        )
+    path = jsonl_artifact_file(root, jsonl_artifact_dir_arg, str(event["timestamp"]))
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8", newline="\n") as handle:
-        handle.write(json.dumps(event, ensure_ascii=False, sort_keys=True))
+        handle.write(json.dumps(telemetry.sanitized_event(event), ensure_ascii=False, sort_keys=True))
         handle.write("\n")
     return path
 
@@ -216,16 +222,18 @@ def make_event(
     }
 
 
-def iter_ledger_files(root: Path, ledger_dir_arg: str | None) -> Iterable[Path]:
-    directory = ledger_dir(root, ledger_dir_arg)
+def iter_jsonl_artifact_files(root: Path, jsonl_artifact_dir_arg: str | None) -> Iterable[Path]:
+    directory = jsonl_artifact_dir(root, jsonl_artifact_dir_arg)
     if not directory.exists():
         return []
     return sorted(directory.glob("*.jsonl"))
 
 
-def read_events(root: Path, ledger_dir_arg: str | None) -> list[dict[str, Any]]:
+def read_events(root: Path, jsonl_artifact_dir_arg: str | None, db_arg: str | None = None) -> list[dict[str, Any]]:
+    if not jsonl_artifact_dir_arg:
+        return telemetry.read_events(root, db=db_arg)
     events: list[dict[str, Any]] = []
-    for path in iter_ledger_files(root, ledger_dir_arg):
+    for path in iter_jsonl_artifact_files(root, jsonl_artifact_dir_arg):
         for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
             stripped = line.strip()
             if not stripped:
@@ -321,7 +329,7 @@ def filter_invocations(
 
 
 def format_text(invocations: list[Invocation], top: int) -> str:
-    lines = ["AI Client Governance Tool Invocation Report", f"Invocation attempts: {len(invocations)}"]
+    lines = ["AI Client Governance Command Adapter Report", f"Invocation attempts: {len(invocations)}"]
     if not invocations:
         lines.extend(["", "No invocation records found."])
         return "\n".join(lines)
@@ -333,7 +341,7 @@ def format_text(invocations: list[Invocation], top: int) -> str:
         latest_by_name[item.name] = item
 
     lines.append("")
-    lines.append("Top tools:")
+    lines.append("Top operations:")
     for name, count in by_name.most_common(top):
         latest = latest_by_name[name]
         lines.append(
@@ -367,7 +375,7 @@ def format_text(invocations: list[Invocation], top: int) -> str:
 
 def format_markdown(invocations: list[Invocation], top: int) -> str:
     if not invocations:
-        return "# AI Client Governance Tool Invocation Report\n\n- Invocation attempts: 0\n"
+        return "# AI Client Governance Command Adapter Report\n\n- Invocation attempts: 0\n"
 
     by_name = Counter(item.name for item in invocations)
     failures = Counter(item.name for item in invocations if item.status == "failed" or item.exit_code not in {None, 0})
@@ -376,7 +384,7 @@ def format_markdown(invocations: list[Invocation], top: int) -> str:
         latest_by_name[item.name] = item
 
     lines = [
-        "# AI Client Governance Tool Invocation Report",
+        "# AI Client Governance Command Adapter Report",
         "",
         f"- Invocation attempts: {len(invocations)}",
         "",
@@ -438,10 +446,10 @@ def command_record(args: argparse.Namespace) -> int:
         scope_kind=scope_kind,
         scope_reason=scope_reason,
         scope_paths=scope.paths,
-        adapter_enforcement=args.adapter_enforcement or os.environ.get("AICG_COMMAND_LEDGER_ENFORCEMENT", "tool-invocations"),
+        adapter_enforcement=args.adapter_enforcement or os.environ.get(EXECUTION_TELEMETRY_ENFORCEMENT_ENV, "tool-invocations"),
     )
-    path = append_event(root, args.ledger_dir, event)
-    print(f"recorded {name} status={args.status} ledger={path}")
+    path = append_event(root, args.jsonl_artifact_dir, event, args.db)
+    print(f"recorded {name} status={args.status} telemetry={path}")
     return 0
 
 
@@ -488,9 +496,9 @@ def command_run(args: argparse.Namespace) -> int:
         scope_kind=scope_kind,
         scope_reason=scope_reason,
         scope_paths=scope.paths,
-        adapter_enforcement=args.adapter_enforcement or os.environ.get("AICG_COMMAND_LEDGER_ENFORCEMENT", "tool-invocations"),
+        adapter_enforcement=args.adapter_enforcement or os.environ.get(EXECUTION_TELEMETRY_ENFORCEMENT_ENV, "tool-invocations"),
     )
-    append_event(root, args.ledger_dir, start_event)
+    append_event(root, args.jsonl_artifact_dir, start_event, args.db)
 
     start = time.monotonic()
     child_env = os.environ.copy()
@@ -529,16 +537,16 @@ def command_run(args: argparse.Namespace) -> int:
         scope_kind=scope_kind,
         scope_reason=scope_reason,
         scope_paths=scope.paths,
-        adapter_enforcement=args.adapter_enforcement or os.environ.get("AICG_COMMAND_LEDGER_ENFORCEMENT", "tool-invocations"),
+        adapter_enforcement=args.adapter_enforcement or os.environ.get(EXECUTION_TELEMETRY_ENFORCEMENT_ENV, "tool-invocations"),
     )
-    path = append_event(root, args.ledger_dir, end_event)
-    print(f"recorded {name} status={status} exit={completed.returncode} ledger={path}")
+    path = append_event(root, args.jsonl_artifact_dir, end_event, args.db)
+    print(f"recorded {name} status={status} exit={completed.returncode} telemetry={path}")
     return completed.returncode
 
 
 def command_report(args: argparse.Namespace) -> int:
     root = Path(args.root).resolve()
-    events = read_events(root, args.ledger_dir)
+    events = read_events(root, args.jsonl_artifact_dir, args.db)
     invocations = collapse_invocations(events)
     invocations = filter_invocations(
         invocations,
@@ -563,17 +571,18 @@ def command_report(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Record and report AI Client Governance maintenance script invocations."
+        description="Run or record command-adapter execution telemetry spans."
     )
     parser.add_argument("--root", default=".", help="Repository root.")
     parser.add_argument(
-        "--ledger-dir",
-        help="Ledger directory. Defaults to .ai-client/project/logs/tool-invocations under root.",
+        "--jsonl-artifact-dir",
+        help="Explicit JSONL artifact directory for isolated tests or exports. Default records to aicg.db.",
     )
+    parser.add_argument("--db", help="SQLite telemetry DB. Default: <root>/.ai-client/project/state/aicg.db.")
     subparsers = parser.add_subparsers(dest="command_name", required=True)
 
-    record = subparsers.add_parser("record", help="Append one invocation event.")
-    record.add_argument("--name", help="Tool or script name.")
+    record = subparsers.add_parser("record", help="Append one command-adapter span event.")
+    record.add_argument("--name", help="Operation, tool, or script name.")
     record.add_argument("--command", help="Command string.")
     record.add_argument("--status", default="succeeded", help="Invocation status.")
     record.add_argument("--exit-code", type=int, help="Process exit code.")
@@ -583,7 +592,7 @@ def build_parser() -> argparse.ArgumentParser:
     record.add_argument("--scope-kind", help="Explicit governance scope kind.")
     record.add_argument("--scope-reason", help="Explicit governance scope reason.")
     record.add_argument("--scope-path", action="append", help="Path used for common/project/native scope classification.")
-    record.add_argument("--adapter-enforcement", help="Ledger enforcement adapter label.")
+    record.add_argument("--adapter-enforcement", help="Telemetry enforcement adapter label.")
     record.add_argument("--phase", help="Task phase, e.g. planning or final-gate.")
     record.add_argument("--summary", help="Short result summary.")
     record.add_argument("--final-gate", action="store_true", help="Mark as final gate evidence.")
@@ -599,15 +608,15 @@ def build_parser() -> argparse.ArgumentParser:
     record.add_argument("--invocation-id", help="Explicit invocation id.")
     record.set_defaults(func=command_record)
 
-    run = subparsers.add_parser("run", help="Run a command and record its result.")
-    run.add_argument("--name", help="Tool or script name.")
+    run = subparsers.add_parser("run", help="Run a command and record its result as execution telemetry.")
+    run.add_argument("--name", help="Operation, tool, or script name.")
     run.add_argument("--task-tracking", help="Related task tracking file.")
     run.add_argument("--task-id", help="Related structured task id.")
     run.add_argument("--task-type", action="append", help="Related task type.")
     run.add_argument("--scope-kind", help="Explicit governance scope kind.")
     run.add_argument("--scope-reason", help="Explicit governance scope reason.")
     run.add_argument("--scope-path", action="append", help="Path used for common/project/native scope classification.")
-    run.add_argument("--adapter-enforcement", help="Ledger enforcement adapter label.")
+    run.add_argument("--adapter-enforcement", help="Telemetry enforcement adapter label.")
     run.add_argument("--phase", help="Task phase, e.g. planning or final-gate.")
     run.add_argument("--summary", help="Short result summary.")
     run.add_argument("--final-gate", action="store_true", help="Mark as final gate evidence.")
@@ -621,7 +630,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("command", nargs=argparse.REMAINDER)
     run.set_defaults(func=command_run)
 
-    report = subparsers.add_parser("report", help="Summarize invocation records.")
+    report = subparsers.add_parser("report", help="Summarize command-adapter records.")
     report.add_argument("--since", help="Only include events after this date/time.")
     report.add_argument("--until", help="Only include events before this date/time.")
     report.add_argument("--task-tracking", help="Filter by task tracking substring.")
