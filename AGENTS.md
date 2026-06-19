@@ -300,6 +300,23 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   telemetry-wrapped command 和 raw shell gap；需要强制覆盖时使用
   `task-run diagnose --require-raw-shell-coverage` 或
   `shell-adapter diagnose --require-raw-shell-coverage` fail closed。
+- 使用 Windows PowerShell 代理时，简单命令可用 `--powershell-command`；复杂命令、
+  多行命令或包含大量引号/参数的命令必须优先使用 `--powershell-command-file`
+  读取 UTF-8 命令文件，避免 shell 多层转义破坏参数。因工具限制暂时不能使用代理时，
+  必须在 task record 写入 `events.event_type=shell-proxy-usage.analysis`，记录
+  `exception_reason`、补偿验证和剩余 raw shell gap；收口时如果记录
+  `used_proxy=true`，还必须写入 `telemetry_evidence` 或 `proxy_invocation_id`，
+  不能只在对话里解释。
+- 多命令组必须 fail closed：任何关键命令失败后要立即退出或使用能传播失败的
+  task-run/gate-pool 节点；不得让后续成功命令掩盖前序失败。发现代理、task-run 或
+  closeout 脚本掩盖中间失败时，按高严重度 correction 处理并补回验证。
+- 声明“只读”的任务必须写入
+  `events.event_type=readonly-side-effect-policy.analysis`，明确
+  `readonly_contract`、`db_write_allowed`、`record_state_allowed`、
+  `side_effect_class` 和 `dry_run_supported`。`readonly_contract=true` 时不得运行
+  `--record-state`、会写 `governance_state` 的 sync/status 命令或 telemetry 写入；
+  如宿主工具本身会写运行态，必须先记录例外和隔离策略，不能把“只读查询”和
+  “记录快照”混称为只读。
 - 运行状态和资源遗漏检查使用
   `python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-run diagnose ...`；
   它报告 execution telemetry 失败、重复终态命令、cache hit/miss、coord lock/session 和裸 shell
@@ -482,6 +499,24 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
 ## 子 AI 协作
 
 - 大任务或用户明确要求多 AI 分工时，总控先拆任务树、写范围和验证边界。
+- 中/大型、修改型、规则/脚本、correction、git/worktree、long-running 或用户曾明确强调
+  需要多 AI 的任务，必须在 preflight 前写入
+  `events.event_type=agent-decision.analysis`：至少包含 `agent_group_decision`、
+  `spawn_count`、`no_spawn_reason`、`context_pack_ref` 和
+  `data_confirmation_evidence`；`spawn_count=0` 时还必须包含
+  `alternative_validation` 和 `residual_risk`。即使最终不创建子 AI，也必须记录不创建原因、
+  替代验证、剩余风险和下一次触发条件；缺失时 `task-record gate --event preflight`
+  fail closed。`multi-agent` 任务的 final gate 必须有 `spawned`、`reused` 或
+  `merged` 证据，不能用 `required`、空原因或纯计划态冒充完成。
+- correction、规则/脚本、多 agent 和 long-running 任务必须显式恢复历史用户要求，写入
+  `events.event_type=history-requirement-recovery.analysis`：记录读取的历史来源、
+  找回的高频要求、未采纳项和 no-action 理由。用户说“之前提过”“老是忘记”“都找出来”
+  时，该事件必须覆盖当前可见对话、项目 chat 记录、corrections、pending/task records
+  和 framework debt；找不到来源时要同时写 `no_history_source_reason` 和
+  `no_action_reason`。有历史来源时 `recovered_requirements` 不能为空。
+- 写入或执行前还必须写入 `events.event_type=data-confirmation.analysis`，把用户陈述、
+  live state、历史记录、外部资料或子 AI 结论分开列为 `confirmation_sources` 和
+  `checked_facts`；未确认项必须进入 `unverified_items`，不能把“用户说过”直接当作已证实事实。
 - 子 AI 数量不使用固定小上限；由任务树叶子数、写范围冲突矩阵、上下文复用收益、
   验证风险和宿主客户端并发能力共同决定。能并行的独立叶子可以继续拆分；一旦写范围
   重叠、复用命中低、验证成本超过收益或用户要求收束，必须收敛到更少 agent 或主线程整合。

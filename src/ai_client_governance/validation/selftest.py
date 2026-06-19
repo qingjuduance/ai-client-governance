@@ -1692,6 +1692,79 @@ def structured_payload(task_id: str, include_worktree: bool = True) -> dict[str,
                 },
             },
             {
+                "event_id": f"EVT-{task_id}-AGENT-DECISION",
+                "event_type": structured_task_record.AGENT_DECISION_EVENT,
+                "payload": {
+                    "join_point": "user-message",
+                    "task_id": task_id,
+                    "agent_group_decision": "not_spawned",
+                    "spawn_count": 0,
+                    "no_spawn_reason": "selftest positive fixture uses a single deterministic payload",
+                    "context_pack_ref": f"task-record:{task_id}",
+                    "data_confirmation_evidence": "selftest fixture facts are generated in-process",
+                    "alternative_validation": "selftest uses deterministic local gate validation instead of subagent dispatch",
+                    "residual_risk": "subagent coverage is intentionally absent in this positive fixture",
+                    "evaluation_scope": "ai-client-governance-common",
+                    "fail_policy": "fail_closed",
+                },
+            },
+            {
+                "event_id": f"EVT-{task_id}-DATA-CONFIRMATION",
+                "event_type": structured_task_record.DATA_CONFIRMATION_EVENT,
+                "payload": {
+                    "join_point": "user-message",
+                    "confirmation_sources": ["selftest-fixture"],
+                    "checked_facts": [
+                        {
+                            "fact": "structured payload has complete required rows",
+                            "evidence": "structured_payload fixture",
+                        }
+                    ],
+                    "unverified_items": [],
+                    "fail_policy": "fail_closed",
+                },
+            },
+            {
+                "event_id": f"EVT-{task_id}-SHELL-PROXY-USAGE",
+                "event_type": structured_task_record.SHELL_PROXY_USAGE_EVENT,
+                "payload": {
+                    "join_point": "write-intent",
+                    "policy": "selftest records shell proxy policy for mutating work",
+                    "planned_runner": "shell-adapter proxy-powershell",
+                    "used_proxy": True,
+                    "telemetry_evidence": "shell-adapter:selftest-fixture",
+                    "exception_reason": "",
+                    "diagnostic_command": "shell-adapter diagnose --require-raw-shell-coverage",
+                    "fail_policy": "fail_closed",
+                },
+            },
+            {
+                "event_id": f"EVT-{task_id}-HISTORY-REQUIREMENT-RECOVERY",
+                "event_type": structured_task_record.HISTORY_REQUIREMENT_RECOVERY_EVENT,
+                "payload": {
+                    "join_point": "user-message",
+                    "history_sources": ["selftest-fixture"],
+                    "recovered_requirements": ["structured records must remain complete"],
+                    "not_adopted_requirements": [],
+                    "no_history_source_reason": "",
+                    "no_action_reason": "",
+                    "fail_policy": "fail_closed",
+                },
+            },
+            {
+                "event_id": f"EVT-{task_id}-READONLY-SIDE-EFFECT",
+                "event_type": structured_task_record.READONLY_SIDE_EFFECT_EVENT,
+                "payload": {
+                    "join_point": "user-message",
+                    "readonly_contract": False,
+                    "db_write_allowed": True,
+                    "record_state_allowed": True,
+                    "side_effect_class": "selftest-state-write",
+                    "dry_run_supported": False,
+                    "fail_policy": "fail_closed",
+                },
+            },
+            {
                 "event_id": f"EVT-{task_id}-PLAN-APPROVAL-BOUNDARY",
                 "event_type": structured_task_record.PLAN_APPROVAL_BOUNDARY_EVENT,
                 "payload": {
@@ -1818,13 +1891,35 @@ def test_structured_task_record_gate(root: Path, run_dir: Path) -> TestResult:
     missing_filter_payload["events"] = []
     missing_filter_payload["triggers"][0]["trigger_type"] = "selftest"
     no_worktree_payload = structured_payload(task_id + "-NOWORKTREE", include_worktree=False)
+    agent_required_payload = structured_payload(task_id + "-AGENTREQUIRED")
+    for event_payload in agent_required_payload["events"]:  # type: ignore[index]
+        if isinstance(event_payload, dict) and event_payload.get("event_type") == structured_task_record.AGENT_DECISION_EVENT:
+            payload = event_payload.get("payload")
+            if isinstance(payload, dict):
+                payload["agent_group_decision"] = "required"
+                payload["no_spawn_reason"] = ""
+                payload["alternative_validation"] = ""
+                payload["residual_risk"] = ""
+    history_empty_payload = structured_payload(task_id + "-HISTORYEMPTY")
+    for event_payload in history_empty_payload["events"]:  # type: ignore[index]
+        if isinstance(event_payload, dict) and event_payload.get("event_type") == structured_task_record.HISTORY_REQUIREMENT_RECOVERY_EVENT:
+            payload = event_payload.get("payload")
+            if isinstance(payload, dict):
+                payload["recovered_requirements"] = []
+                payload["not_adopted_requirements"] = []
+                payload["no_history_source_reason"] = ""
+                payload["no_action_reason"] = ""
     invalid = run_dir / "structured-invalid.json"
     missing_filter = run_dir / "structured-missing-input-filter.json"
     no_worktree = run_dir / "structured-no-worktree.json"
+    agent_required = run_dir / "structured-agent-required.json"
+    history_empty = run_dir / "structured-history-empty.json"
     valid = run_dir / "structured-valid.json"
     invalid.write_text(json.dumps(invalid_payload, ensure_ascii=False, indent=2), encoding="utf-8")
     missing_filter.write_text(json.dumps(missing_filter_payload, ensure_ascii=False, indent=2), encoding="utf-8")
     no_worktree.write_text(json.dumps(no_worktree_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    agent_required.write_text(json.dumps(agent_required_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    history_empty.write_text(json.dumps(history_empty_payload, ensure_ascii=False, indent=2), encoding="utf-8")
     valid.write_text(json.dumps(structured_payload(task_id), ensure_ascii=False, indent=2), encoding="utf-8")
 
     commands = [
@@ -1846,6 +1941,66 @@ def test_structured_task_record_gate(root: Path, run_dir: Path) -> TestResult:
         ),
         run_command(
             [sys.executable, str(ai_client_governance_entrypoint()), "task-record", "--db", str(db), "init"],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-record",
+                "--db",
+                str(db),
+                "apply",
+                "--json",
+                str(agent_required),
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-record",
+                "--db",
+                str(db),
+                "gate",
+                "--task-id",
+                task_id + "-AGENTREQUIRED",
+                "--event",
+                "preflight",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-record",
+                "--db",
+                str(db),
+                "apply",
+                "--json",
+                str(history_empty),
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-record",
+                "--db",
+                str(db),
+                "gate",
+                "--task-id",
+                task_id + "-HISTORYEMPTY",
+                "--event",
+                "preflight",
+            ],
             cwd=root,
             env_root=root,
         ),
@@ -2033,6 +2188,10 @@ def test_structured_task_record_gate(root: Path, run_dir: Path) -> TestResult:
     (
         contract_describe,
         init_db,
+        agent_required_apply,
+        agent_required_preflight,
+        history_empty_apply,
+        history_empty_preflight,
         invalid_apply,
         no_worktree_apply,
         no_worktree_preflight,
@@ -2055,6 +2214,10 @@ def test_structured_task_record_gate(root: Path, run_dir: Path) -> TestResult:
         and no_worktree_final.exit_code != 0
         and missing_filter_apply.exit_code == 0
         and missing_filter_preflight.exit_code != 0
+        and agent_required_apply.exit_code == 0
+        and agent_required_preflight.exit_code != 0
+        and history_empty_apply.exit_code == 0
+        and history_empty_preflight.exit_code != 0
         and valid_apply.exit_code == 0
         and valid_preflight.exit_code == 0
         and valid_final.exit_code == 0
@@ -2065,6 +2228,8 @@ def test_structured_task_record_gate(root: Path, run_dir: Path) -> TestResult:
         and "prewrite runtime adapter requires task worktree evidence" in (no_worktree_preflight.stdout + no_worktree_preflight.stderr)
         and "mutating tasks require worktree evidence" in (no_worktree_final.stdout + no_worktree_final.stderr)
         and "input-filter preflight requires" in (missing_filter_preflight.stdout + missing_filter_preflight.stderr)
+        and "agent decision must record" in (agent_required_preflight.stdout + agent_required_preflight.stderr)
+        and "history requirement recovery must record" in (history_empty_preflight.stdout + history_empty_preflight.stderr)
         and "\"exists\": true" in status_new_order.stdout
         and "--task-id" in gate_pool.stdout
     )
@@ -2473,6 +2638,48 @@ def test_lifecycle_input_filter_preflight(root: Path, run_dir: Path) -> TestResu
                 "task-record",
                 "--db",
                 str(db),
+                "append-worktree",
+                "--task-id",
+                task_id,
+                "--worktree-id",
+                "WT-INPUT-FILTER-SELFTEST",
+                "--repo",
+                "self",
+                "--source-repo",
+                ".",
+                "--path",
+                ".ai-client/project/.worktree/input-filter-selftest",
+                "--branch",
+                "codex/input-filter-selftest",
+                "--base-commit",
+                "selftest-base",
+                "--creation-method",
+                "worktree-task",
+                "--sparse-policy",
+                "selftest synthetic worktree evidence",
+                "--source-handling",
+                "selftest does not create a real worktree",
+                "--status",
+                "active",
+                "--merged-status",
+                "not_merged",
+                "--commit-status",
+                "not_committed",
+                "--push-status",
+                "not_pushed",
+                "--next-action",
+                "Run preflight gates against generated input-filter record.",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-record",
+                "--db",
+                str(db),
                 "gate",
                 "--task-id",
                 task_id,
@@ -2515,8 +2722,9 @@ def test_lifecycle_input_filter_preflight(root: Path, run_dir: Path) -> TestResu
     ]
     component_output = commands[0].stdout + commands[0].stderr
     input_filter_output = commands[1].stdout + commands[1].stderr
-    gate_output = commands[2].stdout + commands[2].stderr
-    lifecycle_output = commands[3].stdout + commands[3].stderr
+    worktree_output = commands[2].stdout + commands[2].stderr
+    gate_output = commands[3].stdout + commands[3].stderr
+    lifecycle_output = commands[4].stdout + commands[4].stderr
     passed = (
         all(command.exit_code == 0 for command in commands)
         and generated.exists()
@@ -2533,6 +2741,7 @@ def test_lifecycle_input_filter_preflight(root: Path, run_dir: Path) -> TestResu
         and "\"state_db\"" in input_filter_output
         and "\"scope_kind\"" in input_filter_output
         and "scope-classification" in input_filter_output
+        and "WT-INPUT-FILTER-SELFTEST" in worktree_output
         and "input-filter preflight facts present" in gate_output
         and "client/model identity facts present: selftest-client / selftest-model" in gate_output
         and "task-record preflight gate passed" in lifecycle_output
@@ -2754,7 +2963,7 @@ def test_task_run_dag_cache_diagnostics(root: Path, run_dir: Path) -> TestResult
             ],
             cwd=root,
             env_root=root,
-            unset_env=["AICG_SHELL_ADAPTER"],
+            unset_env=["AICG_SHELL_ADAPTER", "AICG_COMMAND_PROXY"],
         ),
         run_command(
             [
@@ -2773,7 +2982,7 @@ def test_task_run_dag_cache_diagnostics(root: Path, run_dir: Path) -> TestResult
             ],
             cwd=root,
             env_root=root,
-            unset_env=["AICG_SHELL_ADAPTER"],
+            unset_env=["AICG_SHELL_ADAPTER", "AICG_COMMAND_PROXY"],
         ),
         run_command(
             [
@@ -2791,7 +3000,7 @@ def test_task_run_dag_cache_diagnostics(root: Path, run_dir: Path) -> TestResult
             ],
             cwd=root,
             env_root=root,
-            unset_env=["AICG_SHELL_ADAPTER"],
+            unset_env=["AICG_SHELL_ADAPTER", "AICG_COMMAND_PROXY"],
         ),
         run_command(
             [
@@ -2809,7 +3018,7 @@ def test_task_run_dag_cache_diagnostics(root: Path, run_dir: Path) -> TestResult
             ],
             cwd=root,
             env_root=root,
-            unset_env=["AICG_SHELL_ADAPTER"],
+            unset_env=["AICG_SHELL_ADAPTER", "AICG_COMMAND_PROXY"],
         ),
     ]
     component_output = commands[0].stdout + commands[0].stderr
@@ -3332,7 +3541,7 @@ def test_shell_adapter_scope_diagnostics(root: Path, run_dir: Path) -> TestResul
             ],
             cwd=root,
             env_root=root,
-            unset_env=["AICG_SHELL_ADAPTER"],
+            unset_env=["AICG_SHELL_ADAPTER", "AICG_COMMAND_PROXY"],
         ),
         run_command(
             [
@@ -3393,7 +3602,7 @@ def test_shell_adapter_scope_diagnostics(root: Path, run_dir: Path) -> TestResul
             ],
             cwd=root,
             env_root=root,
-            unset_env=["AICG_SHELL_ADAPTER"],
+            unset_env=["AICG_SHELL_ADAPTER", "AICG_COMMAND_PROXY"],
         ),
         run_command(
             [
@@ -3413,7 +3622,7 @@ def test_shell_adapter_scope_diagnostics(root: Path, run_dir: Path) -> TestResul
             ],
             cwd=root,
             env_root=root,
-            unset_env=["AICG_SHELL_ADAPTER"],
+            unset_env=["AICG_SHELL_ADAPTER", "AICG_COMMAND_PROXY"],
         ),
         run_command(
             [

@@ -32,6 +32,8 @@ def now_iso() -> str:
 
 
 def command_to_string(command: list[str]) -> str:
+    if os.name == "nt":
+        return subprocess.list2cmdline(command).strip()
     return " ".join(command).strip()
 
 
@@ -172,7 +174,11 @@ def run_powershell_proxy(args: argparse.Namespace) -> int:
     raw_command = list(args.command)
     if raw_command and raw_command[0] == "--":
         raw_command = raw_command[1:]
-    command = args.powershell_command or command_to_string(raw_command)
+    if args.powershell_command_file:
+        command_path = Path(args.powershell_command_file)
+        command = command_path.read_text(encoding="utf-8")
+    else:
+        command = args.powershell_command or command_to_string(raw_command)
     if not command:
         print("shell-adapter proxy-powershell requires --powershell-command or a command after --", file=sys.stderr)
         return 2
@@ -453,6 +459,7 @@ def build_parser() -> argparse.ArgumentParser:
     proxy.add_argument("--scope-kind", help="Explicit governance scope kind.")
     proxy.add_argument("--scope-reason", help="Explicit governance scope reason.")
     proxy.add_argument("--powershell-command", help="PowerShell command string to run through the proxy.")
+    proxy.add_argument("--powershell-command-file", help="Read a UTF-8 PowerShell command string from a file.")
     proxy.add_argument("--powershell-exe", help="PowerShell executable. Defaults to Windows PowerShell on Windows, pwsh elsewhere.")
     proxy.add_argument("--allow-non-windows", action="store_true", help="Allow pwsh-based proxy execution on non-Windows hosts when available.")
     proxy.add_argument("--format", choices=("text", "json"), default="text")

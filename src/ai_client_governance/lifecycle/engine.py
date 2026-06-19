@@ -362,6 +362,7 @@ def build_input_filter_task_record(args: argparse.Namespace, report: LifecycleRe
     claims = build_user_claims(segments, requirement_ids, report.classification.task_types)
     matched = ", ".join(requirement_ids) if requirement_ids else "none"
     task_types = report.classification.task_types
+    task_type_set = set(task_types)
     identity = report.execution_identity
     approval_status = "approved" if args.approved_label else ("not_required" if not report.classification.requires_approval else "missing")
     execution_policy = "approved-local-only-no-push" if approval_status == "approved" else (
@@ -539,11 +540,112 @@ def build_input_filter_task_record(args: argparse.Namespace, report: LifecycleRe
                         "user-claim-validation",
                         "client-identity",
                         "classify-common-project-scope",
+                        "agent-decision",
+                        "data-confirmation",
+                        "shell-proxy-usage",
+                        "history-requirement-recovery",
+                        "readonly-side-effect-policy",
                         "decompose-requirements",
                         "recordability-judgement",
                         "network-search-judgement",
                         "acceptance-extract",
                     ],
+                    "fail_policy": "fail_closed",
+                },
+            },
+            {
+                "event_id": f"EVT-{id_base}-AGENT-DECISION",
+                "event_type": structured_task_record.AGENT_DECISION_EVENT,
+                "payload": {
+                    "join_point": "user-message",
+                    "task_id": task_id,
+                    "agent_group_decision": "deferred" if "multi-agent" in task_types else "not_spawned",
+                    "spawn_count": 0,
+                    "no_spawn_reason": (
+                        "Input-filter classified this as multi-agent; dispatch evidence must be appended before final closeout."
+                        if "multi-agent" in task_type_set
+                        else "Input-filter selected a single-controller path; this reason must be updated if the user explicitly requires agents or the task is split."
+                    ),
+                    "context_pack_ref": "task-record:" + task_id,
+                    "data_confirmation_evidence": f"{len(claims)} claim row(s); {len(requirements)} requirement row(s)",
+                    "alternative_validation": (
+                        "Pending subagent dispatch; controller must record spawned/reused/merged evidence before final gate."
+                        if "multi-agent" in task_type_set
+                        else "Single-controller validation path selected by lifecycle input-filter."
+                    ),
+                    "residual_risk": (
+                        "Final multi-agent gate remains blocked until spawned/reused/merged evidence is appended."
+                        if "multi-agent" in task_type_set
+                        else "Subagent coverage was not used; controller owns review and validation coverage."
+                    ),
+                    "evaluation_scope": report.classification.scope_kind,
+                    "history_scan_policy": "required for correction/rules-script/multi-agent/long-running tasks",
+                    "fail_policy": "fail_closed",
+                },
+            },
+            {
+                "event_id": f"EVT-{id_base}-DATA-CONFIRMATION",
+                "event_type": structured_task_record.DATA_CONFIRMATION_EVENT,
+                "payload": {
+                    "join_point": "user-message",
+                    "confirmation_sources": ["user-message", "lifecycle-classification"],
+                    "checked_facts": [
+                        {
+                            "fact": "requirements parsed from current user input",
+                            "evidence": requirement_ids,
+                        },
+                        {
+                            "fact": "scope classified before write-intent",
+                            "evidence": report.classification.scope_kind,
+                        },
+                    ],
+                    "unverified_items": [
+                        "external historical records require explicit scan before final output"
+                    ]
+                    if task_type_set & {"correction", "rules-script", "multi-agent", "long-running"}
+                    else [],
+                    "fail_policy": "fail_closed",
+                },
+            },
+            {
+                "event_id": f"EVT-{id_base}-SHELL-PROXY-USAGE",
+                "event_type": structured_task_record.SHELL_PROXY_USAGE_EVENT,
+                "payload": {
+                    "join_point": "write-intent",
+                    "policy": "important Windows PowerShell commands must use shell-adapter proxy-powershell or record a gated exception",
+                    "planned_runner": "shell-adapter proxy-powershell",
+                    "used_proxy": "pending",
+                    "telemetry_evidence": "",
+                    "exception_reason": "",
+                    "diagnostic_command": "shell-adapter diagnose --require-raw-shell-coverage",
+                    "fail_policy": "fail_closed",
+                },
+            },
+            {
+                "event_id": f"EVT-{id_base}-HISTORY-REQUIREMENT-RECOVERY",
+                "event_type": structured_task_record.HISTORY_REQUIREMENT_RECOVERY_EVENT,
+                "payload": {
+                    "join_point": "user-message",
+                    "history_sources": ["current-user-message"],
+                    "recovered_requirements": [requirement["summary"] for requirement in requirements],
+                    "not_adopted_requirements": [],
+                    "no_history_source_reason": "",
+                    "no_action_reason": "",
+                    "required_for_task_types": ["correction", "rules-script", "multi-agent", "long-running"],
+                    "fail_policy": "fail_closed",
+                },
+            },
+            {
+                "event_id": f"EVT-{id_base}-READONLY-SIDE-EFFECT",
+                "event_type": structured_task_record.READONLY_SIDE_EFFECT_EVENT,
+                "payload": {
+                    "join_point": "user-message",
+                    "readonly_contract": False,
+                    "db_write_allowed": True,
+                    "record_state_allowed": True,
+                    "side_effect_class": "stateful-preflight-record",
+                    "dry_run_supported": False,
+                    "forbidden_when_readonly": ["--record-state", "sync-check state write", "telemetry write"],
                     "fail_policy": "fail_closed",
                 },
             },

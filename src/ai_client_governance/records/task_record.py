@@ -40,8 +40,18 @@ WORKTREE_PUSH_STATUSES = ("not_pushed", "pushed", "not_required")
 GATE_RESULTS = ("pass", "fail", "warn", "skipped")
 
 BASE_OUTPUT_TYPES = {"plan", "status", "final", "script", "error", "git_worktree"}
-MUTATING_TASK_TYPES = {"correction", "rules-script", "docs", "git", "frontend", "resume", "multi-agent", "long-running"}
-KNOWN_TASK_TYPES = MUTATING_TASK_TYPES | {"code-debug"}
+MUTATING_TASK_TYPES = {
+    "code-debug",
+    "correction",
+    "rules-script",
+    "docs",
+    "git",
+    "frontend",
+    "resume",
+    "multi-agent",
+    "long-running",
+}
+KNOWN_TASK_TYPES = set(MUTATING_TASK_TYPES)
 INPUT_FILTER_PREFLIGHT_EVENT = "input-filter.preflight"
 CLIENT_IDENTITY_EVENT = "client-identity.analysis"
 INPUT_FILTER_TRIGGER_TYPES = {"input-filter", "user-message"}
@@ -60,6 +70,11 @@ STATE_ARTIFACT_OWNERSHIP_EVENT = "state-artifact-ownership.analysis"
 PATCH_PREFLIGHT_EVENT = "patch-preflight.analysis"
 DISCOVERED_ISSUE_RECORDING_EVENT = "final-output.discovered-issues-recorded"
 AGENT_DISPATCH_BRIEF_EVENT = "agent-dispatch-brief.analysis"
+AGENT_DECISION_EVENT = "agent-decision.analysis"
+DATA_CONFIRMATION_EVENT = "data-confirmation.analysis"
+SHELL_PROXY_USAGE_EVENT = "shell-proxy-usage.analysis"
+HISTORY_REQUIREMENT_RECOVERY_EVENT = "history-requirement-recovery.analysis"
+READONLY_SIDE_EFFECT_EVENT = "readonly-side-effect-policy.analysis"
 SCOPE_KINDS = {COMMON_SCOPE, PROJECT_SCOPE, NATIVE_SCOPE, MIXED_SCOPE, UNKNOWN_SCOPE}
 
 
@@ -93,6 +108,32 @@ def parse_args() -> argparse.Namespace:
     common_cli_args.add_common_global_args(apply, suppress_default=True)
     apply.add_argument("--json", dest="json_path", required=True, help="Input JSON file.")
     apply.add_argument("--replace", action="store_true", help="Replace an existing task with the same id.")
+
+    append_event = sub.add_parser("append-event", help="Append one structured event row to an existing task.")
+    common_cli_args.add_common_global_args(append_event, suppress_default=True)
+    append_event.add_argument("--task-id", required=True)
+    append_event.add_argument("--event-type", required=True)
+    append_event.add_argument("--event-id", default="")
+    append_event.add_argument("--payload-json", default="{}", help="JSON object payload. Defaults to {}.")
+    append_event.add_argument("--payload-file", help="UTF-8 JSON file payload. Overrides --payload-json.")
+
+    append_worktree = sub.add_parser("append-worktree", help="Append or replace one worktree evidence row for an existing task.")
+    common_cli_args.add_common_global_args(append_worktree, suppress_default=True)
+    append_worktree.add_argument("--task-id", required=True)
+    append_worktree.add_argument("--worktree-id", default="")
+    append_worktree.add_argument("--repo", required=True, choices=WORKTREE_REPOS)
+    append_worktree.add_argument("--source-repo", required=True)
+    append_worktree.add_argument("--path", required=True)
+    append_worktree.add_argument("--branch", required=True)
+    append_worktree.add_argument("--base-commit", required=True)
+    append_worktree.add_argument("--creation-method", required=True, choices=WORKTREE_CREATION_METHODS)
+    append_worktree.add_argument("--sparse-policy", required=True)
+    append_worktree.add_argument("--source-handling", required=True)
+    append_worktree.add_argument("--status", required=True, choices=WORKTREE_STATUSES)
+    append_worktree.add_argument("--merged-status", required=True, choices=WORKTREE_MERGE_STATUSES)
+    append_worktree.add_argument("--commit-status", required=True, choices=WORKTREE_COMMIT_STATUSES)
+    append_worktree.add_argument("--push-status", required=True, choices=WORKTREE_PUSH_STATUSES)
+    append_worktree.add_argument("--next-action", required=True)
 
     gate = sub.add_parser("gate", help="Validate a task from the structured database.")
     common_cli_args.add_common_global_args(gate, suppress_default=True)
@@ -936,6 +977,73 @@ def apply_payload(con: sqlite3.Connection, payload: dict[str, Any], replace: boo
     return task_id
 
 
+def load_json_object(value: str, label: str) -> dict[str, Any]:
+    parsed = json.loads(value)
+    return require_mapping(parsed, label)
+
+
+def load_json_object_from_args(root: Path, payload_json: str, payload_file: str | None) -> dict[str, Any]:
+    if payload_file:
+        path = Path(payload_file)
+        if not path.is_absolute():
+            path = root / path
+        return load_json_object(path.read_text(encoding="utf-8-sig"), "payload-file")
+    return load_json_object(payload_json, "payload-json")
+
+
+def append_event_row(
+    con: sqlite3.Connection,
+    *,
+    task_id: str,
+    event_type: str,
+    payload: dict[str, Any],
+    event_id: str = "",
+) -> str:
+    if task_row(con, task_id) is None:
+        raise ValueError(f"task does not exist: {task_id}")
+    now = utc_now()
+    row = {
+        "event_id": clean_text(event_id or f"EVT-{task_id}-{uuid.uuid4().hex[:8]}", "events[].event_id"),
+        "task_id": task_id,
+        "event_type": clean_text(event_type, "events[].event_type"),
+        "payload_json": json.dumps(payload, ensure_ascii=False, sort_keys=True),
+        "created_at": now,
+    }
+    with con:
+        insert_rows(con, "events", [row])
+    return row["event_id"]
+
+
+def append_worktree_row(con: sqlite3.Connection, args: argparse.Namespace) -> str:
+    task_id = args.task_id
+    if task_row(con, task_id) is None:
+        raise ValueError(f"task does not exist: {task_id}")
+    now = utc_now()
+    row = {
+        "worktree_id": clean_text(args.worktree_id or f"WT-{task_id}-{uuid.uuid4().hex[:8]}", "worktrees[].worktree_id"),
+        "task_id": task_id,
+        "repo": enum_text(args.repo, "worktrees[].repo", WORKTREE_REPOS),
+        "source_repo": clean_text(args.source_repo, "worktrees[].source_repo"),
+        "path": clean_text(args.path, "worktrees[].path"),
+        "branch": clean_text(args.branch, "worktrees[].branch"),
+        "base_commit": clean_text(args.base_commit, "worktrees[].base_commit"),
+        "creation_method": enum_text(args.creation_method, "worktrees[].creation_method", WORKTREE_CREATION_METHODS),
+        "sparse_policy": clean_text(args.sparse_policy, "worktrees[].sparse_policy"),
+        "source_handling": clean_text(args.source_handling, "worktrees[].source_handling"),
+        "status": enum_text(args.status, "worktrees[].status", WORKTREE_STATUSES),
+        "merged_status": enum_text(args.merged_status, "worktrees[].merged_status", WORKTREE_MERGE_STATUSES),
+        "commit_status": enum_text(args.commit_status, "worktrees[].commit_status", WORKTREE_COMMIT_STATUSES),
+        "push_status": enum_text(args.push_status, "worktrees[].push_status", WORKTREE_PUSH_STATUSES),
+        "next_action": clean_text(args.next_action, "worktrees[].next_action"),
+        "created_at": now,
+        "updated_at": now,
+    }
+    with con:
+        con.execute("DELETE FROM worktrees WHERE worktree_id = ?", (row["worktree_id"],))
+        insert_rows(con, "worktrees", [row])
+    return row["worktree_id"]
+
+
 def row_count(con: sqlite3.Connection, table: str, task_id: str) -> int:
     return int(con.execute(f"SELECT count(*) FROM {table} WHERE task_id = ?", (task_id,)).fetchone()[0])
 
@@ -1398,6 +1506,258 @@ def validate_prewrite_runtime_adapter(
         add(notes, "note", "prewrite runtime adapter facts present: active task + task worktree", "worktrees")
 
 
+def validate_agent_decision(
+    con: sqlite3.Connection,
+    task: sqlite3.Row,
+    task_types: set[str],
+    event: str,
+    errors: list[Finding],
+    notes: list[Finding],
+) -> None:
+    """Require an explicit agent-group decision before larger mutating work."""
+    allowed_decisions = {"spawned", "not_spawned", "deferred", "reused", "merged"}
+    task_size = str(task["task_size"] or "").strip().lower()
+    if not (task_types & MUTATING_TASK_TYPES or task_size in {"medium", "large"}):
+        return
+    payloads = event_payloads(con, task["task_id"], AGENT_DECISION_EVENT)
+    if not payloads:
+        add(errors, "error", f"agent decision requires event_type={AGENT_DECISION_EVENT}", "events")
+        return
+
+    valid = False
+    invalid_event_ids: list[str] = []
+    for event_id, payload in payloads:
+        decision = str(payload.get("agent_group_decision") or "").strip()
+        try:
+            spawn_count = int(payload.get("spawn_count", 0))
+        except (TypeError, ValueError):
+            spawn_count = -1
+        no_spawn_reason = str(payload.get("no_spawn_reason") or "").strip()
+        context_pack_ref = str(payload.get("context_pack_ref") or "").strip()
+        confirmation = str(payload.get("data_confirmation_evidence") or "").strip()
+        alternative_validation = str(payload.get("alternative_validation") or "").strip()
+        residual_risk = str(payload.get("residual_risk") or "").strip()
+        if decision not in allowed_decisions or spawn_count < 0 or not context_pack_ref or not confirmation:
+            invalid_event_ids.append(event_id)
+            continue
+        if event == "final" and "multi-agent" in task_types and decision not in {"spawned", "reused", "merged"}:
+            invalid_event_ids.append(event_id)
+            continue
+        if decision == "spawned" and spawn_count < 1:
+            invalid_event_ids.append(event_id)
+            continue
+        if spawn_count == 0 and (not no_spawn_reason or not alternative_validation or not residual_risk):
+            invalid_event_ids.append(event_id)
+            continue
+        valid = True
+        break
+    if not valid:
+        add(
+            errors,
+            "error",
+            (
+                "agent decision must record agent_group_decision, spawn_count/no_spawn_reason, "
+                "context_pack_ref, data_confirmation_evidence, and alternative_validation/residual_risk when spawn_count=0; "
+                "final multi-agent gates require spawned/reused/merged evidence"
+            ),
+            "events",
+            ", ".join(invalid_event_ids),
+        )
+    else:
+        add(notes, "note", f"agent decision facts present: {AGENT_DECISION_EVENT}", "events")
+
+
+def validate_data_confirmation(
+    con: sqlite3.Connection,
+    task: sqlite3.Row,
+    task_types: set[str],
+    errors: list[Finding],
+    notes: list[Finding],
+) -> None:
+    """Require checked data sources before user claims or history steer execution."""
+    task_size = str(task["task_size"] or "").strip().lower()
+    if not (task_types & MUTATING_TASK_TYPES or task_size in {"medium", "large"}):
+        return
+    payloads = event_payloads(con, task["task_id"], DATA_CONFIRMATION_EVENT)
+    if not payloads:
+        add(errors, "error", f"data confirmation requires event_type={DATA_CONFIRMATION_EVENT}", "events")
+        return
+    valid = False
+    invalid_event_ids: list[str] = []
+    for event_id, payload in payloads:
+        sources = payload.get("confirmation_sources")
+        checks = payload.get("checked_facts")
+        if not isinstance(sources, list) or not sources:
+            invalid_event_ids.append(event_id)
+            continue
+        if not isinstance(checks, list) or not checks:
+            invalid_event_ids.append(event_id)
+            continue
+        if "unverified_items" not in payload:
+            invalid_event_ids.append(event_id)
+            continue
+        valid = True
+        break
+    if not valid:
+        add(
+            errors,
+            "error",
+            "data confirmation must record confirmation_sources, checked_facts, and unverified_items",
+            "events",
+            ", ".join(invalid_event_ids),
+        )
+    else:
+        add(notes, "note", f"data confirmation facts present: {DATA_CONFIRMATION_EVENT}", "events")
+
+
+def validate_shell_proxy_usage(
+    con: sqlite3.Connection,
+    task: sqlite3.Row,
+    task_types: set[str],
+    event: str,
+    errors: list[Finding],
+    notes: list[Finding],
+) -> None:
+    """Require PowerShell proxy policy before command-heavy work and evidence at final."""
+    task_size = str(task["task_size"] or "").strip().lower()
+    if not (task_types & MUTATING_TASK_TYPES or task_size in {"medium", "large"}):
+        return
+    payloads = event_payloads(con, task["task_id"], SHELL_PROXY_USAGE_EVENT)
+    if not payloads:
+        add(errors, "error", f"shell proxy usage requires event_type={SHELL_PROXY_USAGE_EVENT}", "events")
+        return
+    valid = False
+    invalid_event_ids: list[str] = []
+    for event_id, payload in payloads:
+        policy = str(payload.get("policy") or "").strip()
+        planned_runner = str(payload.get("planned_runner") or "").strip()
+        exception_reason = str(payload.get("exception_reason") or "").strip()
+        used_proxy = payload.get("used_proxy")
+        telemetry_evidence = str(payload.get("telemetry_evidence") or payload.get("proxy_invocation_id") or "").strip()
+        if not policy or not planned_runner:
+            invalid_event_ids.append(event_id)
+            continue
+        if event == "final":
+            if used_proxy is True:
+                if not telemetry_evidence:
+                    invalid_event_ids.append(event_id)
+                    continue
+            elif not exception_reason:
+                invalid_event_ids.append(event_id)
+                continue
+        valid = True
+        break
+    if not valid:
+        suffix = (
+            "; final gate also requires used_proxy=true with telemetry_evidence/proxy_invocation_id, "
+            "or exception_reason"
+            if event == "final"
+            else ""
+        )
+        add(
+            errors,
+            "error",
+            f"shell proxy usage must record policy and planned_runner{suffix}",
+            "events",
+            ", ".join(invalid_event_ids),
+        )
+    else:
+        add(notes, "note", f"shell proxy usage facts present: {SHELL_PROXY_USAGE_EVENT}", "events")
+
+
+def validate_history_requirement_recovery(
+    con: sqlite3.Connection,
+    task: sqlite3.Row,
+    task_types: set[str],
+    errors: list[Finding],
+    notes: list[Finding],
+) -> None:
+    """Require repeated user requirements to be recovered or explicitly scoped out."""
+    if not (task_types & {"correction", "rules-script", "multi-agent", "long-running"}):
+        return
+    payloads = event_payloads(con, task["task_id"], HISTORY_REQUIREMENT_RECOVERY_EVENT)
+    if not payloads:
+        add(errors, "error", f"history requirement recovery requires event_type={HISTORY_REQUIREMENT_RECOVERY_EVENT}", "events")
+        return
+    valid = False
+    invalid_event_ids: list[str] = []
+    for event_id, payload in payloads:
+        sources = payload.get("history_sources")
+        recovered = payload.get("recovered_requirements")
+        not_adopted = payload.get("not_adopted_requirements")
+        no_history_reason = str(payload.get("no_history_source_reason") or "").strip()
+        no_action_reason = str(payload.get("no_action_reason") or "").strip()
+        if isinstance(sources, list) and sources and isinstance(recovered, list) and recovered and isinstance(not_adopted, list):
+            valid = True
+            break
+        if no_history_reason and no_action_reason:
+            valid = True
+            break
+        invalid_event_ids.append(event_id)
+    if not valid:
+        add(
+            errors,
+            "error",
+            (
+                "history requirement recovery must record history_sources plus non-empty recovered_requirements "
+                "and not_adopted_requirements, or no_history_source_reason plus no_action_reason"
+            ),
+            "events",
+            ", ".join(invalid_event_ids),
+        )
+    else:
+        add(notes, "note", f"history requirement recovery facts present: {HISTORY_REQUIREMENT_RECOVERY_EVENT}", "events")
+
+
+def validate_readonly_side_effect_policy(
+    con: sqlite3.Connection,
+    task: sqlite3.Row,
+    task_types: set[str],
+    errors: list[Finding],
+    notes: list[Finding],
+) -> None:
+    """Require explicit readonly and DB-write side-effect boundaries."""
+    task_size = str(task["task_size"] or "").strip().lower()
+    if not (task_types & MUTATING_TASK_TYPES or task_size in {"medium", "large"}):
+        return
+    payloads = event_payloads(con, task["task_id"], READONLY_SIDE_EFFECT_EVENT)
+    if not payloads:
+        add(errors, "error", f"readonly side-effect policy requires event_type={READONLY_SIDE_EFFECT_EVENT}", "events")
+        return
+    valid = False
+    invalid_event_ids: list[str] = []
+    for event_id, payload in payloads:
+        required = (
+            "readonly_contract",
+            "db_write_allowed",
+            "record_state_allowed",
+            "side_effect_class",
+            "dry_run_supported",
+        )
+        if any(field not in payload for field in required):
+            invalid_event_ids.append(event_id)
+            continue
+        if payload.get("readonly_contract") is True:
+            if payload.get("db_write_allowed") is True or payload.get("record_state_allowed") is True:
+                invalid_event_ids.append(event_id)
+                continue
+        valid = True
+        break
+    if not valid:
+        add(
+            errors,
+            "error",
+            (
+                "readonly side-effect policy must record readonly_contract, db_write_allowed, "
+                "record_state_allowed, side_effect_class, and dry_run_supported; readonly tasks cannot allow DB writes"
+            ),
+            "events",
+            ", ".join(invalid_event_ids),
+        )
+    else:
+        add(notes, "note", f"readonly side-effect policy facts present: {READONLY_SIDE_EFFECT_EVENT}", "events")
+
+
 def validate_discovered_issue_recording(
     con: sqlite3.Connection,
     task: sqlite3.Row,
@@ -1541,6 +1901,11 @@ def validate_task(con: sqlite3.Connection, db: Path, task_id: str, event: str, e
     validate_state_artifact_ownership(con, task, task_types, errors, notes)
     validate_patch_preflight(con, task, task_types, errors, notes)
     validate_prewrite_runtime_adapter(con, task, task_types, event, errors, notes)
+    validate_agent_decision(con, task, task_types, event, errors, notes)
+    validate_data_confirmation(con, task, task_types, errors, notes)
+    validate_shell_proxy_usage(con, task, task_types, event, errors, notes)
+    validate_history_requirement_recovery(con, task, task_types, errors, notes)
+    validate_readonly_side_effect_policy(con, task, task_types, errors, notes)
     validate_discovered_issue_recording(con, task, task_types, event, errors, notes)
     validate_agent_dispatch_brief(con, task, task_types, errors, notes)
 
@@ -1734,6 +2099,23 @@ def main() -> int:
             task_id = apply_payload(con, load_payload(payload_path), replace=args.replace)
             result = {"db": str(path), "task_id": task_id, "applied": True}
             print_json(result) if args.format == "json" else print(f"Applied structured task record: {task_id}")
+            return 0
+        if args.command == "append-event":
+            payload = load_json_object_from_args(root, args.payload_json, args.payload_file)
+            event_id = append_event_row(
+                con,
+                task_id=args.task_id,
+                event_type=args.event_type,
+                payload=payload,
+                event_id=args.event_id,
+            )
+            result = {"db": str(path), "task_id": args.task_id, "event_id": event_id, "appended": True}
+            print_json(result) if args.format == "json" else print(f"Appended task event: {event_id}")
+            return 0
+        if args.command == "append-worktree":
+            worktree_id = append_worktree_row(con, args)
+            result = {"db": str(path), "task_id": args.task_id, "worktree_id": worktree_id, "appended": True}
+            print_json(result) if args.format == "json" else print(f"Appended worktree evidence: {worktree_id}")
             return 0
         if args.command == "gate":
             report = validate_task(con, path, args.task_id, args.event, args.task_type)
