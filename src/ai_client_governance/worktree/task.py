@@ -2122,8 +2122,9 @@ def command_finalize(args: argparse.Namespace) -> int:
     if args.format == "json":
         print(json.dumps({"snapshot": snapshot, "issues": issues}, ensure_ascii=False, indent=2, sort_keys=True))
     else:
-        if output is not None:
-            print(f"Wrote worktree state: {output}")
+        state_db = snapshot.get("state_db")
+        if state_db is not None:
+            print(f"Wrote worktree state: {state_db}")
         print("Worktree finalize gate:")
         print(f"  task_worktrees: {total_task_worktrees}")
         print(f"  dirty_task_worktrees: {dirty_task_worktrees}")
