@@ -819,6 +819,348 @@ def test_task_queue_task_id_priority(root: Path, run_dir: Path) -> TestResult:
     )
 
 
+def test_task_queue_todo_projection(root: Path, run_dir: Path) -> TestResult:
+    db = run_dir / "task-queue-todo-projection.db"
+    tracking = ".ai-client/project/records/task-tracking/todo-projection-selftest.md"
+    commands = [
+        run_command(
+            queue_command(
+                root,
+                db,
+                "enqueue",
+                "--task-id",
+                "TQ-TODO-DONE",
+                "--title",
+                "done todo task",
+                "--message",
+                "done todo task",
+                "--task-tracking",
+                tracking,
+                "--approval-label",
+                "批准：todo-selftest",
+                "--trace-id",
+                "trace-todo-done",
+                "--status",
+                "ready",
+            ),
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(queue_command(root, db, "start-next", "--task-id", "TQ-TODO-DONE"), cwd=root, env_root=root),
+        run_command(queue_command(root, db, "complete", "--task-id", "TQ-TODO-DONE"), cwd=root, env_root=root),
+        run_command(
+            queue_command(
+                root,
+                db,
+                "enqueue",
+                "--task-id",
+                "TQ-TODO-READY",
+                "--title",
+                "ready todo task",
+                "--message",
+                "ready todo task",
+                "--task-tracking",
+                tracking,
+                "--approval-label",
+                "批准：todo-selftest",
+                "--trace-id",
+                "trace-todo-ready",
+                "--status",
+                "ready",
+            ),
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(queue_command(root, db, "todo", "--format", "json"), cwd=root, env_root=root),
+        run_command(queue_command(root, db, "todo", "--include-closed", "--format", "json"), cwd=root, env_root=root),
+    ]
+    open_projection: dict[str, object] = {}
+    closed_projection: dict[str, object] = {}
+    try:
+        open_projection = json.loads(commands[-2].stdout)
+        closed_projection = json.loads(commands[-1].stdout)
+    except json.JSONDecodeError:
+        pass
+    open_items = open_projection.get("items", []) if isinstance(open_projection.get("items"), list) else []
+    closed_items = closed_projection.get("items", []) if isinstance(closed_projection.get("items"), list) else []
+    open_by_id = {
+        item.get("id"): item
+        for item in open_items
+        if isinstance(item, dict)
+    }
+    closed_by_id = {
+        item.get("id"): item
+        for item in closed_items
+        if isinstance(item, dict)
+    }
+    passed = (
+        all(command.exit_code == 0 for command in commands)
+        and open_projection.get("source_policy")
+        == "client Todo lists are derived views; task-queue/task-record remain the durable fact sources"
+        and "TQ-TODO-READY" in open_by_id
+        and "TQ-TODO-DONE" not in open_by_id
+        and closed_by_id.get("TQ-TODO-READY", {}).get("source_policy") == "derived_from_task_queue_not_fact_source"
+        and closed_by_id.get("TQ-TODO-DONE", {}).get("status") == "completed"
+    )
+    return TestResult(
+        name="task-queue-todo-projection",
+        passed=passed,
+        summary=(
+            "task-queue todo exports client Todo items as a derived projection"
+            if passed
+            else "task-queue todo projection regression failed"
+        ),
+        commands=commands,
+    )
+
+
+def client_flow_probe_payload(task_id: str, trace_id: str, approval_label: str) -> dict[str, object]:
+    payload = structured_payload(task_id)
+    task = payload["task"]  # type: ignore[index]
+    task["title"] = "client flow probe selftest"  # type: ignore[index]
+    task["trace_id"] = trace_id  # type: ignore[index]
+    task["approval_label"] = approval_label  # type: ignore[index]
+    for approval in payload["approvals"]:  # type: ignore[index]
+        approval["label"] = approval_label
+        approval["summary"] = "client flow probe selftest approval"
+    for trigger in payload["triggers"]:  # type: ignore[index]
+        trigger["trace_id"] = trace_id
+    for output in payload["outputs"]:  # type: ignore[index]
+        output["trace_id"] = trace_id
+    for event in payload["events"]:  # type: ignore[index]
+        if event["event_type"] == structured_task_record.CLIENT_IDENTITY_EVENT:
+            event["payload"]["client_type"] = "trae"
+            event["payload"]["model_id"] = "doubao"
+            event["payload"]["identity_source"] = "client-flow-probe-selftest"
+        if event["event_type"] == structured_task_record.PLAN_APPROVAL_BOUNDARY_EVENT:
+            event["payload"]["approval_label"] = approval_label
+    return payload
+
+
+def test_client_flow_probe(root: Path, run_dir: Path) -> TestResult:
+    db = run_dir / "client-flow-probe.db"
+    task_id = "TASK-CLIENT-FLOW-PROBE-SELFTEST"
+    trace_id = "trace-client-flow-probe-selftest"
+    probe_id = "probe-selftest"
+    approval_label = "APPROVE: client-flow-probe selftest"
+    payload_path = run_dir / "client-flow-probe-task-record.json"
+    write_text_lf(
+        payload_path,
+        json.dumps(client_flow_probe_payload(task_id, trace_id, approval_label), ensure_ascii=False, indent=2),
+    )
+    commands = [
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "client-flow-probe",
+                "create",
+                "--root",
+                str(root),
+                "--probe-id",
+                probe_id,
+                "--client-type",
+                "trae",
+                "--model",
+                "doubao",
+                "--format",
+                "json",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-queue",
+                "--db",
+                str(db),
+                "enqueue",
+                "--root",
+                str(root),
+                "--task-id",
+                task_id,
+                "--title",
+                "client flow probe selftest",
+                "--message",
+                "client flow probe selftest",
+                "--task-tracking",
+                ".ai-client/project/records/task-tracking/client-flow-probe-selftest.md",
+                "--status",
+                "candidate",
+                "--trace-id",
+                trace_id,
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-queue",
+                "--db",
+                str(db),
+                "request-approval",
+                "--root",
+                str(root),
+                "--task-id",
+                task_id,
+                "--approval-label",
+                approval_label,
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-queue",
+                "--db",
+                str(db),
+                "approve",
+                "--root",
+                str(root),
+                "--task-id",
+                task_id,
+                "--approval-label",
+                approval_label,
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-queue",
+                "--db",
+                str(db),
+                "start-next",
+                "--root",
+                str(root),
+                "--task-id",
+                task_id,
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-record",
+                "--db",
+                str(db),
+                "apply",
+                "--json",
+                str(payload_path),
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-queue",
+                "--db",
+                str(db),
+                "complete",
+                "--root",
+                str(root),
+                "--task-id",
+                task_id,
+                "--summary",
+                "client flow probe selftest complete",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "client-flow-probe",
+                "verify",
+                "--root",
+                str(root),
+                "--db",
+                str(db),
+                "--probe-id",
+                probe_id,
+                "--task-id",
+                task_id,
+                "--trace-id",
+                trace_id,
+                "--expected-client-type",
+                "trae",
+                "--expected-model",
+                "doubao",
+                "--approval-label",
+                approval_label,
+                "--no-live-worktree-check",
+                "--format",
+                "json",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "client-flow-probe",
+                "verify",
+                "--root",
+                str(root),
+                "--db",
+                str(db),
+                "--probe-id",
+                "missing-probe",
+                "--expected-client-type",
+                "trae",
+                "--expected-model",
+                "doubao",
+                "--format",
+                "json",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+    ]
+    create_output = commands[0].stdout + commands[0].stderr
+    pass_output = commands[-2].stdout + commands[-2].stderr
+    fail_output = commands[-1].stdout + commands[-1].stderr
+    try:
+        pass_payload = json.loads(commands[-2].stdout)
+        fail_payload = json.loads(commands[-1].stdout)
+    except json.JSONDecodeError:
+        pass_payload = {}
+        fail_payload = {}
+    passed = (
+        all(command.exit_code == 0 for command in commands[:-1])
+        and commands[-1].exit_code != 0
+        and "verification_command" in create_output
+        and pass_payload.get("passed") is True
+        and fail_payload.get("passed") is False
+        and "client-identity" in pass_output
+        and "task-record" in fail_output
+    )
+    return TestResult(
+        name="client-flow-probe",
+        passed=passed,
+        summary=(
+            "client-flow-probe create emits a test brief and verify passes/fails from durable evidence"
+            if passed
+            else "client-flow-probe regression failed"
+        ),
+        commands=commands,
+    )
+
+
 def test_task_lifecycle_unified_status(root: Path, run_dir: Path) -> TestResult:
     task_id = "TQ-LIFECYCLE-SELFTEST"
     db = run_dir / "task-lifecycle-selftest.db"
@@ -1405,6 +1747,23 @@ def structured_payload(task_id: str, include_worktree: bool = True) -> dict[str,
                     "fallback_policy": "use narrower context when anchors are unstable",
                     "fail_policy": "fail_closed",
                 },
+            },
+            {
+                "event_id": f"EVT-{task_id}-DISCOVERED-ISSUES",
+                "event_type": structured_task_record.DISCOVERED_ISSUE_RECORDING_EVENT,
+                "payload": {
+                    "join_point": "final-output",
+                    "issues": [
+                        {
+                            "issue_id": "ISSUE-SELFTEST-NONE",
+                            "summary": "selftest fixture has no newly discovered issue",
+                            "destination": "no-action",
+                            "record_ref": "",
+                            "reason": "positive fixture only verifies final-output recording gate shape",
+                        }
+                    ],
+                    "fail_policy": "fail_closed",
+                },
             }
         ],
         "validations": [
@@ -1692,7 +2051,7 @@ def test_structured_task_record_gate(root: Path, run_dir: Path) -> TestResult:
         and init_db.exit_code == 0
         and invalid_apply.exit_code != 0
         and no_worktree_apply.exit_code == 0
-        and no_worktree_preflight.exit_code == 0
+        and no_worktree_preflight.exit_code != 0
         and no_worktree_final.exit_code != 0
         and missing_filter_apply.exit_code == 0
         and missing_filter_preflight.exit_code != 0
@@ -1703,7 +2062,7 @@ def test_structured_task_record_gate(root: Path, run_dir: Path) -> TestResult:
         and task_gate.exit_code == 0
         and gate_pool.exit_code == 0
         and "requirements must contain at least one row" in (invalid_apply.stdout + invalid_apply.stderr)
-        and "mutating task has no worktree evidence yet" in (no_worktree_preflight.stdout + no_worktree_preflight.stderr)
+        and "prewrite runtime adapter requires task worktree evidence" in (no_worktree_preflight.stdout + no_worktree_preflight.stderr)
         and "mutating tasks require worktree evidence" in (no_worktree_final.stdout + no_worktree_final.stderr)
         and "input-filter preflight requires" in (missing_filter_preflight.stdout + missing_filter_preflight.stderr)
         and "\"exists\": true" in status_new_order.stdout
@@ -1814,6 +2173,164 @@ def test_preflight_boundary_hardening(root: Path, run_dir: Path) -> TestResult:
             "preflight fails closed without plan approval boundary or user claim validation facts"
             if passed
             else "preflight hardening gate regression failed"
+        ),
+        commands=commands,
+    )
+
+
+def test_final_output_discovered_issue_gate(root: Path, run_dir: Path) -> TestResult:
+    db = run_dir / "final-output-discovered-issue.db"
+    task_id = "FINAL-DISCOVERED-ISSUE-VALID"
+    missing_task_id = "FINAL-DISCOVERED-ISSUE-MISSING"
+    valid = run_dir / "final-discovered-valid.json"
+    missing = run_dir / "final-discovered-missing.json"
+    valid.write_text(json.dumps(structured_payload(task_id), ensure_ascii=False, indent=2), encoding="utf-8")
+    missing.write_text(
+        json.dumps(
+            payload_without_event(missing_task_id, structured_task_record.DISCOVERED_ISSUE_RECORDING_EVENT),
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    commands = [
+        run_command([sys.executable, str(ai_client_governance_entrypoint()), "task-record", "--db", str(db), "init"], cwd=root, env_root=root),
+        run_command([sys.executable, str(ai_client_governance_entrypoint()), "task-record", "--db", str(db), "apply", "--json", str(missing)], cwd=root, env_root=root),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-record",
+                "--db",
+                str(db),
+                "gate",
+                "--task-id",
+                missing_task_id,
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command([sys.executable, str(ai_client_governance_entrypoint()), "task-record", "--db", str(db), "apply", "--json", str(valid)], cwd=root, env_root=root),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-record",
+                "--db",
+                str(db),
+                "gate",
+                "--task-id",
+                task_id,
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+    ]
+    missing_output = commands[2].stdout + commands[2].stderr
+    valid_output = commands[4].stdout + commands[4].stderr
+    passed = (
+        commands[0].exit_code == 0
+        and commands[1].exit_code == 0
+        and commands[2].exit_code != 0
+        and commands[3].exit_code == 0
+        and commands[4].exit_code == 0
+        and "final output requires event_type=final-output.discovered-issues-recorded" in missing_output
+        and "discovered issue recording facts present" in valid_output
+    )
+    return TestResult(
+        name="final-output-discovered-issue-gate",
+        passed=passed,
+        summary=(
+            "final output fails closed unless discovered issues are recorded or explicitly no-action"
+            if passed
+            else "final-output discovered issue gate regression failed"
+        ),
+        commands=commands,
+    )
+
+
+def test_multi_agent_dispatch_brief_gate(root: Path, run_dir: Path) -> TestResult:
+    db = run_dir / "multi-agent-brief.db"
+    valid_task = "MULTI-AGENT-BRIEF-VALID"
+    missing_task = "MULTI-AGENT-BRIEF-MISSING"
+    valid_payload = structured_payload(valid_task)
+    missing_payload = structured_payload(missing_task)
+    valid_payload["task"]["task_types"] = ["rules-script", "multi-agent"]  # type: ignore[index]
+    missing_payload["task"]["task_types"] = ["rules-script", "multi-agent"]  # type: ignore[index]
+    valid_payload["events"].append(  # type: ignore[index]
+        {
+            "event_id": f"EVT-{valid_task}-AGENT-BRIEF",
+            "event_type": structured_task_record.AGENT_DISPATCH_BRIEF_EVENT,
+            "payload": {
+                "task_id": valid_task,
+                "worktree_path": "selftest",
+                "write_scope": ["src/ai_client_governance/worktree/task.py"],
+                "forbidden_paths": ["none"],
+                "validation_commands": ["python -m py_compile src/ai_client_governance/worktree/task.py"],
+                "return_capsule": "summary, changed files, validation results, residual risks",
+                "context_reuse": "new",
+            },
+        }
+    )
+    valid = run_dir / "multi-agent-brief-valid.json"
+    missing = run_dir / "multi-agent-brief-missing.json"
+    valid.write_text(json.dumps(valid_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    missing.write_text(json.dumps(missing_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    commands = [
+        run_command([sys.executable, str(ai_client_governance_entrypoint()), "task-record", "--db", str(db), "init"], cwd=root, env_root=root),
+        run_command([sys.executable, str(ai_client_governance_entrypoint()), "task-record", "--db", str(db), "apply", "--json", str(missing)], cwd=root, env_root=root),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-record",
+                "--db",
+                str(db),
+                "gate",
+                "--task-id",
+                missing_task,
+                "--event",
+                "preflight",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command([sys.executable, str(ai_client_governance_entrypoint()), "task-record", "--db", str(db), "apply", "--json", str(valid)], cwd=root, env_root=root),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-record",
+                "--db",
+                str(db),
+                "gate",
+                "--task-id",
+                valid_task,
+                "--event",
+                "preflight",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+    ]
+    missing_output = commands[2].stdout + commands[2].stderr
+    valid_output = commands[4].stdout + commands[4].stderr
+    passed = (
+        commands[0].exit_code == 0
+        and commands[1].exit_code == 0
+        and commands[2].exit_code != 0
+        and commands[3].exit_code == 0
+        and commands[4].exit_code == 0
+        and "multi-agent dispatch requires event_type=agent-dispatch-brief.analysis" in missing_output
+        and "agent dispatch brief facts present" in valid_output
+    )
+    return TestResult(
+        name="multi-agent-dispatch-brief-gate",
+        passed=passed,
+        summary=(
+            "multi-agent task-record gates require a structured dispatch brief"
+            if passed
+            else "multi-agent dispatch brief gate regression failed"
         ),
         commands=commands,
     )
@@ -2974,6 +3491,7 @@ def test_file_ownership_audit(root: Path, run_dir: Path) -> TestResult:
 
 def test_install_adapter_reconcile(root: Path, run_dir: Path) -> TestResult:
     project = run_dir / "install-adapter-reconcile-project"
+    installer = ai_client_governance_root() / "install-ai-client-governance.ps1"
     governance = project / ".ai-client" / "ai-client-governance"
     trae_adapter = project / ".trae" / "rules" / "ai-client-governance.md"
     native_agents = project / "AGENTS.md"
@@ -3013,7 +3531,7 @@ def test_install_adapter_reconcile(root: Path, run_dir: Path) -> TestResult:
                 "-ExecutionPolicy",
                 "Bypass",
                 "-File",
-                str(root / "install-ai-client-governance.ps1"),
+                str(installer),
                 "-TargetProjectPath",
                 str(project),
                 "-RulesRepoPath",
@@ -3507,6 +4025,7 @@ def test_framework_debt_report(root: Path, run_dir: Path) -> TestResult:
 
 
 def test_runtime_manifest_report(root: Path, run_dir: Path) -> TestResult:
+    governance_root = ai_client_governance_root()
     command = run_command(
         [
             sys.executable,
@@ -3514,7 +4033,7 @@ def test_runtime_manifest_report(root: Path, run_dir: Path) -> TestResult:
             "runtime",
             "manifest-report",
             "--root",
-            str(root),
+            str(governance_root),
             "--check-manifest",
             "--format",
             "json",
@@ -3543,6 +4062,8 @@ def test_runtime_manifest_report(root: Path, run_dir: Path) -> TestResult:
 def test_lifecycle_analysis_contract_preflight(root: Path, run_dir: Path) -> TestResult:
     db = run_dir / "analysis-contract.db"
     task_id = "TASK-SELFTEST-ANALYSIS-CONTRACT"
+    record = run_dir / "analysis-contract-record.json"
+    write_text_lf(record, json.dumps(structured_payload(task_id), ensure_ascii=False, indent=2))
     input_filter = run_command(
         [
             sys.executable,
@@ -3569,6 +4090,21 @@ def test_lifecycle_analysis_contract_preflight(root: Path, run_dir: Path) -> Tes
             "--replace",
             "--format",
             "json",
+        ],
+        cwd=root,
+        env_root=root,
+    )
+    record_apply = run_command(
+        [
+            sys.executable,
+            str(ai_client_governance_entrypoint()),
+            "task-record",
+            "--db",
+            str(db),
+            "apply",
+            "--json",
+            str(record),
+            "--replace",
         ],
         cwd=root,
         env_root=root,
@@ -3639,6 +4175,7 @@ def test_lifecycle_analysis_contract_preflight(root: Path, run_dir: Path) -> Tes
     complete_messages = [item.get("message", "") for item in complete_payload.get("notes", []) if isinstance(item, dict)]
     passed = (
         input_filter.exit_code == 0
+        and record_apply.exit_code == 0
         and missing.exit_code == 1
         and complete.exit_code == 0
         and any("analysis contract is incomplete" in message for message in missing_messages)
@@ -3652,7 +4189,7 @@ def test_lifecycle_analysis_contract_preflight(root: Path, run_dir: Path) -> Tes
             if passed
             else "lifecycle analysis contract preflight regressed"
         ),
-        commands=[input_filter, missing, complete],
+        commands=[input_filter, record_apply, missing, complete],
     )
 
 
@@ -3991,12 +4528,16 @@ def main() -> int:
             test_input_and_output_closeout_gate(root, run_dir),
             test_multi_agent_acceptance_matrix_gate(root, run_dir),
             test_task_queue_task_id_priority(root, run_dir),
+            test_task_queue_todo_projection(root, run_dir),
+            test_client_flow_probe(root, run_dir),
             test_task_lifecycle_unified_status(root, run_dir),
             test_task_lifecycle_transition(root, run_dir),
             test_task_lifecycle_fail_on_blocking_drift(root, run_dir),
             test_gate_pool_validate_doc_tracking_context(root, run_dir),
             test_structured_task_record_gate(root, run_dir),
             test_preflight_boundary_hardening(root, run_dir),
+            test_final_output_discovered_issue_gate(root, run_dir),
+            test_multi_agent_dispatch_brief_gate(root, run_dir),
             test_tool_flow_accepts_task_record_gate(root, run_dir),
             test_lifecycle_input_filter_preflight(root, run_dir),
             test_task_run_command_compression_plan(root, run_dir),

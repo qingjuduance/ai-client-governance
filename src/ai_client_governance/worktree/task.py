@@ -2476,6 +2476,45 @@ def build_parser() -> argparse.ArgumentParser:
     check = subparsers.add_parser("check", help="Check all worktrees: run git status --short per worktree and print clean/dirty summary.")
     check.add_argument("--project-root", help="Host project root containing .ai-client/project.")
 
+    dispatch = subparsers.add_parser(
+        "dispatch",
+        help="Create a task worktree, write task payload JSON, and register the task record.",
+    )
+    dispatch.add_argument("--project-root", help="Host project root containing .ai-client/project.")
+    dispatch.add_argument("--title", required=True, help="Task title.")
+    dispatch.add_argument("--repo", choices=["self", "ai-client-governance"], required=True, help="Source repository.")
+    dispatch.add_argument("--task-id", help="Explicit task id. Default: TASK-<SLUG>.")
+    dispatch.add_argument("--task-slug", help="Override generated task slug.")
+    dispatch.add_argument("--task-type", action="append", default=[], help="Task types (repeatable).")
+    dispatch.add_argument("--summary", required=True, help="Short task summary.")
+    dispatch.add_argument("--requirement", action="append", default=[], help="One-line requirement. Repeatable.")
+    dispatch.add_argument(
+        "--approval-label",
+        required=True,
+        help="Explicit user approval label. Dispatch never auto-approves tasks.",
+    )
+    dispatch.add_argument("--approval-summary", help="Summary of the user approval.")
+    dispatch.add_argument("--network-decision", choices=["not-required", "required", "deferred"], default="not-required")
+    dispatch.add_argument("--validation-decision", choices=["syntax-only", "gate-only", "full", "skipped"], default="syntax-only")
+    dispatch.add_argument("--base", help="Base commit/branch. Default: HEAD.")
+    dispatch.add_argument("--scope", action="append", help="Initial session scopes (repeatable).")
+    dispatch.add_argument("--write-scope", action="append", default=[], help="Agent write scope for multi-agent dispatch. Repeatable.")
+    dispatch.add_argument("--forbidden-path", action="append", default=[], help="Path or pattern the dispatched agent must not touch. Use 'none' explicitly if empty.")
+    dispatch.add_argument("--validation-command", action="append", default=[], help="Validation command the dispatched agent must run or report. Repeatable.")
+    dispatch.add_argument("--return-capsule", default="", help="Expected return capsule contract for the dispatched agent.")
+    dispatch.add_argument("--context-reuse", choices=["new", "reuse", "merge", "close"], default="new", help="Agent context reuse decision.")
+    dispatch.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+
+    poll = subparsers.add_parser(
+        "poll",
+        help="Poll task worktrees without writing DB state.",
+    )
+    poll.add_argument("--project-root", help="Host project root containing .ai-client/project.")
+    poll.add_argument("--task-slug", "--task", dest="task_slug", help="Poll one specific task slug.")
+    poll.add_argument("--repo", choices=["self", "ai-client-governance"], help="Filter by repo. Default: both.")
+    poll.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    poll.add_argument("--target-ref", default="main", help="Target ref used for merged status. Default: main.")
+
     return parser
 
 
@@ -2533,8 +2572,8 @@ def command_describe_schema(args: argparse.Namespace) -> int:
         lines: list[str] = []
         lines.append("worktree-task schema")
         lines.append("worktree path: .ai-client/project/.worktree/<task-slug>/")
-        lines.append("branch name:   task/<YYYYMMDD>-<slug>")
-        lines.append("commands: list | create | status | reconcile | close | queue | merge | finalize | host-closeout | cleanup-branch | remove | describe-schema | reset | check")
+        lines.append("branch name:   codex/<task-slug>")
+        lines.append("commands: list | create | status | reconcile | close | queue | merge | finalize | host-closeout | cleanup-branch | remove | describe-schema | reset | check | dispatch | poll")
         lines.append("")
         lines.append("worktree status enums:")
         lines.append("  merged_status: not_merged, merged")
@@ -2612,6 +2651,327 @@ def command_check(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_dispatch(args: argparse.Namespace) -> int:
+    """Dispatch an explicitly approved task to a standard worktree."""
+    project_root = find_project_root(Path.cwd(), args.project_root)
+    source_repo = source_repo_for(project_root, args.repo)
+    source_status = git_run(["status", "--short"], source_repo, check=False).stdout.strip()
+    if source_status:
+        print(
+            f"Error: source repo is dirty; dispatch requires a clean source repo:\n{source_status}",
+            file=sys.stderr,
+        )
+        return 1
+
+    task_slug = args.task_slug or generate_task_slug(args.title)
+    task_id = args.task_id or f"TASK-{task_slug.upper()}"
+    task_types = list(args.task_type) or (
+        ["rules-script"] if args.repo == "ai-client-governance" else ["docs", "git"]
+    )
+    write_scopes = list(args.write_scope or []) or list(args.scope or [])
+    forbidden_paths = list(args.forbidden_path or [])
+    validation_commands = list(args.validation_command or [])
+    return_capsule = str(args.return_capsule or "").strip()
+    if "multi-agent" in task_types:
+        missing_agent_fields = []
+        if not write_scopes:
+            missing_agent_fields.append("--write-scope")
+        if not forbidden_paths:
+            missing_agent_fields.append("--forbidden-path")
+        if not validation_commands:
+            missing_agent_fields.append("--validation-command")
+        if not return_capsule:
+            missing_agent_fields.append("--return-capsule")
+        if missing_agent_fields:
+            print(
+                "Error: multi-agent dispatch requires Agent Brief fields: "
+                + ", ".join(missing_agent_fields),
+                file=sys.stderr,
+            )
+            return 2
+    req_texts = list(args.requirement or []) or [args.summary]
+    now = now_iso()
+    trace_id = f"trace-{task_slug}"
+
+    create_args = argparse.Namespace(
+        project_root=str(project_root),
+        repo=args.repo,
+        title=args.title,
+        task_slug=task_slug,
+        base=args.base,
+        scope=args.scope,
+        register_session=True,
+        session_id=f"sess-{task_slug}",
+        task_tracking=None,
+        no_locks=False,
+        lock_reason=f"dispatch: {args.title}",
+        git_lock=False,
+        git_lock_reason=None,
+        include_source_projects=False,
+        exclude_path=None,
+        dry_run=False,
+    )
+    create_rc = command_create(create_args)
+    if create_rc != 0:
+        return create_rc
+
+    worktree_path = task_worktree_path(project_root, task_slug)
+    base_commit = current_head(worktree_path)
+    requirements = []
+    for index, summary in enumerate(req_texts, start=1):
+        requirements.append(
+            {
+                "requirement_id": f"REQ-{task_slug}-{index:02d}",
+                "summary": summary,
+                "record_decision": "include",
+                "network_decision": args.network_decision,
+                "validation_decision": args.validation_decision,
+                "acceptance": "Task worktree contains the approved changes, validation passes, and final output reports merge/push boundaries.",
+                "status": "open",
+                "action": f"Execute only inside {display_path(worktree_path, project_root)} and report through worktree-task poll.",
+                "implementation_evidence": f"Worktree {display_path(worktree_path, project_root)} on branch codex/{task_slug}.",
+                "validation_evidence": "Pending implementation validation.",
+                "final_coverage": "Pending final-output gate.",
+                "created_at": now,
+                "updated_at": now,
+            }
+        )
+
+    events = [
+        {
+            "event_id": f"EVT-{task_slug}-dispatch",
+            "event_type": "dispatch.analysis",
+            "payload": {
+                "approval_label": args.approval_label,
+                "auto_approved": False,
+                "worktree_path": display_path(worktree_path, project_root),
+                "branch": f"codex/{task_slug}",
+            },
+            "created_at": now,
+        }
+    ]
+    if "multi-agent" in task_types:
+        events.append(
+            {
+                "event_id": f"EVT-{task_slug}-agent-brief",
+                "event_type": "agent-dispatch-brief.analysis",
+                "payload": {
+                    "task_id": task_id,
+                    "worktree_path": display_path(worktree_path, project_root),
+                    "write_scope": write_scopes,
+                    "forbidden_paths": forbidden_paths,
+                    "validation_commands": validation_commands,
+                    "return_capsule": return_capsule,
+                    "context_reuse": args.context_reuse,
+                    "fail_policy": "fail_closed",
+                },
+                "created_at": now,
+            }
+        )
+
+    payload = {
+        "task": {
+            "task_id": task_id,
+            "title": args.title,
+            "status": "active",
+            "task_size": "medium",
+            "task_types": task_types,
+            "summary": args.summary,
+            "approval_label": args.approval_label,
+            "trace_id": trace_id,
+            "created_at": now,
+            "updated_at": now,
+        },
+        "approvals": [
+            {
+                "approval_id": f"APV-{task_slug}-01",
+                "label": args.approval_label,
+                "status": "approved",
+                "summary": args.approval_summary or "Explicit user approval supplied to worktree-task dispatch.",
+                "created_at": now,
+            }
+        ],
+        "requirements": requirements,
+        "triggers": [
+            {
+                "trigger_id": f"TRG-{task_slug}-01",
+                "trigger_type": "user-message",
+                "source": "worktree-task dispatch",
+                "matched_requirement": ",".join(row["requirement_id"] for row in requirements),
+                "priority": "high",
+                "applicability_scope": f"worktree {task_slug}",
+                "scope_expansion": "none",
+                "reason": "User-approved task dispatched to an isolated worktree.",
+                "required_action": "Sub-agent or operator works only inside the task worktree.",
+                "executed_steps": "worktree-task create; task payload generation; task-record apply.",
+                "quantitative_evidence": f"requirements={len(requirements)} worktrees=1",
+                "status": "fired",
+                "trace_id": trace_id,
+                "created_at": now,
+                "updated_at": now,
+            }
+        ],
+        "outputs": [
+            {
+                "output_id": f"OUT-{task_slug}-01",
+                "output_type": "plan",
+                "applicability_scope": f"worktree {task_slug}",
+                "exclusions": "Remote push is not approved by dispatch.",
+                "objects": display_path(worktree_path, project_root),
+                "fact_source": "worktree-task dispatch and git live state",
+                "completed": "Approved task worktree and task-record entry created.",
+                "unfinished": "Implementation, validation, merge, host-closeout, and final-output gate.",
+                "unverified": "Sub-agent changes and validation results.",
+                "blocked": "",
+                "user_confirmation": args.approval_label,
+                "final_coverage": "Final reply must report worktree, commit, merge, and push status.",
+                "trace_id": trace_id,
+                "created_at": now,
+                "updated_at": now,
+            }
+        ],
+        "worktrees": [
+            {
+                "worktree_id": f"WT-{task_slug}-01",
+                "repo": args.repo,
+                "source_repo": display_path(source_repo, project_root),
+                "path": display_path(worktree_path, project_root),
+                "branch": f"codex/{task_slug}",
+                "base_commit": base_commit,
+                "creation_method": "worktree-task",
+                "sparse_policy": "none",
+                "source_handling": "in-worktree",
+                "status": "active",
+                "merged_status": "not_merged",
+                "commit_status": "not_committed",
+                "push_status": "not_pushed",
+                "next_action": "Implement and validate inside the task worktree.",
+                "created_at": now,
+                "updated_at": now,
+            }
+        ],
+        "validations": [
+            {
+                "validation_id": f"VAL-{task_slug}-01",
+                "command": "worktree-task poll",
+                "cwd": display_path(project_root, project_root),
+                "result": "skipped",
+                "summary": "Dispatch created the worktree; implementation validation is pending.",
+                "evidence": "",
+                "created_at": now,
+            }
+        ],
+        "events": events,
+    }
+
+    payload_path = worktree_path / "task-payload.json"
+    payload_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    result = run_command(
+        [
+            sys.executable,
+            str(ai_client_governance_script()),
+            "task-record",
+            "apply",
+            "--json",
+            str(payload_path),
+            "--replace",
+            "--format",
+            "json",
+        ],
+        project_root,
+        check=False,
+    )
+    if result.returncode != 0:
+        print("Error: task-record apply failed after worktree creation.", file=sys.stderr)
+        print(result.stdout or result.stderr, file=sys.stderr)
+        return result.returncode
+
+    report = {
+        "task_id": task_id,
+        "task_slug": task_slug,
+        "repo": args.repo,
+        "worktree_path": display_path(worktree_path, project_root),
+        "branch": f"codex/{task_slug}",
+        "payload_path": display_path(payload_path, project_root),
+        "approval_label": args.approval_label,
+    }
+    if args.format == "json":
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+    else:
+        print(f"Dispatched approved task: {task_id}")
+        print(f"  worktree: {report['worktree_path']}")
+        print(f"  branch: {report['branch']}")
+        print(f"  payload: {report['payload_path']}")
+        print(f"  poll: python .ai-client/ai-client-governance/scripts/ai_client_governance.py worktree-task poll --task-slug {task_slug}")
+    return 0
+
+
+def command_poll(args: argparse.Namespace) -> int:
+    """Poll task worktrees without recording a DB status snapshot."""
+    project_root = find_project_root(Path.cwd(), args.project_root)
+    repos = []
+    if args.repo in (None, "self"):
+        repos.append(("self", project_root))
+    if args.repo in (None, "ai-client-governance"):
+        repos.append(("ai-client-governance", project_root / ".ai-client" / "ai-client-governance"))
+
+    worktree_base = project_root / ".ai-client" / "project" / ".worktree"
+    entries: list[dict[str, Any]] = []
+    for repo_name, repo_path in repos:
+        if not repo_path.exists():
+            continue
+        for wt in parse_worktree_list(repo_path):
+            path = Path(wt.get("worktree", "")).resolve()
+            if path == repo_path.resolve():
+                continue
+            try:
+                path.relative_to(worktree_base.resolve())
+            except ValueError:
+                continue
+            task_slug = path.name
+            if args.task_slug and args.task_slug != task_slug:
+                continue
+            status_lines = [
+                line
+                for line in git_run(["status", "--short"], path, check=False).stdout.splitlines()
+                if line.strip()
+            ]
+            branch = clean_branch_name(wt.get("branch", ""))
+            entries.append(
+                {
+                    "repo": repo_name,
+                    "task_slug": task_slug,
+                    "worktree_path": display_path(path, project_root),
+                    "branch": branch,
+                    "head": git_text(["rev-parse", "--short", "HEAD"], path, allow_fail=True),
+                    "head_full": git_text(["rev-parse", "HEAD"], path, allow_fail=True),
+                    "status": "dirty" if status_lines else "clean",
+                    "status_lines": status_lines,
+                    "last_commit_subject": git_text(["log", "-1", "--pretty=%s"], path, allow_fail=True),
+                    "last_commit_time": git_text(["log", "-1", "--pretty=%ai"], path, allow_fail=True),
+                    "merged_to_target": merged_to_target(repo_path, branch, args.target_ref),
+                    "target_ref": args.target_ref,
+                }
+            )
+
+    report = {
+        "command": "worktree-task poll",
+        "polled_at": now_iso(),
+        "entries": entries,
+        "worktree_count": len(entries),
+        "active_count": sum(1 for item in entries if item["status"] != "clean" or item["merged_to_target"] is False),
+    }
+    if args.format == "json":
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+    else:
+        print(f"Poll: {len(entries)} worktree(s)")
+        for item in entries:
+            print(f"{item['repo']} {item['task_slug']}: {item['status']} merged={item['merged_to_target']} {item['worktree_path']}")
+            for line in item["status_lines"]:
+                print(f"  {line}")
+    return 0
+
+
 def build_worktree_schema_descriptor() -> dict[str, Any]:
     """Build a JSON-serializable descriptor of worktree conventions."""
     from datetime import datetime, timezone as tz
@@ -2622,7 +2982,7 @@ def build_worktree_schema_descriptor() -> dict[str, Any]:
         "task_worktree_dir": ".ai-client/project/.worktree/<task-slug>/",
         "task_worktree_repo_dir_ai_client_gov": "<project-root>/.ai-client/ai-client-governance/",
         "task_worktree_repo_dir_self": "<project-root>/",
-        "branch_name_template": "task/<YYYYMMDD>-<slug>",
+        "branch_name_template": "codex/<task-slug>",
         "status_record_file": ".ai-client/project/state/aicg.db",
         "standard_entry_command": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py worktree-task <command>",
     }
@@ -2666,6 +3026,8 @@ def build_worktree_schema_descriptor() -> dict[str, Any]:
         {"name": "worktree-task cleanup-branch --execute", "description": "Delete a merged task branch after its worktree is removed."},
         {"name": "worktree-task describe-schema", "description": "Print this schema document."},
         {"name": "worktree-task describe-schema --sample", "description": "Print a sample minimal snapshot payload."},
+        {"name": "worktree-task dispatch --approval-label <label>", "description": "Dispatch an explicitly approved task to a worktree and task-record."},
+        {"name": "worktree-task poll", "description": "Read task worktree live state without writing DB snapshots."},
     ]
 
     return {
@@ -2714,6 +3076,10 @@ def main() -> int:
         return command_reset(args)
     if args.command == "check":
         return command_check(args)
+    if args.command == "dispatch":
+        return command_dispatch(args)
+    if args.command == "poll":
+        return command_poll(args)
 
     return 1
 

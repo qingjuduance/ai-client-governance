@@ -164,6 +164,10 @@ def parse_args() -> argparse.Namespace:
     status = sub.add_parser("status", help="Print queue status.")
     common_cli_args.add_common_global_args(status, suppress_default=True)
 
+    todo = sub.add_parser("todo", help="Export client Todo UI items derived from task-queue state.")
+    common_cli_args.add_common_global_args(todo, suppress_default=True)
+    todo.add_argument("--include-closed", action="store_true", help="Include completed/cancelled/rejected tasks.")
+
     lifecycle = sub.add_parser("lifecycle", help="Print a unified queue/task-record lifecycle view.")
     common_cli_args.add_common_global_args(lifecycle, suppress_default=True)
     lifecycle.add_argument("--task-id", help="Only report one task id.")
@@ -472,6 +476,52 @@ def queue_summary(state: dict[str, Any]) -> dict[str, Any]:
         "all_tasks": tasks,
         "next_task": ready[0] if ready else None,
         "updated_at": state.get("updated_at", ""),
+    }
+
+
+def todo_projection(state: dict[str, Any], *, include_closed: bool = False) -> dict[str, Any]:
+    """Build a client Todo-list projection from the durable task queue."""
+    status_map = {
+        "candidate": "pending",
+        "awaiting_approval": "pending",
+        "ready": "pending",
+        "active": "in_progress",
+        "waiting_user": "in_progress",
+        "waiting_tool": "in_progress",
+        "waiting_agent": "in_progress",
+        "verifying": "in_progress",
+        "blocked": "blocked",
+        "completed": "completed",
+        "cancelled": "cancelled",
+        "rejected": "cancelled",
+    }
+    statuses = ALL_STATUSES if include_closed else OPEN_STATUSES
+    items: list[dict[str, Any]] = []
+    for task in state.get("tasks", []):
+        queue_status = str(task.get("status") or "")
+        if queue_status not in statuses:
+            continue
+        context = task.get("context") if isinstance(task.get("context"), dict) else {}
+        items.append(
+            {
+                "id": task.get("id", ""),
+                "content": task.get("title", "") or task.get("id", ""),
+                "status": status_map.get(queue_status, "pending"),
+                "queue_status": queue_status,
+                "task_tracking": task.get("task_tracking", ""),
+                "approval_label": task.get("approval_label", ""),
+                "trace_id": task.get("trace_id", ""),
+                "parent_task_id": task.get("parent_task_id", ""),
+                "restore_reading_list": context.get("restore_reading_list", []),
+                "source_policy": "derived_from_task_queue_not_fact_source",
+            }
+        )
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "generated_at": now_iso(),
+        "source": "task-queue",
+        "source_policy": "client Todo lists are derived views; task-queue/task-record remain the durable fact sources",
+        "items": items,
     }
 
 
@@ -1112,6 +1162,20 @@ def command_status(args: argparse.Namespace, root: Path, path: Path) -> int:
     return 0
 
 
+def command_todo(args: argparse.Namespace, root: Path, path: Path) -> int:
+    state = load_state(path)
+    projection = todo_projection(state, include_closed=bool(args.include_closed))
+    if args.format == "json":
+        print(json.dumps(projection, ensure_ascii=False, indent=2))
+    else:
+        print("AI Client Governance Todo Projection")
+        print(f"Generated: {projection['generated_at']}")
+        print(f"Source policy: {projection['source_policy']}")
+        for item in projection["items"]:
+            print(f"- [{item['status']}] {item['id']}: {item['content']}")
+    return 0
+
+
 def command_lifecycle(args: argparse.Namespace, root: Path, path: Path) -> int:
     summary = lifecycle_summary(root, path, args.task_id)
     if args.format == "json":
@@ -1165,6 +1229,8 @@ def dispatch_command(args: argparse.Namespace, root: Path, path: Path) -> int:
         return command_transition(args, root, path)
     if args.command == "status":
         return command_status(args, root, path)
+    if args.command == "todo":
+        return command_todo(args, root, path)
     if args.command == "lifecycle":
         return command_lifecycle(args, root, path)
     if args.command == "heartbeat":

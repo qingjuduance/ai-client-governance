@@ -23,7 +23,7 @@ from ai_client_governance.records import (
     tool_flow,
     tool_invocations,
 )
-from ai_client_governance.runtime import contract, registry as runtime_registry, shell_adapter, task_run
+from ai_client_governance.runtime import client_flow_probe, contract, registry as runtime_registry, shell_adapter, task_run
 from ai_client_governance.sync import check as sync_check
 from ai_client_governance.validation import completion, encoding, selftest
 from ai_client_governance.worktree import coord as worktree_coord
@@ -34,6 +34,7 @@ COMMANDS: dict[str, tuple[str, Callable[[], int]]] = {
     "agent-comm": ("Manage agent communication bus.", agent_comm.main),
     "agent-groups": ("Report agent group status.", group_status.main),
     "architecture-guard": ("Check AI Client Governance architecture boundaries.", architecture_guard.main),
+    "client-flow-probe": ("Create and verify cross-client workflow compliance probes.", client_flow_probe.main),
     "completion-test": ("Plan task completion tests from changed paths and task types.", completion.main),
     "contract": ("Describe typed structured record contracts before execution.", contract.main),
     "context-extract": ("Extract safe slices from long context files.", context_extract.main),
