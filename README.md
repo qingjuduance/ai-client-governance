@@ -228,6 +228,35 @@ python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-reco
 python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-gate --task-id <task-id>
 ```
 
+### Client Flow Probe
+
+Use `client-flow-probe` when you need to test whether Trae, Doubao, Codex,
+Cursor, or another AI coding client actually follows the governance workflow.
+The probe checks auditable facts in `.ai-client/project/state/aicg.db` and live
+Git/worktree state; it does not trust the tested model's self-report.
+
+```powershell
+python .ai-client/ai-client-governance/scripts/ai_client_governance.py client-flow-probe create `
+  --client-type trae `
+  --model doubao `
+  --format json
+
+python .ai-client/ai-client-governance/scripts/ai_client_governance.py client-flow-probe verify `
+  --probe-id <probe-id> `
+  --task-id <task-id> `
+  --trace-id <trace-id> `
+  --expected-client-type trae `
+  --expected-model doubao
+```
+
+`create` prints a copyable test brief with a stable probe id, task id, trace id,
+approval label, tiny safe mutating task, expected workflow, and verification
+command. `verify` fails when the durable evidence is missing: task queue
+lifecycle, input-filter event, client identity, approval, worktree-task row,
+passing validation, final-output issue recording, or Git/worktree boundary
+evidence. Client Todo lists remain a projection; they are not accepted as the
+fact source.
+
 `task-record apply` 会在写入前检查 `tasks`、`requirements`、`triggers`、
 `outputs`、`events`、`worktrees`、`validations` 等表的必填字段、枚举和外键。缺少必填
 字段时直接拒绝写入，避免 AI 到最终 gate 才发现机器事实缺失。

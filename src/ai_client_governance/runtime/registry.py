@@ -1893,6 +1893,7 @@ EXPECTED_RUNTIME_COMMAND_KEYS = {
     "telemetryReport",
     "telemetryEffectiveness",
     "telemetryEffectivenessSnapshot",
+    "clientFlowProbe",
     "taskQueueLifecycle",
     "taskQueueTransition",
     "lifecycleInputFilter",

@@ -914,6 +914,253 @@ def test_task_queue_todo_projection(root: Path, run_dir: Path) -> TestResult:
     )
 
 
+def client_flow_probe_payload(task_id: str, trace_id: str, approval_label: str) -> dict[str, object]:
+    payload = structured_payload(task_id)
+    task = payload["task"]  # type: ignore[index]
+    task["title"] = "client flow probe selftest"  # type: ignore[index]
+    task["trace_id"] = trace_id  # type: ignore[index]
+    task["approval_label"] = approval_label  # type: ignore[index]
+    for approval in payload["approvals"]:  # type: ignore[index]
+        approval["label"] = approval_label
+        approval["summary"] = "client flow probe selftest approval"
+    for trigger in payload["triggers"]:  # type: ignore[index]
+        trigger["trace_id"] = trace_id
+    for output in payload["outputs"]:  # type: ignore[index]
+        output["trace_id"] = trace_id
+    for event in payload["events"]:  # type: ignore[index]
+        if event["event_type"] == structured_task_record.CLIENT_IDENTITY_EVENT:
+            event["payload"]["client_type"] = "trae"
+            event["payload"]["model_id"] = "doubao"
+            event["payload"]["identity_source"] = "client-flow-probe-selftest"
+        if event["event_type"] == structured_task_record.PLAN_APPROVAL_BOUNDARY_EVENT:
+            event["payload"]["approval_label"] = approval_label
+    return payload
+
+
+def test_client_flow_probe(root: Path, run_dir: Path) -> TestResult:
+    db = run_dir / "client-flow-probe.db"
+    task_id = "TASK-CLIENT-FLOW-PROBE-SELFTEST"
+    trace_id = "trace-client-flow-probe-selftest"
+    probe_id = "probe-selftest"
+    approval_label = "APPROVE: client-flow-probe selftest"
+    payload_path = run_dir / "client-flow-probe-task-record.json"
+    write_text_lf(
+        payload_path,
+        json.dumps(client_flow_probe_payload(task_id, trace_id, approval_label), ensure_ascii=False, indent=2),
+    )
+    commands = [
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "client-flow-probe",
+                "create",
+                "--root",
+                str(root),
+                "--probe-id",
+                probe_id,
+                "--client-type",
+                "trae",
+                "--model",
+                "doubao",
+                "--format",
+                "json",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-queue",
+                "--db",
+                str(db),
+                "enqueue",
+                "--root",
+                str(root),
+                "--task-id",
+                task_id,
+                "--title",
+                "client flow probe selftest",
+                "--message",
+                "client flow probe selftest",
+                "--task-tracking",
+                ".ai-client/project/records/task-tracking/client-flow-probe-selftest.md",
+                "--status",
+                "candidate",
+                "--trace-id",
+                trace_id,
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-queue",
+                "--db",
+                str(db),
+                "request-approval",
+                "--root",
+                str(root),
+                "--task-id",
+                task_id,
+                "--approval-label",
+                approval_label,
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-queue",
+                "--db",
+                str(db),
+                "approve",
+                "--root",
+                str(root),
+                "--task-id",
+                task_id,
+                "--approval-label",
+                approval_label,
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-queue",
+                "--db",
+                str(db),
+                "start-next",
+                "--root",
+                str(root),
+                "--task-id",
+                task_id,
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-record",
+                "--db",
+                str(db),
+                "apply",
+                "--json",
+                str(payload_path),
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-queue",
+                "--db",
+                str(db),
+                "complete",
+                "--root",
+                str(root),
+                "--task-id",
+                task_id,
+                "--summary",
+                "client flow probe selftest complete",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "client-flow-probe",
+                "verify",
+                "--root",
+                str(root),
+                "--db",
+                str(db),
+                "--probe-id",
+                probe_id,
+                "--task-id",
+                task_id,
+                "--trace-id",
+                trace_id,
+                "--expected-client-type",
+                "trae",
+                "--expected-model",
+                "doubao",
+                "--approval-label",
+                approval_label,
+                "--no-live-worktree-check",
+                "--format",
+                "json",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "client-flow-probe",
+                "verify",
+                "--root",
+                str(root),
+                "--db",
+                str(db),
+                "--probe-id",
+                "missing-probe",
+                "--expected-client-type",
+                "trae",
+                "--expected-model",
+                "doubao",
+                "--format",
+                "json",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+    ]
+    create_output = commands[0].stdout + commands[0].stderr
+    pass_output = commands[-2].stdout + commands[-2].stderr
+    fail_output = commands[-1].stdout + commands[-1].stderr
+    try:
+        pass_payload = json.loads(commands[-2].stdout)
+        fail_payload = json.loads(commands[-1].stdout)
+    except json.JSONDecodeError:
+        pass_payload = {}
+        fail_payload = {}
+    passed = (
+        all(command.exit_code == 0 for command in commands[:-1])
+        and commands[-1].exit_code != 0
+        and "verification_command" in create_output
+        and pass_payload.get("passed") is True
+        and fail_payload.get("passed") is False
+        and "client-identity" in pass_output
+        and "task-record" in fail_output
+    )
+    return TestResult(
+        name="client-flow-probe",
+        passed=passed,
+        summary=(
+            "client-flow-probe create emits a test brief and verify passes/fails from durable evidence"
+            if passed
+            else "client-flow-probe regression failed"
+        ),
+        commands=commands,
+    )
+
+
 def test_task_lifecycle_unified_status(root: Path, run_dir: Path) -> TestResult:
     task_id = "TQ-LIFECYCLE-SELFTEST"
     db = run_dir / "task-lifecycle-selftest.db"
@@ -4282,6 +4529,7 @@ def main() -> int:
             test_multi_agent_acceptance_matrix_gate(root, run_dir),
             test_task_queue_task_id_priority(root, run_dir),
             test_task_queue_todo_projection(root, run_dir),
+            test_client_flow_probe(root, run_dir),
             test_task_lifecycle_unified_status(root, run_dir),
             test_task_lifecycle_transition(root, run_dir),
             test_task_lifecycle_fail_on_blocking_drift(root, run_dir),
