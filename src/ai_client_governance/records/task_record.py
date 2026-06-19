@@ -42,6 +42,7 @@ BASE_OUTPUT_TYPES = {"plan", "status", "final", "script", "error", "git_worktree
 MUTATING_TASK_TYPES = {"correction", "rules-script", "docs", "git", "frontend", "resume", "multi-agent", "long-running"}
 KNOWN_TASK_TYPES = MUTATING_TASK_TYPES | {"code-debug"}
 INPUT_FILTER_PREFLIGHT_EVENT = "input-filter.preflight"
+CLIENT_IDENTITY_EVENT = "client-identity.analysis"
 INPUT_FILTER_TRIGGER_TYPES = {"input-filter", "user-message"}
 INPUT_FILTER_REQUIREMENT_FIELDS = (
     "summary",
@@ -559,7 +560,13 @@ def has_text(row: sqlite3.Row, column: str) -> bool:
     return bool(str(row[column] or "").strip())
 
 
-def validate_input_filter_preflight(con: sqlite3.Connection, task_id: str, errors: list[Finding], notes: list[Finding]) -> None:
+def validate_input_filter_preflight(
+    con: sqlite3.Connection,
+    task_id: str,
+    errors: list[Finding],
+    warnings: list[Finding],
+    notes: list[Finding],
+) -> None:
     """Require user-message input analysis facts before execution or final output."""
     requirements = rows(con, "requirements", task_id)
     triggers = rows(con, "triggers", task_id)
@@ -598,6 +605,58 @@ def validate_input_filter_preflight(con: sqlite3.Connection, task_id: str, error
         )
     else:
         add(notes, "note", f"input-filter preflight facts present: {INPUT_FILTER_PREFLIGHT_EVENT}", "events")
+
+    identity_payloads = []
+    for event in events:
+        if str(event["event_type"] or "").strip() != CLIENT_IDENTITY_EVENT:
+            continue
+        try:
+            identity_payloads.append(json.loads(event["payload_json"] or "{}"))
+        except json.JSONDecodeError:
+            identity_payloads.append({})
+    if not identity_payloads:
+        add(
+            errors,
+            "error",
+            f"input-filter preflight requires an events row with event_type={CLIENT_IDENTITY_EVENT}",
+            "events",
+        )
+        return
+    latest_identity = identity_payloads[-1]
+    missing_identity = [
+        field
+        for field in ("client_type", "model_id")
+        if not str(latest_identity.get(field) or "").strip()
+    ]
+    if missing_identity:
+        add(
+            errors,
+            "error",
+            f"client/model identity event lacks required field(s): {', '.join(missing_identity)}",
+            "events",
+        )
+        return
+    unknown_identity = [
+        field
+        for field in ("client_type", "model_id")
+        if str(latest_identity.get(field) or "").strip().lower() == "unknown"
+    ]
+    if unknown_identity:
+        add(
+            warnings,
+            "warning",
+            "client/model identity is unknown for: " + ", ".join(unknown_identity),
+            "events",
+        )
+    add(
+        notes,
+        "note",
+        (
+            "client/model identity facts present: "
+            f"{latest_identity.get('client_type')} / {latest_identity.get('model_id')}"
+        ),
+        "events",
+    )
 
 
 def validate_command_compression_preflight(
@@ -906,7 +965,7 @@ def validate_task(con: sqlite3.Connection, db: Path, task_id: str, event: str, e
     if output_count == 0:
         add(errors, "error", "at least one output row is required", "outputs")
 
-    validate_input_filter_preflight(con, task_id, errors, notes)
+    validate_input_filter_preflight(con, task_id, errors, warnings, notes)
     validate_command_compression_preflight(con, task, task_types, errors, notes)
     validate_scope_classification_preflight(con, task, task_types, errors, notes)
     validate_plan_approval_boundary(con, task, task_types, errors, notes)

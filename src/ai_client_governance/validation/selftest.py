@@ -1304,6 +1304,7 @@ def structured_payload(task_id: str, include_worktree: bool = True) -> dict[str,
                     "filter_chain": [
                         "classify-source",
                         "user-claim-validation",
+                        "client-identity",
                         "classify-common-project-scope",
                         "decompose-requirements",
                         "recordability-judgement",
@@ -1311,6 +1312,19 @@ def structured_payload(task_id: str, include_worktree: bool = True) -> dict[str,
                         "acceptance-extract",
                     ],
                     "fail_policy": "fail_closed",
+                },
+            },
+            {
+                "event_id": f"EVT-{task_id}-CLIENT-IDENTITY",
+                "event_type": structured_task_record.CLIENT_IDENTITY_EVENT,
+                "payload": {
+                    "join_point": "user-message",
+                    "client_type": "selftest-client",
+                    "client_version": "selftest-version",
+                    "model_id": "selftest-model",
+                    "model_provider": "selftest-provider",
+                    "identity_source": "selftest-fixture",
+                    "fail_policy": "fail_closed_if_missing_event",
                 },
             },
             {
@@ -1918,6 +1932,12 @@ def test_lifecycle_input_filter_preflight(root: Path, run_dir: Path) -> TestResu
                 "input filter lifecycle selftest",
                 "--task-type",
                 "code-debug",
+                "--client-type",
+                "selftest-client",
+                "--model",
+                "selftest-model",
+                "--model-provider",
+                "selftest-provider",
                 "--db",
                 str(db),
                 "--task-record-json",
@@ -1987,6 +2007,9 @@ def test_lifecycle_input_filter_preflight(root: Path, run_dir: Path) -> TestResu
         and "input.filter.user-claim-validation" in component_output
         and "\"fail_policy\": \"fail_closed\"" in component_output
         and "\"event_type\": \"input-filter.preflight\"" in input_filter_output
+        and "\"event_type\": \"client-identity.analysis\"" in input_filter_output
+        and "\"client_type\": \"selftest-client\"" in input_filter_output
+        and "\"model_id\": \"selftest-model\"" in input_filter_output
         and "\"event_type\": \"command-compression.analysis\"" in input_filter_output
         and f"\"event_type\": \"{structured_task_record.PLAN_APPROVAL_BOUNDARY_EVENT}\"" in input_filter_output
         and f"\"event_type\": \"{structured_task_record.USER_CLAIM_VALIDATION_EVENT}\"" in input_filter_output
@@ -1994,6 +2017,7 @@ def test_lifecycle_input_filter_preflight(root: Path, run_dir: Path) -> TestResu
         and "\"scope_kind\"" in input_filter_output
         and "scope-classification" in input_filter_output
         and "input-filter preflight facts present" in gate_output
+        and "client/model identity facts present: selftest-client / selftest-model" in gate_output
         and "task-record preflight gate passed" in lifecycle_output
         and "analysis contract passed" in lifecycle_output
     )
@@ -2455,6 +2479,12 @@ def test_telemetry_trace_context_effectiveness(root: Path, run_dir: Path) -> Tes
                 baseline_trace,
                 "--name",
                 "gate-pool",
+                "--client-type",
+                "codex",
+                "--model",
+                "gpt-5",
+                "--model-provider",
+                "openai",
                 "--span-kind",
                 "gate",
                 "--phase",
@@ -2485,6 +2515,12 @@ def test_telemetry_trace_context_effectiveness(root: Path, run_dir: Path) -> Tes
                 candidate_trace,
                 "--name",
                 "gate-pool",
+                "--client-type",
+                "trae",
+                "--model",
+                "selftest-model",
+                "--model-provider",
+                "selftest-provider",
                 "--span-kind",
                 "gate",
                 "--phase",
@@ -2541,12 +2577,19 @@ def test_telemetry_trace_context_effectiveness(root: Path, run_dir: Path) -> Tes
     except json.JSONDecodeError:
         pass
     trace_context = report.get("trace_context", {}) if isinstance(report.get("trace_context"), dict) else {}
+    client_counts = report.get("client_type_counts", {}) if isinstance(report.get("client_type_counts"), dict) else {}
+    model_counts = report.get("model_counts", {}) if isinstance(report.get("model_counts"), dict) else {}
+    client_model_counts = report.get("client_model_counts", {}) if isinstance(report.get("client_model_counts"), dict) else {}
     diff = effectiveness.get("diff", {}) if isinstance(effectiveness.get("diff"), dict) else {}
     duration_diff = diff.get("duration_sum_ms", {}) if isinstance(diff.get("duration_sum_ms"), dict) else {}
     passed = (
         all(command.exit_code == 0 for command in commands)
         and trace_context.get("trace_count") == 2
         and trace_context.get("valid_traceparent_attribute_count") == 2
+        and client_counts.get("codex") == 1
+        and client_counts.get("trae") == 1
+        and model_counts.get("gpt-5") == 1
+        and client_model_counts.get("trae / selftest-model") == 1
         and duration_diff.get("delta") == -40
         and effectiveness.get("candidate", {}).get("metrics", {}).get("cache", {}).get("hits") == 1
     )

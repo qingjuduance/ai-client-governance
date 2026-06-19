@@ -77,7 +77,7 @@
       "failPolicy": "fail_closed",
       "capabilityPolicy": "task-run plan exposes per-command capability, risk_level, side_effect, cache_eligible, parallel_eligible, approval_required, approval_reason, policy_decision, policy_severity, and policy_findings as planner facts; task-run run fails before execution on block or unapproved approval_required decisions by default.",
       "cachePolicy": "Cache is opt-in and limited to readonly/validation nodes; stateful, sequential, Git write, lock, task-record apply, git status, git diff, and git worktree list commands are no-cache.",
-      "telemetryPolicy": "task-run run, gate-pool, shell-adapter, telemetry record, and the command adapter write execution telemetry spans/events to aicg.db by default; --jsonl-artifact-dir is only an explicit isolated artifact/export path and --no-telemetry is only for isolated tests. Commands use span_kind=command and subject_type=command; future model HTTP, sub-agent, token usage, and external API statistics must extend the same execution_spans/execution_events schema. Prefer task-run run, gate-pool, shell-adapter, or the command adapter for important shell commands; raw host shell calls must be justified when not automatically intercepted. Telemetry-wrapped commands are compensation evidence but do not clear raw_shell_gap; use task-run diagnose --require-raw-shell-coverage or shell-adapter diagnose --require-auto-intercept for fail-closed checks."
+      "telemetryPolicy": "task-run run, gate-pool, shell-adapter, telemetry record, and the command adapter write execution telemetry spans/events to aicg.db by default; --jsonl-artifact-dir is only an explicit isolated artifact/export path and --no-telemetry is only for isolated tests. Commands use span_kind=command and subject_type=command; future model HTTP, sub-agent, token usage, and external API statistics must extend the same execution_spans/execution_events schema. Each governed span should carry client_type and model_id attributes when available; unknown values stay explicit for later audit. Prefer task-run run, gate-pool, shell-adapter, or the command adapter for important shell commands; raw host shell calls must be justified when not automatically intercepted. Telemetry-wrapped commands are compensation evidence but do not clear raw_shell_gap; use task-run diagnose --require-raw-shell-coverage or shell-adapter diagnose --require-auto-intercept for fail-closed checks."
     },
     "markdownPolicy": "Markdown task tracking is a human-readable export or historical audit artifact, not a gate input for new tasks.",
     "readOnlyPolicy": "task-record status never creates the SQLite database; missing DB returns an empty summary."
@@ -93,7 +93,7 @@
     },
     {
       "id": "entrypoints-are-adapters",
-      "summary": "Treat AGENTS.md, CLAUDE.md, GEMINI.md, Copilot, Cursor, Cline, Windsurf, Continue, Roo, and Aider files as thin adapters to the same facts."
+      "summary": "Treat AGENTS.md, CLAUDE.md, GEMINI.md, Copilot, Cursor, Cline, Windsurf, Continue, Roo, Trae, and Aider files as thin adapters to the same facts."
     },
     {
       "id": "deterministic-constraints-become-components",
@@ -228,6 +228,7 @@
       "worktreeCreationPolicy": "plan-output/write-intent/resume must expose worktree-creation-policy, requiring worktree-task create by default plus sparse/source snapshot handling evidence; raw git worktree add is break-glass only",
       "worktreeLiveStatePolicy": "worktree-task reconcile treats Git worktree list as the source of truth and blocks active coord sessions whose worktree disappeared",
       "inputFilterPreflightPolicy": "user-message must pass lifecycle input-filter and task-record gate --event preflight before later processing; missing input-filter.preflight facts fail closed",
+      "clientIdentityPolicy": "lifecycle input-filter must record events.event_type=client-identity.analysis with client_type and model_id so task-record and telemetry reports can identify which AI clients or models skipped the standard flow; unknown identity is explicit and warning-worthy, not silently omitted.",
       "commandCompressionPolicy": "medium, large, or mutating tasks must record command-compression.analysis before write-intent or final gates; runtime components include a mutating-task fast path so small repository writes cannot skip the node; task-run plan provides the local dedupe, grouping, and per-command capability/risk/side-effect event payload",
       "securityPolicy": "policy assess and the security-policy gate provide deterministic local checks for prompt injection, sensitive information, command injection, supply-chain, Git write, destructive command, network, and path-boundary risk; host-native raw shell interception remains outside the plugin, so governed command paths and diagnostics fail closed instead of claiming runtime-level interception.",
       "taskRunExecutionPolicy": "task-run run executes one compressed local DAG, parallelizes only readonly/validation groups, writes telemetry events to aicg.db by default, stores trace JSON when requested, and blocks block or unapproved approval_required policy decisions before subprocess execution.",
@@ -356,6 +357,15 @@
       "tool": "roo-code",
       "paths": [
         ".roo/rules/ai-client-governance.md"
+      ],
+      "defaultGenerated": false,
+      "installPolicy": "create-missing-only-with-InstallAgentAdapters",
+      "overwritePolicy": "preserve-existing; rewrite-only-with-ForceAgentAdapters"
+    },
+    {
+      "tool": "trae",
+      "paths": [
+        ".trae/rules/ai-client-governance.md"
       ],
       "defaultGenerated": false,
       "installPolicy": "create-missing-only-with-InstallAgentAdapters",
@@ -504,7 +514,8 @@
     ".clinerules/ai-client-governance.md",
     ".windsurf/rules/ai-client-governance.md",
     ".continue/rules/ai-client-governance.md",
-    ".roo/rules/ai-client-governance.md"
+    ".roo/rules/ai-client-governance.md",
+    ".trae/rules/ai-client-governance.md"
   ],
   "installer": {
     "script": "install-ai-client-governance.ps1",
@@ -553,6 +564,7 @@
     ".windsurf/rules/",
     ".continue/rules/",
     ".roo/rules/",
+    ".trae/rules/",
     ".ai-client/project/rules/project/",
     ".ai-client/project/skills/",
     ".ai-client/project/records/task-tracking/",

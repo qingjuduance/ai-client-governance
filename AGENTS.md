@@ -64,8 +64,8 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
 - 当前 AI 工具自动加载的项目原生规则入口必须先视为项目入口。常见入口包括
   `AGENTS.md`、`CLAUDE.md`、`GEMINI.md`、`.github/copilot-instructions.md`、
   `.github/instructions/*.instructions.md`、`.cursor/rules/*.mdc`、
-  `.clinerules/`、`.windsurf/rules/*.md`、`.continue/rules/`、`.roo/rules/`
-  和 `CONVENTIONS.md`；具体以目标工具官方文档和目标项目已有文件为准。
+  `.clinerules/`、`.windsurf/rules/*.md`、`.continue/rules/`、`.roo/rules/`、
+  `.trae/rules/*.md` 和 `CONVENTIONS.md`；具体以目标工具官方文档和目标项目已有文件为准。
 - `ai-client-governance` 的通用规则事实源是嵌入式
   `.ai-client/ai-client-governance/AGENTS.md`；旧 `.codex/ai-client-governance/`
   不是迁移期路径，也不是 fallback。这里的 `AGENTS.md` 是入口适配文件名，
@@ -200,6 +200,10 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   回复前，必须先运行 `lifecycle input-filter`，把 `requirements`、`triggers`、
   `outputs` 和 `events.event_type=input-filter.preflight` 写入结构化 task record；
   缺少这些事实时 `task-record gate --event preflight` 必须 fail closed。
+- 同一输入过滤器还必须记录当前 AI 客户端类型和模型标识：
+  `events.event_type=client-identity.analysis` 的 payload 至少包含 `client_type`
+  和 `model_id`。宿主客户端无法暴露时写 `unknown` 并保留 `identity_source`，
+  不能省略；后续 telemetry report 按客户端/模型聚合，用来发现哪些组合没有按标准流程执行。
 - 输入过滤器还必须把用户目标和用户陈述分开：用户陈述只能作为 claim，不能直接作为事实。
   中/大型、修改型或规则/脚本/correction 任务缺少
   `events.event_type=user-claim-validation.analysis`、claim 的 `trust_level`、

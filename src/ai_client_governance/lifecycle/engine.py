@@ -96,6 +96,15 @@ class InputRecord:
 
 
 @dataclass
+class ExecutionIdentity:
+    client_type: str
+    client_version: str
+    model_id: str
+    model_provider: str
+    identity_source: str
+
+
+@dataclass
 class Classification:
     task_types: list[str]
     task_size: str
@@ -119,6 +128,7 @@ class LifecycleReport:
     state: str
     updated_at: str
     input: InputRecord
+    execution_identity: ExecutionIdentity
     classification: Classification
     errors: list[Finding] = field(default_factory=list)
     warnings: list[Finding] = field(default_factory=list)
@@ -151,6 +161,70 @@ def normalize_paths(values: list[str] | None) -> list[str]:
             if stripped and stripped not in result:
                 result.append(stripped.replace("\\", "/"))
     return result
+
+
+def first_nonempty(*values: str | None) -> str:
+    for value in values:
+        text = (value or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def execution_identity_from_args(args: argparse.Namespace) -> ExecutionIdentity:
+    client_type = first_nonempty(
+        getattr(args, "client_type", None),
+        os.environ.get("AICG_CLIENT_TYPE"),
+        os.environ.get("AI_CLIENT_TYPE"),
+        os.environ.get("CODEX_CLIENT_TYPE"),
+    )
+    client_version = first_nonempty(
+        getattr(args, "client_version", None),
+        os.environ.get("AICG_CLIENT_VERSION"),
+        os.environ.get("AI_CLIENT_VERSION"),
+        os.environ.get("CODEX_CLIENT_VERSION"),
+    )
+    model_id = first_nonempty(
+        getattr(args, "model", None),
+        os.environ.get("AICG_MODEL"),
+        os.environ.get("AI_MODEL"),
+        os.environ.get("MODEL_NAME"),
+        os.environ.get("CODEX_MODEL"),
+    )
+    model_provider = first_nonempty(
+        getattr(args, "model_provider", None),
+        os.environ.get("AICG_MODEL_PROVIDER"),
+        os.environ.get("AI_MODEL_PROVIDER"),
+        os.environ.get("MODEL_PROVIDER"),
+    )
+    source_bits: list[str] = []
+    if any(
+        getattr(args, name, None)
+        for name in ("client_type", "client_version", "model", "model_provider")
+    ):
+        source_bits.append("cli")
+    if any(
+        os.environ.get(name)
+        for name in (
+            "AICG_CLIENT_TYPE",
+            "AI_CLIENT_TYPE",
+            "CODEX_CLIENT_TYPE",
+            "AICG_MODEL",
+            "AI_MODEL",
+            "MODEL_NAME",
+            "CODEX_MODEL",
+        )
+    ):
+        source_bits.append("env")
+    if not source_bits:
+        source_bits.append("default-unknown")
+    return ExecutionIdentity(
+        client_type=client_type or "unknown",
+        client_version=client_version or "unknown",
+        model_id=model_id or "unknown",
+        model_provider=model_provider or "unknown",
+        identity_source="+".join(source_bits),
+    )
 
 
 def safe_id_part(value: str, fallback: str) -> str:
@@ -288,6 +362,7 @@ def build_input_filter_task_record(args: argparse.Namespace, report: LifecycleRe
     claims = build_user_claims(segments, requirement_ids, report.classification.task_types)
     matched = ", ".join(requirement_ids) if requirement_ids else "none"
     task_types = report.classification.task_types
+    identity = report.execution_identity
     approval_status = "approved" if args.approved_label else ("not_required" if not report.classification.requires_approval else "missing")
     execution_policy = "approved-local-only-no-push" if approval_status == "approved" else (
         "execute-no-approval-required" if approval_status == "not_required" else "block-before-write"
@@ -365,6 +440,21 @@ def build_input_filter_task_record(args: argparse.Namespace, report: LifecycleRe
                 "required_action": "Persist input-filter facts before write-intent, final-output, or resume gates.",
                 "executed_steps": "Rendered structured task-record payload.",
                 "quantitative_evidence": f"event={structured_task_record.INPUT_FILTER_PREFLIGHT_EVENT}",
+                "status": "done",
+                "trace_id": report.trace_id,
+            },
+            {
+                "trigger_id": f"TRG-{id_base}-CLIENT-IDENTITY",
+                "trigger_type": "client-identity",
+                "source": "ai_client_governance.py lifecycle input-filter",
+                "matched_requirement": matched,
+                "priority": "high",
+                "applicability_scope": "user-message execution context",
+                "scope_expansion": "not expanded",
+                "reason": "Model and client identity must be recorded so later audits can identify which runtimes skipped standard flow.",
+                "required_action": "Persist client-identity.analysis with client_type and model_id before write-intent, final-output, or resume gates.",
+                "executed_steps": "Captured client/model identity from CLI arguments, environment variables, or explicit unknown fallback.",
+                "quantitative_evidence": f"client_type={identity.client_type}; model_id={identity.model_id}",
                 "status": "done",
                 "trace_id": report.trace_id,
             },
@@ -447,6 +537,7 @@ def build_input_filter_task_record(args: argparse.Namespace, report: LifecycleRe
                     "filter_chain": [
                         "classify-source",
                         "user-claim-validation",
+                        "client-identity",
                         "classify-common-project-scope",
                         "decompose-requirements",
                         "recordability-judgement",
@@ -454,6 +545,20 @@ def build_input_filter_task_record(args: argparse.Namespace, report: LifecycleRe
                         "acceptance-extract",
                     ],
                     "fail_policy": "fail_closed",
+                },
+            },
+            {
+                "event_id": f"EVT-{id_base}-CLIENT-IDENTITY",
+                "event_type": structured_task_record.CLIENT_IDENTITY_EVENT,
+                "payload": {
+                    "join_point": "user-message",
+                    "client_type": identity.client_type,
+                    "client_version": identity.client_version,
+                    "model_id": identity.model_id,
+                    "model_provider": identity.model_provider,
+                    "identity_source": identity.identity_source,
+                    "audit_goal": "Correlate task-record and telemetry outcomes by AI client and model to find runtimes that do not follow the standard flow.",
+                    "fail_policy": "fail_closed_if_missing_event",
                 },
             },
             {
@@ -618,6 +723,7 @@ def infer_task_types(text: str, changed_paths: list[str], explicit: list[str]) -
         ".windsurf/rules/",
         ".continue/rules/",
         ".roo/rules/",
+        ".trae/rules/",
     )
     if any(path.startswith(".ai-client/ai-client-governance") or path.endswith(adapter_path_signals) for path in changed_paths):
         if "rules-script" not in found:
@@ -743,6 +849,10 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--message", default="", help="Input message or short task description.")
     parser.add_argument("--message-file", help="Read input text from a UTF-8 file.")
     parser.add_argument("--derived-from", action="append", default=[], help="Source URL/path/trace this input came from.")
+    parser.add_argument("--client-type", default="", help="AI client/runtime name, e.g. codex, claude-code, trae, cursor.")
+    parser.add_argument("--client-version", default="", help="AI client/runtime version, if available.")
+    parser.add_argument("--model", default="", help="Current model identifier, if available.")
+    parser.add_argument("--model-provider", default="", help="Current model provider, if available.")
     parser.add_argument("--changed-path", action="append", default=[], help="Path changed or expected to change.")
     parser.add_argument("--task-type", action="append", default=[], help="Explicit task type override/addition.")
     parser.add_argument("--task-tracking", help="Task tracking file for gated work.")
@@ -957,6 +1067,7 @@ def build_report(args: argparse.Namespace, phase: str, state: str) -> LifecycleR
     root = Path(args.root).resolve()
     trace_id = args.trace_id or default_trace_id()
     input_record, classification = build_classification(args, root)
+    execution_identity = execution_identity_from_args(args)
     errors: list[Finding] = []
     warnings: list[Finding] = []
     notes: list[Finding] = []
@@ -980,6 +1091,7 @@ def build_report(args: argparse.Namespace, phase: str, state: str) -> LifecycleR
         state=state,
         updated_at=utc_now(),
         input=input_record,
+        execution_identity=execution_identity,
         classification=classification,
         errors=errors,
         warnings=warnings,
@@ -1135,6 +1247,7 @@ def format_text(report: LifecycleReport) -> str:
         f"State: {report.state}",
         f"Trace: {report.trace_id}",
         f"Input: {report.input.source} ({report.input.trust})",
+        f"Client/model: {report.execution_identity.client_type} / {report.execution_identity.model_id}",
         f"Needs citation: {str(report.input.needs_citation).lower()}",
         f"Task types: {', '.join(c.task_types) if c.task_types else 'none'}",
         f"Task size: {c.task_size}",
@@ -1175,6 +1288,8 @@ def read_status(args: argparse.Namespace) -> int:
         print(f"Lifecycle state: {data.get('state')}")
         print(f"Phase: {data.get('phase')}")
         print(f"Trace: {data.get('trace_id')}")
+        identity = data.get("execution_identity", {})
+        print(f"Client/model: {identity.get('client_type', 'unknown')} / {identity.get('model_id', 'unknown')}")
         classification = data.get("classification", {})
         print(f"Task size: {classification.get('task_size')}")
         print(f"Task types: {', '.join(classification.get('task_types', []))}")

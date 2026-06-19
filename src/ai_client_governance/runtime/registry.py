@@ -414,12 +414,41 @@ def default_components() -> list[ComponentDefinition]:
                 "filter_chain": (
                     "classify-source",
                     "user-claim-validation",
+                    "client-identity",
                     "decompose-requirements",
                     "recordability-judgement",
                     "network-search-judgement",
                     "acceptance-extract",
                 ),
                 "required_event": "input-filter.preflight",
+            },
+        ),
+        component(
+            "input.filter.client-identity",
+            "input-filter",
+            "input",
+            106,
+            "Record the current AI client and model identity for audit correlation.",
+            fail_policy="fail_closed",
+            events=("user-message", "resume"),
+            requires_facts=("task_id",),
+            produces_facts=("client_type", "model_id", "client_identity_event"),
+            mechanism_label="ai_client_governance.py lifecycle input-filter client-identity",
+            gate_label="ai_client_governance.py task-record gate requires event_type=client-identity.analysis",
+            gate_step="client-identity",
+            effect="state_write",
+            dedupe_key="task_id:user-message:client-identity",
+            condition=(
+                "Run before write-intent, final-output, or resume gates so audits can identify which "
+                "client/model combinations skipped the standard flow."
+            ),
+            performance_budget="constant-time CLI/env/default identity capture; no repository scan",
+            metadata={
+                "join_point": "user-message",
+                "aop_role": "around-advice",
+                "required_event": "client-identity.analysis",
+                "required_fields": ("client_type", "model_id"),
+                "unknown_policy": "record explicit unknown values instead of omitting identity",
             },
         ),
         component(

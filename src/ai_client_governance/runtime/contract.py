@@ -10,6 +10,7 @@ from typing import Any
 
 from ai_client_governance.records.task_record import (
     APPROVAL_STATUSES,
+    CLIENT_IDENTITY_EVENT,
     KNOWN_TASK_TYPES,
     MUTATING_TASK_TYPES,
     OUTPUT_TYPES,
@@ -147,6 +148,18 @@ def build_contract(task_types: list[str], event: str) -> Contract:
         field("events[].payload", False, "json", "Machine-readable event payload, including join point and filter-chain facts."),
         field("events[].created_at", False, "datetime", "Event time; defaults to now when omitted."),
         field(
+            f"events[event_type={CLIENT_IDENTITY_EVENT}].payload.client_type",
+            True,
+            "string",
+            "AI client/runtime type; use explicit unknown when the host client cannot expose it.",
+        ),
+        field(
+            f"events[event_type={CLIENT_IDENTITY_EVENT}].payload.model_id",
+            True,
+            "string",
+            "Current model identifier; use explicit unknown when the host client cannot expose it.",
+        ),
+        field(
             "events[event_type=command-compression.analysis].payload.decision",
             mutating or normalized != [],
             "string",
@@ -229,6 +242,7 @@ def build_contract(task_types: list[str], event: str) -> Contract:
 
     gate_requirements = [
         "Run lifecycle input-filter for the user-message join point and persist an events[] row with event_type=input-filter.preflight.",
+        f"Persist events.event_type={CLIENT_IDENTITY_EVENT} with client_type and model_id; use explicit unknown values instead of omitting identity.",
         "Run completion-test --require-analysis before write-intent and record explicit scope, non-goals, risks, acceptance, and validation budget.",
         "Create or update the structured record before running final gates.",
         "Run task-record gate --task-id <id> before final answer.",

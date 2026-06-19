@@ -271,6 +271,7 @@ Markdown 只能通过 `task-record export-md` 作为人类阅读报告生成；D
 | Windsurf | `.windsurf/rules/ai-client-governance.md` | 仅在 `-InstallAgentAdapters` 或 `-ForceAgentAdapters` 时生成；Project rules adapter，已存在则保留。 |
 | Continue | `.continue/rules/ai-client-governance.md` | 仅在 `-InstallAgentAdapters` 或 `-ForceAgentAdapters` 时生成；Project-specific rules adapter，已存在则保留。 |
 | Roo Code | `.roo/rules/ai-client-governance.md` | 仅在 `-InstallAgentAdapters` 或 `-ForceAgentAdapters` 时生成；Project rules adapter，已存在则保留。 |
+| Trae | `.trae/rules/ai-client-governance.md` | 仅在 `-InstallAgentAdapters` 或 `-ForceAgentAdapters` 时生成；Rules adapter，已存在则保留。 |
 | Aider | `CONVENTIONS.md` | 仅在 `-InstallAgentAdapters` 或 `-ForceAgentAdapters` 时生成；已存在时保留，因为它常承载项目真实约定。 |
 
 这个清单是入口适配清单，不是优先级反转。目标项目已有的原生规则文件最高优先级；
@@ -397,7 +398,7 @@ powershell -ExecutionPolicy Bypass -File <ai-client-governance-path>\install-ai-
   如果确实要用生成薄入口替换，必须显式传 `-ForceRootEntry`，脚本会按备份策略处理。
 - `CLAUDE.md`、`GEMINI.md`、`.github/copilot-instructions.md`、
   `.github/instructions/*.instructions.md`、`.cursor/rules/*.mdc`、`.clinerules/`、
-  `.windsurf/rules/`、`.continue/rules/`、`.roo/rules/`、`CONVENTIONS.md`
+  `.windsurf/rules/`、`.continue/rules/`、`.roo/rules/`、`.trae/rules/`、`CONVENTIONS.md`
   等工具原生入口：默认不生成；已存在时保留，不覆盖；如果确实要补齐缺失 adapter，
   传 `-InstallAgentAdapters`；如果确实要统一重写 adapter，必须显式传
   `-ForceAgentAdapters`。
@@ -434,7 +435,7 @@ git commit -m "chore: embed ai-client-governance"
 
 如果本次显式传了 `-InstallAgentAdapters` 或 `-ForceAgentAdapters`，再按实际生成内容
 额外 stage `CLAUDE.md`、`GEMINI.md`、`CONVENTIONS.md`、`.github`、`.cursor`、
-`.clinerules`、`.windsurf`、`.continue` 或 `.roo`。
+`.clinerules`、`.windsurf`、`.continue`、`.roo` 或 `.trae`。
 
 如果目标项目不是 Git 仓库，或明确不希望父仓库记录 ai-client-governance 提交，才传
 `-Mode clone` 使用 nested clone。
@@ -1129,7 +1130,7 @@ schema 4 只描述 `.ai-client` 单一布局和结构化事实源：`.ai-client/
 `.ai-client/project/state/aicg.db` 是新任务的机器事实源。安装脚本默认只生成
 `AGENTS.md` 薄入口、`.ai-client/ai-client-governance-config.json` 和缺失时的
 项目规则占位，不再声明或写出旧 common 副本、scripts 副本或 skills 副本目标。
-Claude、Gemini、Copilot、Cursor、Cline、Windsurf、Continue、Roo 和 Aider
+Claude、Gemini、Copilot、Cursor、Cline、Windsurf、Continue、Roo、Trae 和 Aider
 `CONVENTIONS.md` 等平台 adapter 只在显式传 `-InstallAgentAdapters` 或
 `-ForceAgentAdapters` 时生成。
 

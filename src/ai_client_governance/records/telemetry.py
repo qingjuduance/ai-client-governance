@@ -947,6 +947,13 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
         for span in terminal
         if span.get("status") == "failed" or (span.get("exit_code") not in (None, 0))
     ]
+    identity_attrs = [span.get("attributes") for span in terminal if isinstance(span.get("attributes"), dict)]
+    client_type_counts = Counter(str(attr.get("client_type") or "unknown") for attr in identity_attrs)
+    model_counts = Counter(str(attr.get("model_id") or "unknown") for attr in identity_attrs)
+    client_model_counts = Counter(
+        f"{str(attr.get('client_type') or 'unknown')} / {str(attr.get('model_id') or 'unknown')}"
+        for attr in identity_attrs
+    )
     subject_counts = Counter(str(span.get("subject_redacted") or "") for span in terminal if span.get("subject_redacted"))
     duplicates = [
         {"subject": subject, "count": count}
@@ -996,6 +1003,9 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
         "duplicate_subjects": duplicates[: args.top],
         "status_counts": dict(Counter(str(span.get("status") or "unknown") for span in spans)),
         "scope_kind_counts": dict(Counter(str(span.get("scope_kind") or "unknown") for span in terminal)),
+        "client_type_counts": dict(client_type_counts),
+        "model_counts": dict(model_counts),
+        "client_model_counts": dict(client_model_counts),
         "adapter_enforcement_counts": dict(
             Counter(str(span.get("adapter_enforcement") or "none") for span in terminal)
         ),
@@ -1194,6 +1204,9 @@ def format_text(report: dict[str, Any]) -> str:
     lines.append(f"Span kinds: {json.dumps(report['span_kind_counts'], ensure_ascii=False, sort_keys=True)}")
     lines.append(f"Subject types: {json.dumps(report['subject_type_counts'], ensure_ascii=False, sort_keys=True)}")
     lines.append(f"Scope kinds: {json.dumps(report['scope_kind_counts'], ensure_ascii=False, sort_keys=True)}")
+    lines.append(f"Client types: {json.dumps(report['client_type_counts'], ensure_ascii=False, sort_keys=True)}")
+    lines.append(f"Models: {json.dumps(report['model_counts'], ensure_ascii=False, sort_keys=True)}")
+    lines.append(f"Client/model: {json.dumps(report['client_model_counts'], ensure_ascii=False, sort_keys=True)}")
     lines.append(
         f"Adapter enforcement: {json.dumps(report['adapter_enforcement_counts'], ensure_ascii=False, sort_keys=True)}"
     )
@@ -1246,6 +1259,9 @@ def format_markdown(report: dict[str, Any]) -> str:
     lines.extend(["", "## Duration By Phase", "", "| Phase | Sum ms | Avg ms | P50 | P95 | Max |", "| --- | ---: | ---: | ---: | ---: | ---: |"])
     for phase, stats in report["duration_by_phase"].items():
         lines.append(f"| {phase} | {stats['sum']} | {stats['avg']} | {stats['p50']} | {stats['p95']} | {stats['max']} |")
+    lines.extend(["", "## Client And Model", "", "| Client / Model | Count |", "| --- | ---: |"])
+    for key, count in sorted(report["client_model_counts"].items()):
+        lines.append(f"| `{key}` | {count} |")
     lines.extend(["", "## Slowest Validation Spans", ""])
     if report["slowest_validation_spans"]:
         lines.extend(["| Duration ms | Name | Phase | Event | Status |", "| ---: | --- | --- | --- | --- |"])
@@ -1354,6 +1370,51 @@ def parse_attribute_kv(values: list[str] | None) -> dict[str, Any] | None:
     return parsed
 
 
+def first_nonempty(*values: str | None) -> str:
+    for value in values:
+        text = (value or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def execution_identity_attributes(args: argparse.Namespace) -> dict[str, str]:
+    client_type = first_nonempty(
+        getattr(args, "client_type", None),
+        os.environ.get("AICG_CLIENT_TYPE"),
+        os.environ.get("AI_CLIENT_TYPE"),
+        os.environ.get("CODEX_CLIENT_TYPE"),
+    )
+    client_version = first_nonempty(
+        getattr(args, "client_version", None),
+        os.environ.get("AICG_CLIENT_VERSION"),
+        os.environ.get("AI_CLIENT_VERSION"),
+        os.environ.get("CODEX_CLIENT_VERSION"),
+    )
+    model_id = first_nonempty(
+        getattr(args, "model", None),
+        os.environ.get("AICG_MODEL"),
+        os.environ.get("AI_MODEL"),
+        os.environ.get("MODEL_NAME"),
+        os.environ.get("CODEX_MODEL"),
+    )
+    model_provider = first_nonempty(
+        getattr(args, "model_provider", None),
+        os.environ.get("AICG_MODEL_PROVIDER"),
+        os.environ.get("AI_MODEL_PROVIDER"),
+        os.environ.get("MODEL_PROVIDER"),
+    )
+    attrs = {
+        "client_type": client_type or "unknown",
+        "model_id": model_id or "unknown",
+    }
+    if client_version:
+        attrs["client_version"] = client_version
+    if model_provider:
+        attrs["model_provider"] = model_provider
+    return attrs
+
+
 def command_record(args: argparse.Namespace) -> int:
     root = Path(args.root).resolve()
     try:
@@ -1410,7 +1471,8 @@ def command_record(args: argparse.Namespace) -> int:
         "traceparent": trace_context.traceparent,
         "tracestate": trace_context.tracestate,
     }
-    merged_attributes = attributes or {}
+    merged_attributes = execution_identity_attributes(args)
+    merged_attributes.update(attributes or {})
     merged_attributes.setdefault("traceparent", trace_context.traceparent)
     if trace_context.tracestate:
         merged_attributes.setdefault("tracestate", trace_context.tracestate)
@@ -1497,6 +1559,10 @@ def build_parser() -> argparse.ArgumentParser:
     record.add_argument("--task-id", default="", help="Structured task id.")
     record.add_argument("--task-tracking", default="", help="Human-readable task tracking reference, if any.")
     record.add_argument("--task-type", action="append", help="Related task type.")
+    record.add_argument("--client-type", default="", help="AI client/runtime name, e.g. codex, claude-code, trae, cursor.")
+    record.add_argument("--client-version", default="", help="AI client/runtime version, if available.")
+    record.add_argument("--model", default="", help="Current model identifier, if available.")
+    record.add_argument("--model-provider", default="", help="Current model provider, if available.")
     record.add_argument("--name", default="", help="Operation name.")
     record.add_argument("--span-kind", default="operation", help="Execution kind, e.g. command, model_http, sub_agent.")
     record.add_argument("--subject", default="", help="Primary execution subject.")

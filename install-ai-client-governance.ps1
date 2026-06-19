@@ -443,6 +443,7 @@ function Get-AgentAdapterFiles {
         [pscustomobject]@{ RelativePath = ".windsurf\rules\ai-client-governance.md"; Content = (Get-GenericAdapterContent -ToolName "Windsurf") },
         [pscustomobject]@{ RelativePath = ".continue\rules\ai-client-governance.md"; Content = (Get-GenericAdapterContent -ToolName "Continue") },
         [pscustomobject]@{ RelativePath = ".roo\rules\ai-client-governance.md"; Content = (Get-GenericAdapterContent -ToolName "Roo Code") },
+        [pscustomobject]@{ RelativePath = ".trae\rules\ai-client-governance.md"; Content = (Get-GenericAdapterContent -ToolName "Trae") },
         [pscustomobject]@{ RelativePath = "CONVENTIONS.md"; Content = (Get-GenericAdapterContent -ToolName "Aider") }
     )
 }
@@ -797,7 +798,7 @@ else {
         Write-Host "Agent adapters: $($agentAdapters -join ', ')"
     }
     else {
-        Write-Host "Agent adapters: skipped by default. Rerun with -InstallAgentAdapters to create Claude/Gemini/Copilot/Cursor/etc. thin adapters."
+        Write-Host "Agent adapters: skipped by default. Rerun with -InstallAgentAdapters to create Claude/Gemini/Copilot/Cursor/Trae/etc. thin adapters."
     }
     if (-not $NoBackup) {
         Write-Host "Changed generated files, if any, were backed up under $backupRoot"

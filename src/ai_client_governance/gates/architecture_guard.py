@@ -67,6 +67,7 @@ NATIVE_RULE_ADAPTERS = [
     Path(".windsurf") / "rules" / "ai-client-governance.md",
     Path(".continue") / "rules" / "ai-client-governance.md",
     Path(".roo") / "rules" / "ai-client-governance.md",
+    Path(".trae") / "rules" / "ai-client-governance.md",
 ]
 
 
