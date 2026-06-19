@@ -65,10 +65,30 @@ COMMANDS: dict[str, tuple[str, Callable[[], int]]] = {
 }
 
 
+SHORT_ALIASES: dict[str, str] = {
+    "wt": "worktree-task",
+    "tr": "task-record",
+    "tq": "task-queue",
+    "tg": "task-gate",
+    "lc": "lifecycle",
+    "go": "sync-check",
+    "gt": "gate-pool",
+    "st": "selftest",
+}
+
+
 def render_commands() -> str:
     lines = ["Available ai-client-governance commands:"]
+    aliases_by_cmd: dict[str, list[str]] = {}
+    for alias, cmd in SHORT_ALIASES.items():
+        aliases_by_cmd.setdefault(cmd, []).append(alias)
     for name in sorted(COMMANDS):
-        lines.append(f"  {name:<20} {COMMANDS[name][0]}")
+        aliases = aliases_by_cmd.get(name, [])
+        if aliases:
+            display = f"{', '.join(sorted(aliases))} / {name}"
+        else:
+            display = name
+        lines.append(f"  {display:<20} {COMMANDS[name][0]}")
     return "\n".join(lines)
 
 
@@ -78,6 +98,8 @@ def main() -> int:
         print(render_commands())
         return 0
     command, remainder = argv[0], argv[1:]
+    if command in SHORT_ALIASES:
+        command = SHORT_ALIASES[command]
     if command not in COMMANDS:
         print(f"Unknown ai-client-governance command: {command}", file=sys.stderr)
         print(render_commands(), file=sys.stderr)
