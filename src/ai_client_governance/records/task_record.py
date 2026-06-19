@@ -110,7 +110,6 @@ def parse_args() -> argparse.Namespace:
 
     describe = sub.add_parser("describe", help="Print the task-record schema: tables, fields, enums, and a sample JSON payload.")
     common_cli_args.add_common_global_args(describe, suppress_default=True)
-    describe.add_argument("--format", choices=("json", "text"), default="json", help="Output format. Default: json.")
     describe.add_argument("--sample", action="store_true", help="Print a minimal valid sample payload for task-record apply.")
     return parser.parse_args()
 
