@@ -142,6 +142,13 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
 - `task-queue` 不提供默认 JSON 队列文件、heartbeat 文件或 `--queue-file` fallback；
   需要人读报告时使用 `status --format text/json` 输出到 stdout。
 - 一次只允许一个 active task；插入任务完成后必须返回原主任务或记录阻塞。
+- 这里的 active task 是治理事务边界，不是工作量上限。一个 active task 内部可以
+  拆出多个子任务、多个 task-node、多个 worktree 和多个子 AI 分支并行执行；这些并行
+  单元必须共享同一个根 `task_id` 或明确的 `parent_task_id`，不能为了并行而在
+  task queue 中开启第二个 active task。
+- 主任务必须记录内部并行拓扑：子任务/叶子节点、worktree slug、owner agent、写入范围、
+  禁止路径、验证命令、return capsule、合并状态和最终整合者。没有这些事实时，最终输出
+  不能把“多 worktree/多 agent 并行”说成已治理。
 
 ## 强制 Worktree
 
@@ -154,6 +161,14 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   `worktree-task create --repo ai-client-governance` 创建任务 worktree，目标路径放到宿主项目
   `.ai-client/project/.worktree/<task-slug>/`。只有固定脚本不可用时，才从
   ai-client-governance 仓库手工执行 `git worktree add` 并记录 break-glass 原因。
+- 一个 active task 可以拥有多个 worktree，用于并行处理独立叶子任务或不同仓库/模块的
+  写入面。每个 worktree 必须记录 `task_id`、`task_node_id` 或 leaf id、repo、slug、
+  branch、base commit、owner、write scope、forbidden paths、validation command、
+  commit/merge/push 状态和 return capsule。多 worktree 不是多个 active task；它们必须
+  回到同一个主任务的 integration queue 或整合节点统一验收。
+- 多 worktree 的写入范围必须先做冲突矩阵。范围不重叠时可以并行；范围重叠、热点文件
+  相同、验证资源共享或顺序依赖不清时，必须通过 `worktree-coord` 记录锁、等待关系和
+  单一整合者，不能让多个 agent 自行合并同一目标分支。
 - 用户没有明确说“合并 worktree / merge / 收口合并”时，修改完成后默认只在任务
   worktree 上 commit，不能自动合并回 main 或执行 `worktree-task closeout-all --execute`。
   用户没有明确说“push / 推送 / 提交并推送”时，也不能把 worktree commit 推到远端。
@@ -220,6 +235,28 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   用户电脑的全局 shell、环境变量、profile、注册表、PATH、执行策略、后台服务或系统命令。
   如果宿主客户端不提供调用前拦截能力，必须承认 raw capability gap，并通过 adapter
   wrapper、final gate、telemetry 和 explicit exception 暴露风险；不能用污染用户环境换强制。
+- 非侵入性可操作边界：以下行为属于污染用户环境而禁止——修改 `$PROFILE`、
+  `$PSModulePath`、用户或系统 `PATH` 环境变量、注册表 `HKLM`/`HKCU` 下的 shell
+  相关键、`ExecutionPolicy` 的 `CurrentUser` 或 `LocalMachine` 范围、系统服务
+  注册/启停、系统级计划任务、`.bashrc`/`.zshrc`/`.profile` 等 shell 初始化文件、
+  全局 npm/pip/cargo 包管理器配置。以下行为不属于污染——在隔离 worktree 内创建
+  治理脚本、在 `.ai-client/project/state/` 写入 SQLite 运行态、通过
+  `shell-adapter proxy-powershell` 以 `-NoProfile -NonInteractive` 执行单次命令、
+  在进程级设置环境变量。边界不明确的修改必须在 task record 写入
+  `events.event_type=host-boundary-check.analysis` 并记录决策依据。
+- Windows 上所有 AI 发起的 PowerShell 命令必须通过
+  `python .ai-client/ai-client-governance/scripts/ai_client_governance.py shell-adapter`
+  的 `proxy-powershell --powershell-command "..."` 执行，禁止通过宿主裸 shell 直接运行
+  PowerShell。`shell-adapter proxy-powershell` 以 `-NoProfile -NonInteractive` 隔离
+  运行，不触碰用户 profile 或全局状态，并写入 command-proxy telemetry span 使
+  `raw-shell-coverage` 诊断可区分已治理命令和裸 shell gap。未经 proxy 的 PowerShell
+  调用即使命令本身成功，也必须在 task record 中记录为 raw shell gap。
+- Final gate 必须查询 telemetry capability facts，不能仅依赖 prose 声明：final gate
+  必须检查 `.ai-client/project/state/aicg.db` 中是否存在对应 capability 事件的
+  telemetry span。缺少 capability facts 时 final gate 必须 fail closed——散文规则声明
+  如"已遵守非侵入原则""所有命令已通过 proxy 执行"不能替代 telemetry 证据，telemetry
+  中缺少 `shell-adapter` span 且 task record 中没有 `shell-proxy-usage` 事件时，无论
+  prose 如何声明都视为 raw shell gap。
 - 输入过滤器负责拆分用户输入、识别要求数量、绑定逐 REQ 行和任务类型，并判断每条
   要求是否必须落盘、是否触发联网/搜索、是否触发子 AI 或黑盒验证。
 - 用户输入是强制 `user-message` join point。非纯只读小问答在计划、写入、恢复或最终
@@ -332,8 +369,10 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   `task-run diagnose --require-raw-shell-coverage` 或
   `shell-adapter diagnose --require-raw-shell-coverage` fail closed。
 - 使用 Windows PowerShell 代理时，简单命令可用 `--powershell-command`；复杂命令、
-  多行命令或包含大量引号/参数的命令必须优先使用 `--powershell-command-file`
-  读取 UTF-8 命令文件，避免 shell 多层转义破坏参数。因工具限制暂时不能使用代理时，
+  管道、正则 `|`、变量、重定向、多命令组、here-string、嵌套引号、多行命令或包含大量
+  参数的命令必须优先使用 `--powershell-command-file` 读取 UTF-8 命令文件，避免 shell
+  多层转义破坏参数。命令文件是任务临时输入，不写用户 profile，不作为默认状态源；用完
+  后按 artifact ownership 规则清理或声明保留原因。因工具限制暂时不能使用代理时，
   必须在 task record 写入 `events.event_type=shell-proxy-usage.analysis`，记录
   `exception_reason`、补偿验证和剩余 raw shell gap；收口时如果记录
   `used_proxy=true`，还必须写入 `telemetry_evidence` 或 `proxy_invocation_id`，
@@ -530,6 +569,13 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
 ## 子 AI 协作
 
 - 大任务或用户明确要求多 AI 分工时，总控先拆任务树、写范围和验证边界。
+- 子 AI 协作允许多层级：总控可以派发父 agent，父 agent 可以继续拆出子 agent 或叶子
+  worktree，但每一层都必须继承根 `task_id`、父节点 id、写入范围、禁止路径、验证预算和
+  返回契约。子 agent 的再派发不能绕过主任务审批、worktree 规则、shell-adapter 规则、
+  telemetry、task-record gate 或最终整合门禁。
+- 多层 agent 的事实必须结构化记录：父子关系、context reuse 决策、brief/capsule 路径、
+  heartbeat、owner、输入摘要、已读文件、产出 artifact、验证结果、失败传播和合并状态。
+  只在聊天里说“让子 agent 做了”不满足治理要求。
 - 中/大型、修改型、规则/脚本、correction、git/worktree、long-running 或用户曾明确强调
   需要多 AI 的任务，必须在 preflight 前写入
   `events.event_type=agent-decision.analysis`：至少包含 `agent_group_decision`、
