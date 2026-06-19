@@ -255,8 +255,8 @@ Markdown 只能通过 `task-record export-md` 作为人类阅读报告生成；D
   `CLAUDE.md`、`GEMINI.md`、`.github/copilot-instructions.md` 或
   `.cursor/rules/*.mdc`。
 - **adapter 薄入口**：安装脚本生成的短文件，只写读取顺序、同步检查、
-  编码和边界；不复制大段通用规则。默认仅生成 `AGENTS.md`，其它工具入口
-  通过 `-InstallAgentAdapters` 按需生成。
+  编码、客户端/模型身份和边界；不复制大段通用规则。默认仅生成 `AGENTS.md`，
+  其它工具入口通过 `-InstallAgentAdapters` 按需生成。
 
 当前内置 adapter 目录：
 
@@ -271,12 +271,13 @@ Markdown 只能通过 `task-record export-md` 作为人类阅读报告生成；D
 | Windsurf | `.windsurf/rules/ai-client-governance.md` | 仅在 `-InstallAgentAdapters` 或 `-ForceAgentAdapters` 时生成；Project rules adapter，已存在则保留。 |
 | Continue | `.continue/rules/ai-client-governance.md` | 仅在 `-InstallAgentAdapters` 或 `-ForceAgentAdapters` 时生成；Project-specific rules adapter，已存在则保留。 |
 | Roo Code | `.roo/rules/ai-client-governance.md` | 仅在 `-InstallAgentAdapters` 或 `-ForceAgentAdapters` 时生成；Project rules adapter，已存在则保留。 |
-| Trae | `.trae/rules/ai-client-governance.md` | 仅在 `-InstallAgentAdapters` 或 `-ForceAgentAdapters` 时生成；Rules adapter，已存在则保留。 |
+| Trae | `.trae/rules/ai-client-governance.md` | 仅在 `-InstallAgentAdapters` 或 `-ForceAgentAdapters` 时生成；Rules adapter，用户原生规则保留，旧 ai-client 生成版会备份后升级。 |
 | Aider | `CONVENTIONS.md` | 仅在 `-InstallAgentAdapters` 或 `-ForceAgentAdapters` 时生成；已存在时保留，因为它常承载项目真实约定。 |
 
 这个清单是入口适配清单，不是优先级反转。目标项目已有的原生规则文件最高优先级；
 `.ai-client/project/` 是项目特化层；`.ai-client/ai-client-governance/` 是通用层。adapter 只负责把不同
 AI 工具带回同一套事实源，不能静默覆盖已有规则，也不能把项目业务规则写回通用仓库。
+如果已存在文件被识别为旧 ai-client 生成 adapter，而不是项目原生规则，安装器会先备份再升级到当前薄入口。
 
 外部依据优先来自官方文档：OpenAI Codex `AGENTS.md`、Anthropic Claude Code
 `CLAUDE.md`、Google Gemini CLI `GEMINI.md`、GitHub Copilot custom instructions、
@@ -395,13 +396,15 @@ powershell -ExecutionPolicy Bypass -File <ai-client-governance-path>\install-ai-
 已有文件和目录的处理策略：
 
 - `AGENTS.md` 已存在：默认保留，不覆盖；它属于目标项目已有入口。
+  如果它被识别为旧 ai-client 生成入口且仍指向旧布局，安装器会先备份再升级。
   如果确实要用生成薄入口替换，必须显式传 `-ForceRootEntry`，脚本会按备份策略处理。
 - `CLAUDE.md`、`GEMINI.md`、`.github/copilot-instructions.md`、
   `.github/instructions/*.instructions.md`、`.cursor/rules/*.mdc`、`.clinerules/`、
   `.windsurf/rules/`、`.continue/rules/`、`.roo/rules/`、`.trae/rules/`、`CONVENTIONS.md`
   等工具原生入口：默认不生成；已存在时保留，不覆盖；如果确实要补齐缺失 adapter，
   传 `-InstallAgentAdapters`；如果确实要统一重写 adapter，必须显式传
-  `-ForceAgentAdapters`。
+  `-ForceAgentAdapters`。其中 `*-governance` 专用 adapter 如果明显是旧 ai-client 生成物，
+  会在 `-InstallAgentAdapters` 下备份后自动升级；项目原生混合规则仍保留。
 - `.ai-client/ai-client-governance-config.json` 已存在：默认备份后重写，保持配置事实源最新。
 - `.ai-client/project/rules/project/AGENTS.md` 已存在：默认保留，不覆盖。
 - 原生 `skills/` 或其它项目已有 skill：默认保留、只读索引和报告冲突；

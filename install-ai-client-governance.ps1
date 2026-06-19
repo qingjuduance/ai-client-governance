@@ -42,6 +42,93 @@ function Write-Utf8NoBomFile {
     [System.IO.File]::WriteAllText($Path, $Content, $encoding)
 }
 
+function Normalize-RelativePath {
+    param([string]$RelativePath)
+    return $RelativePath.Replace("\", "/")
+}
+
+function Test-ContainsCanonicalAiClientFacts {
+    param([string]$Content)
+    return (
+        $Content.Contains(".ai-client/ai-client-governance/AGENTS.md") -and
+        $Content.Contains(".ai-client/project/rules/project/AGENTS.md") -and
+        $Content.Contains("client_type") -and
+        $Content.Contains("model_id")
+    )
+}
+
+function Test-LegacyAiClientAdapterContent {
+    param([string]$Content)
+    $lower = $Content.ToLowerInvariant()
+    $mentionsOldLayout = (
+        $lower.Contains(".codex/rules/common") -or
+        $lower.Contains(".codex/ai-client-governance") -or
+        $lower.Contains(".codex/project") -or
+        $lower.Contains(".codex/skills")
+    )
+    $mentionsGovernance = (
+        $lower.Contains("ai client governance") -or
+        $lower.Contains("ai-client-governance") -or
+        $lower.Contains("ai-client governance")
+    )
+    return ($mentionsOldLayout -and $mentionsGovernance)
+}
+
+function Test-GeneratedAiClientAdapterContent {
+    param([string]$Content)
+    $signals = @(
+        "AI Client Governance Entry Adapter",
+        "AI Client Governance Adapter",
+        "AI Client Governance 入口",
+        "This file is a thin adapter",
+        "This project uses `.ai-client/ai-client-governance/` as the shared AI execution framework.",
+        "ai-client-governance may add missing integration notes"
+    )
+    foreach ($signal in $signals) {
+        if ($Content.Contains($signal)) {
+            return $true
+        }
+    }
+    return $false
+}
+
+function Test-DedicatedAiClientAdapterPath {
+    param([string]$RelativePath)
+    $normalized = Normalize-RelativePath -RelativePath $RelativePath
+    return (
+        $normalized -eq ".github/copilot-instructions.md" -or
+        $normalized -eq ".github/instructions/ai-client-governance.instructions.md" -or
+        $normalized -eq ".cursor/rules/ai-client-governance.mdc" -or
+        $normalized -eq ".clinerules/ai-client-governance.md" -or
+        $normalized -eq ".windsurf/rules/ai-client-governance.md" -or
+        $normalized -eq ".continue/rules/ai-client-governance.md" -or
+        $normalized -eq ".roo/rules/ai-client-governance.md" -or
+        $normalized -eq ".trae/rules/ai-client-governance.md"
+    )
+}
+
+function Test-ShouldUpgradeExistingAiClientAdapter {
+    param(
+        [string]$RelativePath,
+        [string]$ExistingContent
+    )
+    $hasCanonicalFacts = Test-ContainsCanonicalAiClientFacts -Content $ExistingContent
+    $isLegacy = Test-LegacyAiClientAdapterContent -Content $ExistingContent
+    $isGenerated = Test-GeneratedAiClientAdapterContent -Content $ExistingContent
+    $isDedicatedAdapter = Test-DedicatedAiClientAdapterPath -RelativePath $RelativePath
+
+    if ($isLegacy -and ($isDedicatedAdapter -or $isGenerated) -and (-not $hasCanonicalFacts)) {
+        return $true
+    }
+    if ($isDedicatedAdapter -and $isGenerated -and (-not $hasCanonicalFacts)) {
+        return $true
+    }
+    if ($isGenerated -and (-not $hasCanonicalFacts)) {
+        return $true
+    }
+    return $false
+}
+
 function Invoke-InstallAction {
     param(
         [string]$Description,
@@ -101,14 +188,17 @@ function Write-GeneratedFile {
 
     $target = Join-ProjectPath -RelativePath $RelativePath
     if (Test-Path -LiteralPath $target) {
-        if ($OnlyIfMissing) {
-            Write-Host "Keeping existing $RelativePath; generated file was skipped."
-            return
-        }
         $existing = Get-Content -LiteralPath $target -Raw -Encoding UTF8
         if ($existing.TrimEnd() -eq $Content.TrimEnd()) {
             Write-Host "$RelativePath is already up to date."
             return
+        }
+        if ($OnlyIfMissing) {
+            if (-not (Test-ShouldUpgradeExistingAiClientAdapter -RelativePath $RelativePath -ExistingContent $existing)) {
+                Write-Host "Keeping existing $RelativePath; generated file was skipped."
+                return
+            }
+            Write-Host "Updating existing $RelativePath because it looks like a legacy or stale ai-client-governance adapter."
         }
         $backupSucceeded = Backup-ExistingFile -TargetPath $target -RelativeTarget $RelativePath -BackupRoot $BackupRoot
         if (-not $backupSucceeded) {
@@ -326,6 +416,7 @@ function Get-RootAgentsContent {
         '- `.ai-client/project/rules/project/` belongs to this project only.',
         '- Existing project-owned rule adapters, native project skills, and original local rules stay authoritative;',
         '  ai-client-governance may add missing integration notes but must not silently overwrite them.',
+        '- Lifecycle and telemetry records should include `client_type` and `model_id`; use explicit `unknown` when unavailable.',
         '- Do not write project-specific rules back to the common ai-client-governance repo.',
         '- Before each new session, run `.ai-client/ai-client-governance/check-ai-client-governance-sync.ps1`',
         '  or an equivalent wrapper and warn until the embedded repo is synchronized.'
@@ -354,6 +445,10 @@ function Get-AdapterBaseLines {
         'the start of a new session. Warn until the embedded ai-client-governance repository is',
         'synchronized. Do not pull or push automatically.',
         '',
+        'When running lifecycle or telemetry commands, record the current client/model identity:',
+        "`client_type=$($ToolName.ToLowerInvariant().Replace(' ', '-'))` and `model_id=<current model>`;",
+        'if unavailable, use explicit `unknown` values instead of omitting them.',
+        '',
         'Existing project-owned native instructions stay authoritative. Do not write',
         'project-specific rules back to the common ai-client-governance repository.'
     )
@@ -377,6 +472,7 @@ function Get-ClaudeAdapterContent {
         '',
         'If an import is missing, read `.ai-client/ai-client-governance-config.json`, embed the',
         '`ai-client-governance` repository at `.ai-client/ai-client-governance/`, then restart the read order.',
+        'When running lifecycle or telemetry commands, record `client_type=claude-code` and `model_id=<current model>`; use `unknown` if unavailable.',
         'Run `.ai-client/ai-client-governance/check-ai-client-governance-sync.ps1` at the start of a new session.'
     )
     return ($lines -join [Environment]::NewLine)
@@ -395,6 +491,7 @@ function Get-GeminiAdapterContent {
         '',
         'If an import is missing, read `.ai-client/ai-client-governance-config.json`, embed the',
         '`ai-client-governance` repository at `.ai-client/ai-client-governance/`, then restart the read order.',
+        'When running lifecycle or telemetry commands, record `client_type=gemini-cli` and `model_id=<current model>`; use `unknown` if unavailable.',
         'Run `.ai-client/ai-client-governance/check-ai-client-governance-sync.ps1` at the start of a new session.'
     )
     return ($lines -join [Environment]::NewLine)
@@ -411,7 +508,8 @@ function Get-CursorAdapterContent {
         'This project uses `.ai-client/ai-client-governance/` as the shared AI execution framework.',
         'Before changing files, read `AGENTS.md`, `.ai-client/ai-client-governance/AGENTS.md`, and',
         '`.ai-client/project/rules/project/AGENTS.md`. Keep this Cursor rule as a thin',
-        'adapter and do not copy long common rules here.'
+        'adapter and do not copy long common rules here. Record `client_type=cursor` and',
+        '`model_id=<current model>` in lifecycle or telemetry commands; use `unknown` if unavailable.'
     )
     return ($lines -join [Environment]::NewLine)
 }
@@ -427,7 +525,8 @@ function Get-GitHubInstructionsContent {
         'This repository uses `.ai-client/ai-client-governance/` as the shared AI execution framework.',
         'Before working, read `AGENTS.md`, `.ai-client/ai-client-governance/AGENTS.md`, and',
         '`.ai-client/project/rules/project/AGENTS.md`. Keep this file as a thin adapter',
-        'for GitHub Copilot instructions.'
+        'for GitHub Copilot instructions. Record `client_type=github-copilot` and',
+        '`model_id=<current model>` in lifecycle or telemetry commands; use `unknown` if unavailable.'
     )
     return ($lines -join [Environment]::NewLine)
 }
@@ -718,8 +817,8 @@ $config = [ordered]@{
         generateMissingAdapters = $generateAgentAdapters
         installParameter = "InstallAgentAdapters"
         forceAgentAdapters = [bool]$ForceAgentAdapters
-        existingAdapterPolicy = if ($ForceAgentAdapters) { "backup-then-rewrite" } elseif ($generateAgentAdapters) { "preserve-existing" } else { "not-generated-by-default" }
-        adapterContentPolicy = "thin-read-order-sync-boundary-only"
+        existingAdapterPolicy = if ($ForceAgentAdapters) { "backup-then-rewrite" } elseif ($generateAgentAdapters) { "preserve-native; backup-and-upgrade-legacy-ai-client-generated" } else { "not-generated-by-default" }
+        adapterContentPolicy = "thin-read-order-sync-client-model-boundary-only"
         canonicalFacts = @(".ai-client/ai-client-governance/AGENTS.md", ".ai-client/project/rules/project/AGENTS.md")
     }
     syncPolicy = [ordered]@{
@@ -750,7 +849,7 @@ $config = [ordered]@{
         commonSkillsSource = ".ai-client/ai-client-governance/skills/"
         projectSkillsSource = ".ai-client/project/skills/"
         rootAgentsPolicy = "project-owned; create-if-missing; rewrite only with -ForceRootEntry"
-        agentAdapterPolicy = "project-owned; only AGENTS.md is generated by default; create missing tool adapters with -InstallAgentAdapters; rewrite with -ForceAgentAdapters"
+        agentAdapterPolicy = "project-owned; only AGENTS.md is generated by default; create missing tool adapters with -InstallAgentAdapters; backup-and-upgrade legacy ai-client generated adapters; rewrite all with -ForceAgentAdapters"
         skillConflictPolicy = "native project skill wins, then project specialization, then ai-client-governance common; duplicate names require review"
         parentTracksEmbeddedCommit = ($Mode -eq "submodule")
     }
