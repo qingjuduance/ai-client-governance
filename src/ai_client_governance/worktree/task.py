@@ -2532,29 +2532,19 @@ def command_describe_schema(args: argparse.Namespace) -> int:
     else:
         lines: list[str] = []
         lines.append("worktree-task schema")
-        lines.append("=" * 40)
-        lines.append(f"schema_version: {descriptor['schema_version']}")
+        lines.append("worktree path: .ai-client/project/.worktree/<task-slug>/")
+        lines.append("branch name:   task/<YYYYMMDD>-<slug>")
+        lines.append("commands: list | create | status | reconcile | close | queue | merge | finalize | host-closeout | cleanup-branch | remove | describe-schema | reset | check")
         lines.append("")
-        lines.append("CONVENTIONS (where things live)")
-        lines.append("-" * 40)
-        for key, value in descriptor["conventions"].items():
-            lines.append(f"{key}: {value}")
+        lines.append("worktree status enums:")
+        lines.append("  merged_status: not_merged, merged")
+        lines.append("  commit_status: not_committed, committed")
+        lines.append("  push_status: not_pushed, pushed")
+        lines.append("  worktree status: active, done, blocked")
         lines.append("")
-        lines.append("ENUMS")
-        lines.append("-" * 40)
-        for key, values in descriptor["enums"].items():
-            lines.append(f"{key}: {', '.join(values)}")
-        lines.append("")
-        lines.append("STATUS FIELDS (per task worktree)")
-        lines.append("-" * 40)
-        for field in descriptor["status_fields"]:
-            lines.append(f"  - {field['name']:25s}  {field['type']}")
-            lines.append(f"      {field['description']}")
-        lines.append("")
-        lines.append("COMMANDS")
-        lines.append("-" * 40)
-        for cmd in descriptor["commands"]:
-            lines.append(f"  {cmd['name']:20s}  {cmd['description']}")
+        lines.append("entry command: python .ai-client/ai-client-governance/scripts/ai_client_governance.py worktree-task <subcmd>")
+        lines.append("state file:    .ai-client/project/state/aicg.db")
+        lines.append("notes:         --sample for JSON sample; --format json for full descriptor")
         print("\n".join(lines))
     return 0
 
