@@ -111,6 +111,9 @@ Roo Code、Aider 等工具也可以通过各自原生入口指向同一套规则
 - **Agent Context Reuse**：多智能体协作不写死小数量上限；总控先按任务树、写范围、验证风险
   和上下文复用命中率决定继续复用、创建新 agent 或收束回主线程。每个 agent 都要有 reuse key、
   Agent Brief、最小读取清单、context capsule 和 token usage 来源或代理指标，避免重复灌入完整历史。
+- **子 AI 任务验收结论**：多 AI 执行链路中，检查 AI 必须按执行 AI 的 task id/leaf id
+  给出当前是否通过的结构化结论，说明未处理项、处理不佳项、修改建议和复测计划；
+  结论为不通过时不能合并。
 - **本地 token 用量统计**：`codex-token-usage` skill 读取本机 Codex session
   JSONL 的 `token_count` 事件，输出总量、净用量、缓存命中率、峰值日和最忙周。
 - **适合 GitHub 展示和复用**：README、manifest、规则事实源、adapter 目录和脚本
@@ -256,7 +259,8 @@ AI 执行修改型、规则/脚本、docs、git、correction、multi-agent 或 l
    task-record apply 和其它状态变更必须顺序执行。
 8. `completion-test` 和任务专属验证：按 changed paths 和任务类型跑 focused checks。
 9. `task-record gate --event final`：检查 requirements、outputs、worktree、validation、
-   telemetry、command-error 和 discovered issue facts。
+   telemetry、command-error、discovered issue facts，以及 multi-agent 任务的执行 AI task id
+   通过/不通过结论事实。
 10. `worktree-task finalize` / `closeout-all` / `host-closeout`：只有用户明确要求合并、
     清理或 push 时执行；否则最终回复报告未合并、未 push 和保留原因。
 11. `task-queue transition --to done`：只在 task record 存在、final gate 通过、live
@@ -274,6 +278,24 @@ policy/gate、迁移/清理、验证计划、风险、implementation tasks、rev
 root task、parent task、requirements、framework-debt/corrections 和 worktree rows 关联。
 Agent brief 保持短，只放最小上下文、scope、禁止路径、验证命令和 return capsule；结构化
 事实仍归 DB。
+
+当执行链路包含多个 AI 时，验收 AI 必须按执行 AI 的 task id 或 leaf id 写入
+`agent-review-result.analysis` 或等价结构化事实。验收记录至少包含 reviewer agent、
+executor agent、reviewed task id、pass/fail 结论、生命周期事实核对、提交状态核对、
+未处理项、处理不佳项、证据、整改建议和复测计划。生命周期核对必须读取 task queue
+lifecycle、task record status、requirements/triggers/outputs/worktrees/validations/events、
+final gate、worktree live state、branch/HEAD、dirty 状态、commit/merge/push 状态、
+验证结果、telemetry/raw shell gap 和 active/pending 状态。结论为不通过、缺少整改建议、
+缺少复测结果或仍有 P0/P1 问题时，
+不能进入 worktree merge、`closeout-all`、
+`host-closeout` 或 `task-queue transition --to done`。在对应 gate/schema 尚未实现前，
+该要求属于 `design_only` 门禁方案，必须登记后续实现任务，不能声称运行时已自动强制。
+后续实现方案至少包括：扩展 `task-record` 事件/schema 校验以接受
+`agent-review-result.analysis`，在 `runtime components` 注册 multi-agent review result
+节点，在 `task-record gate --event final` 检查每个执行 AI task id/leaf id 的通过结论，
+在 `worktree-task closeout-all`、`finalize` 和 `host-closeout` 合并前读取该结论并阻断不通过
+任务，把结论同步到 agent-groups/agent-comm 看板，并补 pass/fail、缺整改建议、缺复测和
+不通过禁止合并的 selftest。
 
 ### Client Flow Probe
 
@@ -1137,6 +1159,15 @@ python scripts\ai_client_governance.py framework-debt report `
 生命周期链，而不是随机抽样。`task-gate` 会按矩阵行解析，只有一句话式“全面覆盖”
 不能替代结构化矩阵。
 
+多 AI 任务还需要 `## 子 AI 任务验收结论` 或 DB 中等价的
+`agent-review-result.analysis` 事实。验收表按执行 AI 的 task id/leaf id 逐行记录：
+是否通过、生命周期事实是否闭合、提交状态是否闭合、未处理 REQ、处理不佳内容、证据、
+修改建议和复测方式。这个结论不是主观评价，而是合并门禁：不通过、生命周期记录与 Git
+live state 冲突、未处理项未解释、整改建议为空或复测失败时，最终 gate 必须阻止
+合并和 done 状态。
+当前若只完成文档设计，必须在 task record 中标明 `design_only`，并把 schema、gate、
+closeout、看板和 selftest 作为后续实现任务登记；不能在最终报告里说已经由机器自动强制。
+
 常用命令：
 
 ```powershell
@@ -1175,6 +1206,7 @@ python scripts\ai_client_governance.py tool-flow `
 - worktree 路径、分支、基准提交和当前 `git status`。
 - worktree 任务是否完成。
 - 是否已经合并回源仓库；未合并时写明等待用户确认。
+- multi-agent 任务是否已有检查 AI 对执行 AI task id 的通过结论；未通过时写明退回或阻塞原因。
 - 是否 stage/commit；未提交时写明没有本地 commit。
 - 是否 push；未推送时写明远端未变。
 - 是否已移除任务 worktree 目录、是否已清理本地任务分支；如果保留，写明原因。
