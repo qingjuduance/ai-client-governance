@@ -220,6 +220,27 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   用户电脑的全局 shell、环境变量、profile、注册表、PATH、执行策略、后台服务或系统命令。
   如果宿主客户端不提供调用前拦截能力，必须承认 raw capability gap，并通过 adapter
   wrapper、final gate、telemetry 和 explicit exception 暴露风险；不能用污染用户环境换强制。
+- 非侵入性可操作边界：以下行为属于污染用户环境而禁止——修改 `$PROFILE`、
+  `$PSModulePath`、用户或系统 `PATH` 环境变量、注册表 `HKLM`/`HKCU` 下的 shell
+  相关键、`ExecutionPolicy` 的 `CurrentUser` 或 `LocalMachine` 范围、系统服务
+  注册/启停、系统级计划任务、`.bashrc`/`.zshrc`/`.profile` 等 shell 初始化文件、
+  全局 npm/pip/cargo 包管理器配置。以下行为不属于污染——在隔离 worktree 内创建
+  治理脚本、在 `.ai-client/project/state/` 写入 SQLite 运行态、通过
+  `shell-adapter proxy-powershell` 以 `-NoProfile -NonInteractive` 执行单次命令、
+  在进程级设置环境变量。边界不明确的修改必须在 task record 写入
+  `events.event_type=host-boundary-check.analysis` 并记录决策依据。
+- Windows 上所有 AI 发起的 PowerShell 命令必须通过
+  `python .ai-client/ai-client-governance/scripts/ai_client_governance.py shell-adapter proxy-powershell --powershell-command "..."` 执行，禁止通过宿主裸 shell 直接运行
+  PowerShell。`shell-adapter proxy-powershell` 以 `-NoProfile -NonInteractive` 隔离
+  运行，不触碰用户 profile 或全局状态，并写入 command-proxy telemetry span 使
+  `raw-shell-coverage` 诊断可区分已治理命令和裸 shell gap。未经 proxy 的 PowerShell
+  调用即使命令本身成功，也必须在 task record 中记录为 raw shell gap。
+- Final gate 必须查询 telemetry capability facts，不能仅依赖 prose 声明：final gate
+  必须检查 `.ai-client/project/state/aicg.db` 中是否存在对应 capability 事件的
+  telemetry span。缺少 capability facts 时 final gate 必须 fail closed——散文规则声明
+  如"已遵守非侵入原则""所有命令已通过 proxy 执行"不能替代 telemetry 证据，telemetry
+  中缺少 `shell-adapter` span 且 task record 中没有 `shell-proxy-usage` 事件时，无论
+  prose 如何声明都视为 raw shell gap。
 - 输入过滤器负责拆分用户输入、识别要求数量、绑定逐 REQ 行和任务类型，并判断每条
   要求是否必须落盘、是否触发联网/搜索、是否触发子 AI 或黑盒验证。
 - 用户输入是强制 `user-message` join point。非纯只读小问答在计划、写入、恢复或最终
