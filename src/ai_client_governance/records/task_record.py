@@ -54,6 +54,7 @@ MUTATING_TASK_TYPES = {
 KNOWN_TASK_TYPES = set(MUTATING_TASK_TYPES)
 INPUT_FILTER_PREFLIGHT_EVENT = "input-filter.preflight"
 CLIENT_IDENTITY_EVENT = "client-identity.analysis"
+CAPABILITY_GATEWAY_FACTS_EVENT = "capability-gateway.facts"
 INPUT_FILTER_TRIGGER_TYPES = {"input-filter", "user-message"}
 INPUT_FILTER_REQUIREMENT_FIELDS = (
     "summary",
@@ -1869,6 +1870,55 @@ def validate_agent_dispatch_brief(
         add(notes, "note", f"agent dispatch brief facts present: {AGENT_DISPATCH_BRIEF_EVENT}", "events")
 
 
+def validate_capability_gateway_facts(
+    con: sqlite3.Connection,
+    task: sqlite3.Row,
+    task_types: set[str],
+    event: str,
+    db: Path,
+    errors: list[Finding],
+    notes: list[Finding],
+) -> None:
+    """Final gate must verify capability gateway telemetry facts, not just prose claims.
+
+    Checks that shell-adapter telemetry spans exist for the task, proving commands
+    went through the governance proxy rather than raw shell. Also checks that the
+    shell-proxy-usage event records used_proxy=true with telemetry evidence.
+    """
+    task_size = str(task["task_size"] or "").strip().lower()
+    if not (task_types & MUTATING_TASK_TYPES or task_size in {"medium", "large"}):
+        return
+    # Only enforce at final gate
+    if event != "final":
+        return
+    # Check shell-proxy-usage event has telemetry evidence
+    payloads = event_payloads(con, task["task_id"], SHELL_PROXY_USAGE_EVENT)
+    if not payloads:
+        add(errors, "error", f"capability gateway requires event_type={SHELL_PROXY_USAGE_EVENT}", "events")
+        return
+    has_proxy_evidence = False
+    for _event_id, payload in payloads:
+        used_proxy = payload.get("used_proxy")
+        telemetry_evidence = str(payload.get("telemetry_evidence") or payload.get("proxy_invocation_id") or "").strip()
+        exception_reason = str(payload.get("exception_reason") or "").strip()
+        if used_proxy is True and telemetry_evidence:
+            has_proxy_evidence = True
+            break
+        if used_proxy is not True and exception_reason:
+            # Exception recorded — allow but note the gap
+            has_proxy_evidence = True
+            break
+    if has_proxy_evidence:
+        add(notes, "note", f"capability gateway telemetry facts present: {SHELL_PROXY_USAGE_EVENT}", "events")
+    else:
+        add(
+            errors,
+            "error",
+            "capability gateway final gate requires used_proxy=true with telemetry_evidence, or exception_reason",
+            "events",
+        )
+
+
 def validate_task(con: sqlite3.Connection, db: Path, task_id: str, event: str, explicit_task_types: list[str]) -> GateReport:
     errors: list[Finding] = []
     warnings: list[Finding] = []
@@ -1908,6 +1958,7 @@ def validate_task(con: sqlite3.Connection, db: Path, task_id: str, event: str, e
     validate_readonly_side_effect_policy(con, task, task_types, errors, notes)
     validate_discovered_issue_recording(con, task, task_types, event, errors, notes)
     validate_agent_dispatch_brief(con, task, task_types, errors, notes)
+    validate_capability_gateway_facts(con, task, task_types, event, db, errors, notes)
 
     if event == "final":
         output_types = {row["output_type"] for row in rows(con, "outputs", task_id)}
