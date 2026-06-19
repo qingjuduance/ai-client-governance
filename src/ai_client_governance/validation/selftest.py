@@ -2972,6 +2972,90 @@ def test_file_ownership_audit(root: Path, run_dir: Path) -> TestResult:
     )
 
 
+def test_install_adapter_reconcile(root: Path, run_dir: Path) -> TestResult:
+    project = run_dir / "install-adapter-reconcile-project"
+    governance = project / ".ai-client" / "ai-client-governance"
+    trae_adapter = project / ".trae" / "rules" / "ai-client-governance.md"
+    native_agents = project / "AGENTS.md"
+    governance.mkdir(parents=True, exist_ok=True)
+    trae_adapter.parent.mkdir(parents=True, exist_ok=True)
+    write_text_lf(governance / "AGENTS.md", "# governance selftest\n")
+    write_text_lf(
+        trae_adapter,
+        "\n".join(
+            [
+                "# Trae AI Client Governance Adapter",
+                "",
+                "This file is a thin adapter for an older ai-client-governance layout.",
+                "",
+                "1. `.codex/ai-client-governance/AGENTS.md`",
+                "2. `.codex/project/AGENTS.md`",
+                "",
+            ]
+        ),
+    )
+    native_agents_text = (
+        "# Native project rules\n\n"
+        "Keep this project-owned file.\n\n"
+        "Historical note: `.codex/ai-client-governance/AGENTS.md` was used before.\n"
+    )
+    write_text_lf(native_agents, native_agents_text)
+
+    commands = [
+        run_command(["git", "init", "-b", "main"], cwd=governance, env_root=root),
+        run_command(["git", "config", "user.email", "selftest@example.invalid"], cwd=governance, env_root=root),
+        run_command(["git", "config", "user.name", "ai-client-governance selftest"], cwd=governance, env_root=root),
+        run_command(["git", "add", "AGENTS.md"], cwd=governance, env_root=root),
+        run_command(["git", "commit", "-m", "init governance selftest"], cwd=governance, env_root=root),
+        run_command(
+            [
+                "powershell",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(root / "install-ai-client-governance.ps1"),
+                "-TargetProjectPath",
+                str(project),
+                "-RulesRepoPath",
+                str(root),
+                "-Mode",
+                "existing",
+                "-InstallAgentAdapters",
+                "-SkipSyncCheck",
+            ],
+            cwd=project,
+            env_root=root,
+        ),
+    ]
+    updated_trae = trae_adapter.read_text(encoding="utf-8")
+    native_after = native_agents.read_text(encoding="utf-8")
+    backups = list((project / ".ai-client" / "ai-client-governance-backups").glob("*/.trae/rules/ai-client-governance.md"))
+    backup_text = backups[0].read_text(encoding="utf-8") if backups else ""
+    install_output = commands[-1].stdout + commands[-1].stderr
+    passed = (
+        all(command.exit_code == 0 for command in commands)
+        and ".ai-client/ai-client-governance/AGENTS.md" in updated_trae
+        and ".ai-client/project/rules/project/AGENTS.md" in updated_trae
+        and "client_type=trae" in updated_trae
+        and "model_id=<current model>" in updated_trae
+        and ".codex/ai-client-governance" not in updated_trae
+        and native_after == native_agents_text
+        and ".codex/ai-client-governance" in backup_text
+        and "Updating existing .trae\\rules\\ai-client-governance.md" in install_output
+        and "Keeping existing AGENTS.md" in install_output
+    )
+    return TestResult(
+        name="install-adapter-reconcile",
+        passed=passed,
+        summary=(
+            "installer upgrades stale ai-client adapters with backup while preserving native AGENTS.md"
+            if passed
+            else "installer adapter reconcile did not upgrade stale ai-client adapter safely"
+        ),
+        commands=commands,
+    )
+
+
 def test_worktree_closeout_all_plan(root: Path, run_dir: Path) -> TestResult:
     project = run_dir / "closeout-all-project"
     (project / ".ai-client" / "project").mkdir(parents=True, exist_ok=True)
@@ -3922,6 +4006,7 @@ def main() -> int:
             test_telemetry_effectiveness_snapshot_trend(root, run_dir),
             test_shell_adapter_scope_diagnostics(root, run_dir),
             test_file_ownership_audit(root, run_dir),
+            test_install_adapter_reconcile(root, run_dir),
             test_worktree_closeout_all_plan(root, run_dir),
             test_completion_test_profiles(root, run_dir),
             test_completion_test_analysis_budget(root, run_dir),

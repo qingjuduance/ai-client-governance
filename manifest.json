@@ -530,7 +530,7 @@
     "supportsRelativeLocalPathSubmoduleSource": true,
     "existingFilesPolicy": {
       "rootAgents": "create-only-when-missing; rewrite-only-with-ForceRootEntry",
-      "agentAdapters": "not-generated-by-default; create-missing-with-InstallAgentAdapters; rewrite-only-with-ForceAgentAdapters",
+      "agentAdapters": "not-generated-by-default; create-missing-with-InstallAgentAdapters; preserve native files; backup-and-upgrade legacy ai-client generated adapters; rewrite all with ForceAgentAdapters",
       "gitignore": "create-or-update-ai-client-runtime-managed-block; preserve-user-rules-outside-block",
       "config": "backup-then-rewrite",
       "projectRules": "create-only-when-missing",
@@ -597,8 +597,8 @@
     "defaultGenerateMissingAdapters": false,
     "installParameter": "InstallAgentAdapters",
     "forceParameter": "ForceAgentAdapters",
-    "existingAdapterPolicy": "not-generated-by-default; preserve-existing-when-installing; rewrite-only-with-ForceAgentAdapters",
-    "adapterContentPolicy": "thin-read-order-sync-boundary-only",
+    "existingAdapterPolicy": "not-generated-by-default; preserve native existing adapters when installing; backup-and-upgrade stale or legacy ai-client generated adapters; rewrite all only with ForceAgentAdapters",
+    "adapterContentPolicy": "thin-read-order-sync-client-model-boundary-only",
     "canonicalFacts": [
       ".ai-client/ai-client-governance/AGENTS.md",
       ".ai-client/project/rules/project/AGENTS.md"
