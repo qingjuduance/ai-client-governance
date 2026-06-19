@@ -2461,6 +2461,21 @@ def build_parser() -> argparse.ArgumentParser:
     describe.add_argument("--sample", action="store_true", help="Print a sample minimal status JSON payload.")
     describe.add_argument("--list-active", action="store_true", help="Also list active task worktrees (runs status and annotates).")
 
+    # list
+    list_cmd = subparsers.add_parser("list", help="Equivalent to status --record-state --format json; prints all worktree status as compact JSON.")
+    list_cmd.add_argument("--project-root", help="Host project root containing .ai-client/project.")
+    list_cmd.add_argument("--target-ref", default="main", help="Target ref used for merged status. Default: main.")
+
+    # reset
+    reset = subparsers.add_parser("reset", help="Reset a worktree by discarding changes (git checkout -- . + git clean -fd).")
+    reset.add_argument("--project-root", help="Host project root containing .ai-client/project.")
+    reset.add_argument("--task-slug", help="Worktree task slug to reset.")
+    reset.add_argument("--path", help="Explicit absolute path to the worktree to reset.")
+
+    # check
+    check = subparsers.add_parser("check", help="Check all worktrees: run git status --short per worktree and print clean/dirty summary.")
+    check.add_argument("--project-root", help="Host project root containing .ai-client/project.")
+
     return parser
 
 
@@ -2541,6 +2556,69 @@ def command_describe_schema(args: argparse.Namespace) -> int:
         for cmd in descriptor["commands"]:
             lines.append(f"  {cmd['name']:20s}  {cmd['description']}")
         print("\n".join(lines))
+    return 0
+
+
+def command_reset(args: argparse.Namespace) -> int:
+    project_root = find_project_root(Path.cwd(), args.project_root)
+    if args.path:
+        worktree_path = Path(args.path).resolve()
+    else:
+        if not args.task_slug:
+            raise SystemExit("Error: --task-slug is required when --path is not provided.")
+        slug = args.task_slug
+        candidate = None
+        for repo_name in ("ai-client-governance", "self"):
+            candidate_path = (
+                (project_root / ".ai-client" / "ai-client-governance") if repo_name == "ai-client-governance" else project_root
+            )
+            wt_list = parse_worktree_list(candidate_path)
+            for wt in wt_list:
+                p = Path(wt.get("worktree", "")).resolve()
+                if p.name == slug:
+                    candidate = p
+                    break
+            if candidate:
+                break
+        if candidate is None:
+            raise SystemExit(f"Error: no worktree found for task slug: {slug}")
+        worktree_path = candidate
+    if not worktree_path.exists():
+        raise SystemExit(f"Error: worktree path does not exist: {worktree_path}")
+    git_run(["checkout", "--", "."], cwd=worktree_path, check=False)
+    git_run(["clean", "-fd"], cwd=worktree_path, check=False)
+    print(f"reset {worktree_path}: OK")
+    return 0
+
+
+def command_check(args: argparse.Namespace) -> int:
+    project_root = find_project_root(Path.cwd(), args.project_root)
+    repos = [
+        ("self", project_root),
+        ("ai-client-governance", project_root / ".ai-client" / "ai-client-governance"),
+    ]
+    worktree_base = project_root / ".ai-client" / "project" / ".worktree"
+    found_any = False
+    for _, repo_path in repos:
+        if not (repo_path / ".git").exists():
+            continue
+        for wt in parse_worktree_list(repo_path):
+            p = Path(wt.get("worktree", "")).resolve()
+            if p == repo_path.resolve():
+                continue
+            try:
+                p.relative_to(worktree_base.resolve())
+            except ValueError:
+                continue
+            found_any = True
+            output = git_run(["status", "--short"], cwd=p, check=False).stdout
+            lines = [l for l in output.splitlines() if l.strip()]
+            if lines:
+                print(f"{p}: {len(lines)} files dirty")
+            else:
+                print(f"{p}: clean")
+    if not found_any:
+        print("no task worktrees found under .ai-client/project/.worktree")
     return 0
 
 
@@ -2638,6 +2716,14 @@ def main() -> int:
         return command_remove(args)
     if args.command == "describe-schema":
         return command_describe_schema(args)
+    if args.command == "list":
+        args.format = "json"
+        args.record_state = True
+        return command_status(args)
+    if args.command == "reset":
+        return command_reset(args)
+    if args.command == "check":
+        return command_check(args)
 
     return 1
 

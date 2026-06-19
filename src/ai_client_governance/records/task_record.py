@@ -635,39 +635,46 @@ def build_sample_payload() -> dict[str, Any]:
     }
 
 
-def format_text_descriptor(descriptor: dict[str, Any]) -> str:
-    """Human-readable text output from a schema descriptor."""
+def _compact_table_fields() -> dict[str, list[str]]:
+    return {
+        "task": ["task_id", "title", "status", "task_types", "created_at"],
+        "approvals": ["approval_id", "label", "status", "created_at"],
+        "requirements": ["requirement_id", "summary", "record_decision", "status", "action"],
+        "triggers": ["trigger_id", "trigger_type", "source", "matched_requirement", "priority"],
+        "outputs": ["output_id", "output_type", "applicability_scope", "completed", "dirty"],
+        "worktrees": ["worktree_id", "repo", "path", "branch", "status", "merged_status"],
+        "validations": ["validation_id", "result", "command", "summary"],
+        "events": ["event_id", "event_type", "payload", "created_at"],
+    }
+
+
+def format_compact_text_descriptor() -> str:
+    """Simplified text output: ~30 lines, human and AI readable."""
     lines: list[str] = []
     lines.append("task-record schema")
-    lines.append("=" * 40)
-    lines.append(f"schema_version: {descriptor['schema_version']}")
+    lines.append("commands: init | apply | describe [--sample] | gate | status | export-md")
     lines.append("")
-
-    # Enums first — these are the "gotcha" values callers need to know.
-    lines.append("ENUMS")
-    lines.append("-" * 40)
-    for name, values in sorted(descriptor["enums"].items()):
-        lines.append(f"{name}: {', '.join(values)}")
+    lines.append("tables (key fields):")
+    for table, fields in _compact_table_fields().items():
+        lines.append(f"  {table}: {', '.join(fields)}")
     lines.append("")
-
-    # Per-table field lists.
-    for table_name, columns in descriptor["tables"].items():
-        lines.append(f"TABLE: {table_name}")
-        lines.append("-" * 40)
-        for col in columns:
-            lines.append(f"  - {col['name']:30s}  {col['type']}")
-            lines.append(f"      {col['description']}")
-        lines.append("")
-
-    lines.append("COMMANDS")
-    lines.append("-" * 40)
-    lines.append("  task-record describe                          (print this document)")
-    lines.append("  task-record describe --sample                 (print a valid sample JSON payload)")
-    lines.append("  task-record init                              (create or migrate the SQLite DB)")
-    lines.append("  task-record apply --json <file> [--replace]   (validate + write a structured task)")
-    lines.append("  task-record gate --task-id <id> [--event final]")
-    lines.append("  task-record status [--task-id <id>]")
-    lines.append("  task-record export-md --task-id <id> [--output <file>]")
+    lines.append("worktree enums:")
+    lines.append("  repo: self, ai-client-governance")
+    lines.append("  creation_method: worktree-task, break-glass, external")
+    lines.append("  status: active, done, blocked, removed")
+    lines.append("  merged_status: not_merged, merged, not_required")
+    lines.append("  commit_status: not_committed, committed, not_required")
+    lines.append("  push_status: not_pushed, pushed, not_required")
+    lines.append("")
+    lines.append("other enums:")
+    lines.append("  task status: candidate, awaiting_approval, ready, active, verifying, done, blocked, cancelled")
+    lines.append("  validation result: pass, fail, warn, skipped")
+    lines.append("  output_type: plan, status, final, script, error, git_worktree")
+    lines.append("")
+    lines.append("notes:")
+    lines.append("  - created_at / updated_at auto-filled on write")
+    lines.append("  - --sample for a minimal apply JSON payload")
+    lines.append("  - --format json for the full schema descriptor")
     return "\n".join(lines)
 
 
@@ -1530,12 +1537,11 @@ def main() -> int:
             if args.sample:
                 payload = build_sample_payload()
                 print(json.dumps(payload, ensure_ascii=False, indent=2))
-            else:
+            elif args.format == "json":
                 descriptor = build_schema_descriptor()
-                if args.format == "json":
-                    print(json.dumps(descriptor, ensure_ascii=False, indent=2))
-                else:
-                    print(format_text_descriptor(descriptor))
+                print(json.dumps(descriptor, ensure_ascii=False, indent=2))
+            else:
+                print(format_compact_text_descriptor())
             return 0
 
         if args.command == "status":
