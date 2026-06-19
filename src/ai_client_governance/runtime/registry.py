@@ -973,6 +973,31 @@ def default_components() -> list[ComponentDefinition]:
             condition="Run after live-state reconciliation and before the first file or Git write.",
         ),
         component(
+            "prewrite.gate.approved-task-worktree",
+            "cross-cutting-gate",
+            "coordination",
+            331,
+            "Fail closed before mutating writes unless task-record proves explicit approval and task worktree evidence.",
+            events=("write-intent",),
+            task_types=("code-debug", "correction", "rules-script", "docs", "git", "frontend", "resume", "multi-agent"),
+            gate_label="ai_client_governance.py task-record gate --event preflight",
+            gate_step="task-record",
+            fail_policy="fail_closed",
+            requires_facts=("task_id", "approval_label", "approved_approval_row", "task_worktree"),
+            produces_facts=("prewrite_runtime_adapter_decision",),
+            effect="readonly",
+            condition=(
+                "Run at the host-client write boundary. Entry documents and model instructions are insufficient; "
+                "Trae/Doubao/Codex-style writes must be backed by an approved active task and a task worktree row."
+            ),
+            dedupe_key="task_id:write-intent:approved-task-worktree",
+            performance_budget="single SQLite task-record read; no repository scan",
+            metadata={
+                "adapter_role": "prewrite-approval-worktree",
+                "blocked_gap": "client can otherwise write files or run shell commands after reading prose rules only",
+            },
+        ),
+        component(
             "coordination.gate.host-submodule-closeout",
             "cross-cutting-gate",
             "coordination",
@@ -1358,6 +1383,38 @@ def default_components() -> list[ComponentDefinition]:
             730,
             "Report completed, unverified, blocked, active pending, and Git/worktree state.",
             fail_policy="fail_closed",
+        ),
+        component(
+            "output.gate.discovered-issue-recording",
+            "cross-cutting-gate",
+            "output",
+            735,
+            "Fail final output unless newly discovered issues are recorded or explicitly marked no-action.",
+            events=("final-output",),
+            task_types=("correction", "rules-script", "docs", "git", "resume", "multi-agent", "long-running"),
+            gate_label="ai_client_governance.py task-record gate --event final",
+            gate_step="task-record",
+            fail_policy="fail_closed",
+            requires_facts=("task_id", "discovered_issue_recording_event"),
+            produces_facts=("final_output_discovered_issue_decision",),
+            effect="readonly",
+            condition=(
+                "Run before the final reply when analysis found problems, risks, follow-up tasks, or no-action decisions; "
+                "facts must land in task-record, task-queue, framework-debt, correction, pending, or an explicit no-action row."
+            ),
+            dedupe_key="task_id:final-output:discovered-issue-recording",
+            performance_budget="single SQLite task-record read; no repository scan",
+            metadata={
+                "adapter_role": "final-output-discovered-issue-recording",
+                "allowed_destinations": (
+                    "task-record",
+                    "task-queue",
+                    "framework-debt",
+                    "correction",
+                    "pending",
+                    "no-action",
+                ),
+            },
         ),
         component(
             "final.gate.architecture-guard",

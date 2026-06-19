@@ -58,6 +58,7 @@ PLAN_APPROVAL_BOUNDARY_EVENT = "plan-approval-boundary.analysis"
 USER_CLAIM_VALIDATION_EVENT = "user-claim-validation.analysis"
 STATE_ARTIFACT_OWNERSHIP_EVENT = "state-artifact-ownership.analysis"
 PATCH_PREFLIGHT_EVENT = "patch-preflight.analysis"
+DISCOVERED_ISSUE_RECORDING_EVENT = "final-output.discovered-issues-recorded"
 SCOPE_KINDS = {COMMON_SCOPE, PROJECT_SCOPE, NATIVE_SCOPE, MIXED_SCOPE, UNKNOWN_SCOPE}
 
 
@@ -1344,6 +1345,127 @@ def validate_patch_preflight(
         add(notes, "note", f"patch preflight facts present: {PATCH_PREFLIGHT_EVENT}", "events")
 
 
+def validate_prewrite_runtime_adapter(
+    con: sqlite3.Connection,
+    task: sqlite3.Row,
+    task_types: set[str],
+    event: str,
+    errors: list[Finding],
+    notes: list[Finding],
+) -> None:
+    """Require approved active task + task worktree before mutating writes."""
+    if not (task_types & MUTATING_TASK_TYPES):
+        return
+    if event != "preflight":
+        return
+
+    if str(task["status"] or "").strip() not in {"active", "verifying", "done"}:
+        add(
+            errors,
+            "error",
+            "prewrite runtime adapter requires task status active/verifying/done before repository writes",
+            "tasks",
+            task["task_id"],
+        )
+
+    worktrees = rows(con, "worktrees", task["task_id"])
+    if not worktrees:
+        add(
+            errors,
+            "error",
+            "prewrite runtime adapter requires task worktree evidence before repository writes",
+            "worktrees",
+        )
+        return
+
+    usable = [
+        worktree
+        for worktree in worktrees
+        if worktree["creation_method"] == "worktree-task"
+        and worktree["status"] in {"active", "done"}
+        and worktree["commit_status"] in {"not_committed", "committed", "not_required"}
+        and worktree["push_status"] in {"not_pushed", "not_required"}
+    ]
+    if not usable:
+        add(
+            errors,
+            "error",
+            "prewrite runtime adapter requires an active/done worktree-task row with local-only push boundary",
+            "worktrees",
+        )
+    else:
+        add(notes, "note", "prewrite runtime adapter facts present: active task + task worktree", "worktrees")
+
+
+def validate_discovered_issue_recording(
+    con: sqlite3.Connection,
+    task: sqlite3.Row,
+    task_types: set[str],
+    event: str,
+    errors: list[Finding],
+    notes: list[Finding],
+) -> None:
+    """Require final-output to record newly discovered issues or explicit no-action."""
+    if event != "final":
+        return
+    task_size = str(task["task_size"] or "").strip().lower()
+    if not (task_types & MUTATING_TASK_TYPES or task_size in {"medium", "large"}):
+        return
+
+    payloads = event_payloads(con, task["task_id"], DISCOVERED_ISSUE_RECORDING_EVENT)
+    if not payloads:
+        add(
+            errors,
+            "error",
+            f"final output requires event_type={DISCOVERED_ISSUE_RECORDING_EVENT}",
+            "events",
+        )
+        return
+
+    valid_destinations = {
+        "task-record",
+        "task-queue",
+        "framework-debt",
+        "correction",
+        "pending",
+        "no-action",
+    }
+    valid = False
+    invalid_event_ids: list[str] = []
+    for event_id, payload in payloads:
+        issues = payload.get("issues")
+        if not isinstance(issues, list):
+            invalid_event_ids.append(event_id)
+            continue
+        issue_rows = issues or [{"destination": payload.get("no_issue_policy", "no-action")}]
+        missing = False
+        for issue in issue_rows:
+            if not isinstance(issue, dict):
+                missing = True
+                break
+            destination = str(issue.get("destination") or "").strip()
+            if destination not in valid_destinations:
+                missing = True
+                break
+            if destination != "no-action" and not str(issue.get("record_ref") or "").strip():
+                missing = True
+                break
+        if not missing:
+            valid = True
+            break
+        invalid_event_ids.append(event_id)
+    if not valid:
+        add(
+            errors,
+            "error",
+            "discovered issue recording must list issues with destination and record_ref, or explicit no-action",
+            "events",
+            ", ".join(invalid_event_ids),
+        )
+    else:
+        add(notes, "note", f"discovered issue recording facts present: {DISCOVERED_ISSUE_RECORDING_EVENT}", "events")
+
+
 def validate_task(con: sqlite3.Connection, db: Path, task_id: str, event: str, explicit_task_types: list[str]) -> GateReport:
     errors: list[Finding] = []
     warnings: list[Finding] = []
@@ -1375,6 +1497,8 @@ def validate_task(con: sqlite3.Connection, db: Path, task_id: str, event: str, e
     validate_user_claim_validation(con, task, task_types, errors, notes)
     validate_state_artifact_ownership(con, task, task_types, errors, notes)
     validate_patch_preflight(con, task, task_types, errors, notes)
+    validate_prewrite_runtime_adapter(con, task, task_types, event, errors, notes)
+    validate_discovered_issue_recording(con, task, task_types, event, errors, notes)
 
     if event == "final":
         output_types = {row["output_type"] for row in rows(con, "outputs", task_id)}
@@ -1395,12 +1519,7 @@ def validate_task(con: sqlite3.Connection, db: Path, task_id: str, event: str, e
         if not worktrees and event == "final":
             add(errors, "error", "mutating tasks require worktree evidence", "worktrees")
         elif not worktrees:
-            add(
-                notes,
-                "note",
-                "mutating task has no worktree evidence yet; prewrite/final gates must require it before repository writes",
-                "worktrees",
-            )
+            add(errors, "error", "mutating tasks require worktree evidence before write-intent", "worktrees")
         for worktree in worktrees:
             if worktree["creation_method"] != "worktree-task":
                 if "break" not in worktree["source_handling"].lower() and "批准" not in worktree["source_handling"]:

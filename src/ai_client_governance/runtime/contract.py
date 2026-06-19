@@ -11,6 +11,7 @@ from typing import Any
 from ai_client_governance.records.task_record import (
     APPROVAL_STATUSES,
     CLIENT_IDENTITY_EVENT,
+    DISCOVERED_ISSUE_RECORDING_EVENT,
     KNOWN_TASK_TYPES,
     MUTATING_TASK_TYPES,
     OUTPUT_TYPES,
@@ -249,8 +250,14 @@ def build_contract(task_types: list[str], event: str) -> Contract:
     ]
     if final:
         gate_requirements.append("Final output must include all output types: " + ", ".join(OUTPUT_TYPES) + ".")
+        gate_requirements.append(
+            f"Final output must persist events.event_type={DISCOVERED_ISSUE_RECORDING_EVENT} "
+            "with each discovered issue mapped to task-record, task-queue, framework-debt, correction, pending, or explicit no-action."
+        )
     if mutating:
-        gate_requirements.append("Worktree evidence must use creation_method=worktree-task unless break-glass is justified.")
+        gate_requirements.append(
+            "Prewrite gates fail closed unless a mutating task has worktree evidence with creation_method=worktree-task."
+        )
         gate_requirements.append(
             "Mutating work must persist events.event_type=command-compression.analysis before write-intent or final gates."
         )
