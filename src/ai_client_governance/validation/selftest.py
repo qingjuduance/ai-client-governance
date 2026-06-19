@@ -819,6 +819,101 @@ def test_task_queue_task_id_priority(root: Path, run_dir: Path) -> TestResult:
     )
 
 
+def test_task_queue_todo_projection(root: Path, run_dir: Path) -> TestResult:
+    db = run_dir / "task-queue-todo-projection.db"
+    tracking = ".ai-client/project/records/task-tracking/todo-projection-selftest.md"
+    commands = [
+        run_command(
+            queue_command(
+                root,
+                db,
+                "enqueue",
+                "--task-id",
+                "TQ-TODO-DONE",
+                "--title",
+                "done todo task",
+                "--message",
+                "done todo task",
+                "--task-tracking",
+                tracking,
+                "--approval-label",
+                "批准：todo-selftest",
+                "--trace-id",
+                "trace-todo-done",
+                "--status",
+                "ready",
+            ),
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(queue_command(root, db, "start-next", "--task-id", "TQ-TODO-DONE"), cwd=root, env_root=root),
+        run_command(queue_command(root, db, "complete", "--task-id", "TQ-TODO-DONE"), cwd=root, env_root=root),
+        run_command(
+            queue_command(
+                root,
+                db,
+                "enqueue",
+                "--task-id",
+                "TQ-TODO-READY",
+                "--title",
+                "ready todo task",
+                "--message",
+                "ready todo task",
+                "--task-tracking",
+                tracking,
+                "--approval-label",
+                "批准：todo-selftest",
+                "--trace-id",
+                "trace-todo-ready",
+                "--status",
+                "ready",
+            ),
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(queue_command(root, db, "todo", "--format", "json"), cwd=root, env_root=root),
+        run_command(queue_command(root, db, "todo", "--include-closed", "--format", "json"), cwd=root, env_root=root),
+    ]
+    open_projection: dict[str, object] = {}
+    closed_projection: dict[str, object] = {}
+    try:
+        open_projection = json.loads(commands[-2].stdout)
+        closed_projection = json.loads(commands[-1].stdout)
+    except json.JSONDecodeError:
+        pass
+    open_items = open_projection.get("items", []) if isinstance(open_projection.get("items"), list) else []
+    closed_items = closed_projection.get("items", []) if isinstance(closed_projection.get("items"), list) else []
+    open_by_id = {
+        item.get("id"): item
+        for item in open_items
+        if isinstance(item, dict)
+    }
+    closed_by_id = {
+        item.get("id"): item
+        for item in closed_items
+        if isinstance(item, dict)
+    }
+    passed = (
+        all(command.exit_code == 0 for command in commands)
+        and open_projection.get("source_policy")
+        == "client Todo lists are derived views; task-queue/task-record remain the durable fact sources"
+        and "TQ-TODO-READY" in open_by_id
+        and "TQ-TODO-DONE" not in open_by_id
+        and closed_by_id.get("TQ-TODO-READY", {}).get("source_policy") == "derived_from_task_queue_not_fact_source"
+        and closed_by_id.get("TQ-TODO-DONE", {}).get("status") == "completed"
+    )
+    return TestResult(
+        name="task-queue-todo-projection",
+        passed=passed,
+        summary=(
+            "task-queue todo exports client Todo items as a derived projection"
+            if passed
+            else "task-queue todo projection regression failed"
+        ),
+        commands=commands,
+    )
+
+
 def test_task_lifecycle_unified_status(root: Path, run_dir: Path) -> TestResult:
     task_id = "TQ-LIFECYCLE-SELFTEST"
     db = run_dir / "task-lifecycle-selftest.db"
@@ -1902,6 +1997,93 @@ def test_final_output_discovered_issue_gate(root: Path, run_dir: Path) -> TestRe
             "final output fails closed unless discovered issues are recorded or explicitly no-action"
             if passed
             else "final-output discovered issue gate regression failed"
+        ),
+        commands=commands,
+    )
+
+
+def test_multi_agent_dispatch_brief_gate(root: Path, run_dir: Path) -> TestResult:
+    db = run_dir / "multi-agent-brief.db"
+    valid_task = "MULTI-AGENT-BRIEF-VALID"
+    missing_task = "MULTI-AGENT-BRIEF-MISSING"
+    valid_payload = structured_payload(valid_task)
+    missing_payload = structured_payload(missing_task)
+    valid_payload["task"]["task_types"] = ["rules-script", "multi-agent"]  # type: ignore[index]
+    missing_payload["task"]["task_types"] = ["rules-script", "multi-agent"]  # type: ignore[index]
+    valid_payload["events"].append(  # type: ignore[index]
+        {
+            "event_id": f"EVT-{valid_task}-AGENT-BRIEF",
+            "event_type": structured_task_record.AGENT_DISPATCH_BRIEF_EVENT,
+            "payload": {
+                "task_id": valid_task,
+                "worktree_path": "selftest",
+                "write_scope": ["src/ai_client_governance/worktree/task.py"],
+                "forbidden_paths": ["none"],
+                "validation_commands": ["python -m py_compile src/ai_client_governance/worktree/task.py"],
+                "return_capsule": "summary, changed files, validation results, residual risks",
+                "context_reuse": "new",
+            },
+        }
+    )
+    valid = run_dir / "multi-agent-brief-valid.json"
+    missing = run_dir / "multi-agent-brief-missing.json"
+    valid.write_text(json.dumps(valid_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    missing.write_text(json.dumps(missing_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    commands = [
+        run_command([sys.executable, str(ai_client_governance_entrypoint()), "task-record", "--db", str(db), "init"], cwd=root, env_root=root),
+        run_command([sys.executable, str(ai_client_governance_entrypoint()), "task-record", "--db", str(db), "apply", "--json", str(missing)], cwd=root, env_root=root),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-record",
+                "--db",
+                str(db),
+                "gate",
+                "--task-id",
+                missing_task,
+                "--event",
+                "preflight",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command([sys.executable, str(ai_client_governance_entrypoint()), "task-record", "--db", str(db), "apply", "--json", str(valid)], cwd=root, env_root=root),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-record",
+                "--db",
+                str(db),
+                "gate",
+                "--task-id",
+                valid_task,
+                "--event",
+                "preflight",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+    ]
+    missing_output = commands[2].stdout + commands[2].stderr
+    valid_output = commands[4].stdout + commands[4].stderr
+    passed = (
+        commands[0].exit_code == 0
+        and commands[1].exit_code == 0
+        and commands[2].exit_code != 0
+        and commands[3].exit_code == 0
+        and commands[4].exit_code == 0
+        and "multi-agent dispatch requires event_type=agent-dispatch-brief.analysis" in missing_output
+        and "agent dispatch brief facts present" in valid_output
+    )
+    return TestResult(
+        name="multi-agent-dispatch-brief-gate",
+        passed=passed,
+        summary=(
+            "multi-agent task-record gates require a structured dispatch brief"
+            if passed
+            else "multi-agent dispatch brief gate regression failed"
         ),
         commands=commands,
     )
@@ -4099,6 +4281,7 @@ def main() -> int:
             test_input_and_output_closeout_gate(root, run_dir),
             test_multi_agent_acceptance_matrix_gate(root, run_dir),
             test_task_queue_task_id_priority(root, run_dir),
+            test_task_queue_todo_projection(root, run_dir),
             test_task_lifecycle_unified_status(root, run_dir),
             test_task_lifecycle_transition(root, run_dir),
             test_task_lifecycle_fail_on_blocking_drift(root, run_dir),
@@ -4106,6 +4289,7 @@ def main() -> int:
             test_structured_task_record_gate(root, run_dir),
             test_preflight_boundary_hardening(root, run_dir),
             test_final_output_discovered_issue_gate(root, run_dir),
+            test_multi_agent_dispatch_brief_gate(root, run_dir),
             test_tool_flow_accepts_task_record_gate(root, run_dir),
             test_lifecycle_input_filter_preflight(root, run_dir),
             test_task_run_command_compression_plan(root, run_dir),

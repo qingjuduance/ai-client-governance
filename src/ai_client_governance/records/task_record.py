@@ -59,6 +59,7 @@ USER_CLAIM_VALIDATION_EVENT = "user-claim-validation.analysis"
 STATE_ARTIFACT_OWNERSHIP_EVENT = "state-artifact-ownership.analysis"
 PATCH_PREFLIGHT_EVENT = "patch-preflight.analysis"
 DISCOVERED_ISSUE_RECORDING_EVENT = "final-output.discovered-issues-recorded"
+AGENT_DISPATCH_BRIEF_EVENT = "agent-dispatch-brief.analysis"
 SCOPE_KINDS = {COMMON_SCOPE, PROJECT_SCOPE, NATIVE_SCOPE, MIXED_SCOPE, UNKNOWN_SCOPE}
 
 
@@ -1466,6 +1467,48 @@ def validate_discovered_issue_recording(
         add(notes, "note", f"discovered issue recording facts present: {DISCOVERED_ISSUE_RECORDING_EVENT}", "events")
 
 
+def validate_agent_dispatch_brief(
+    con: sqlite3.Connection,
+    task: sqlite3.Row,
+    task_types: set[str],
+    errors: list[Finding],
+    notes: list[Finding],
+) -> None:
+    """Require structured Agent Brief facts for multi-agent dispatch."""
+    if "multi-agent" not in task_types:
+        return
+    payloads = event_payloads(con, task["task_id"], AGENT_DISPATCH_BRIEF_EVENT)
+    if not payloads:
+        add(errors, "error", f"multi-agent dispatch requires event_type={AGENT_DISPATCH_BRIEF_EVENT}", "events")
+        return
+    required = ("task_id", "worktree_path", "write_scope", "forbidden_paths", "validation_commands", "return_capsule")
+    valid = False
+    invalid_event_ids: list[str] = []
+    for event_id, payload in payloads:
+        missing = [field for field in required if not payload.get(field)]
+        if missing:
+            invalid_event_ids.append(event_id)
+            continue
+        if not isinstance(payload.get("write_scope"), list) or not isinstance(payload.get("forbidden_paths"), list):
+            invalid_event_ids.append(event_id)
+            continue
+        if not isinstance(payload.get("validation_commands"), list):
+            invalid_event_ids.append(event_id)
+            continue
+        valid = True
+        break
+    if not valid:
+        add(
+            errors,
+            "error",
+            "agent dispatch brief must include task_id, worktree_path, write_scope, forbidden_paths, validation_commands, and return_capsule",
+            "events",
+            ", ".join(invalid_event_ids),
+        )
+    else:
+        add(notes, "note", f"agent dispatch brief facts present: {AGENT_DISPATCH_BRIEF_EVENT}", "events")
+
+
 def validate_task(con: sqlite3.Connection, db: Path, task_id: str, event: str, explicit_task_types: list[str]) -> GateReport:
     errors: list[Finding] = []
     warnings: list[Finding] = []
@@ -1499,6 +1542,7 @@ def validate_task(con: sqlite3.Connection, db: Path, task_id: str, event: str, e
     validate_patch_preflight(con, task, task_types, errors, notes)
     validate_prewrite_runtime_adapter(con, task, task_types, event, errors, notes)
     validate_discovered_issue_recording(con, task, task_types, event, errors, notes)
+    validate_agent_dispatch_brief(con, task, task_types, errors, notes)
 
     if event == "final":
         output_types = {row["output_type"] for row in rows(con, "outputs", task_id)}

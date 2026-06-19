@@ -2498,6 +2498,11 @@ def build_parser() -> argparse.ArgumentParser:
     dispatch.add_argument("--validation-decision", choices=["syntax-only", "gate-only", "full", "skipped"], default="syntax-only")
     dispatch.add_argument("--base", help="Base commit/branch. Default: HEAD.")
     dispatch.add_argument("--scope", action="append", help="Initial session scopes (repeatable).")
+    dispatch.add_argument("--write-scope", action="append", default=[], help="Agent write scope for multi-agent dispatch. Repeatable.")
+    dispatch.add_argument("--forbidden-path", action="append", default=[], help="Path or pattern the dispatched agent must not touch. Use 'none' explicitly if empty.")
+    dispatch.add_argument("--validation-command", action="append", default=[], help="Validation command the dispatched agent must run or report. Repeatable.")
+    dispatch.add_argument("--return-capsule", default="", help="Expected return capsule contract for the dispatched agent.")
+    dispatch.add_argument("--context-reuse", choices=["new", "reuse", "merge", "close"], default="new", help="Agent context reuse decision.")
     dispatch.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
 
     poll = subparsers.add_parser(
@@ -2663,6 +2668,27 @@ def command_dispatch(args: argparse.Namespace) -> int:
     task_types = list(args.task_type) or (
         ["rules-script"] if args.repo == "ai-client-governance" else ["docs", "git"]
     )
+    write_scopes = list(args.write_scope or []) or list(args.scope or [])
+    forbidden_paths = list(args.forbidden_path or [])
+    validation_commands = list(args.validation_command or [])
+    return_capsule = str(args.return_capsule or "").strip()
+    if "multi-agent" in task_types:
+        missing_agent_fields = []
+        if not write_scopes:
+            missing_agent_fields.append("--write-scope")
+        if not forbidden_paths:
+            missing_agent_fields.append("--forbidden-path")
+        if not validation_commands:
+            missing_agent_fields.append("--validation-command")
+        if not return_capsule:
+            missing_agent_fields.append("--return-capsule")
+        if missing_agent_fields:
+            print(
+                "Error: multi-agent dispatch requires Agent Brief fields: "
+                + ", ".join(missing_agent_fields),
+                file=sys.stderr,
+            )
+            return 2
     req_texts = list(args.requirement or []) or [args.summary]
     now = now_iso()
     trace_id = f"trace-{task_slug}"
@@ -2708,6 +2734,38 @@ def command_dispatch(args: argparse.Namespace) -> int:
                 "final_coverage": "Pending final-output gate.",
                 "created_at": now,
                 "updated_at": now,
+            }
+        )
+
+    events = [
+        {
+            "event_id": f"EVT-{task_slug}-dispatch",
+            "event_type": "dispatch.analysis",
+            "payload": {
+                "approval_label": args.approval_label,
+                "auto_approved": False,
+                "worktree_path": display_path(worktree_path, project_root),
+                "branch": f"codex/{task_slug}",
+            },
+            "created_at": now,
+        }
+    ]
+    if "multi-agent" in task_types:
+        events.append(
+            {
+                "event_id": f"EVT-{task_slug}-agent-brief",
+                "event_type": "agent-dispatch-brief.analysis",
+                "payload": {
+                    "task_id": task_id,
+                    "worktree_path": display_path(worktree_path, project_root),
+                    "write_scope": write_scopes,
+                    "forbidden_paths": forbidden_paths,
+                    "validation_commands": validation_commands,
+                    "return_capsule": return_capsule,
+                    "context_reuse": args.context_reuse,
+                    "fail_policy": "fail_closed",
+                },
+                "created_at": now,
             }
         )
 
@@ -2803,19 +2861,7 @@ def command_dispatch(args: argparse.Namespace) -> int:
                 "created_at": now,
             }
         ],
-        "events": [
-            {
-                "event_id": f"EVT-{task_slug}-dispatch",
-                "event_type": "dispatch.analysis",
-                "payload": {
-                    "approval_label": args.approval_label,
-                    "auto_approved": False,
-                    "worktree_path": display_path(worktree_path, project_root),
-                    "branch": f"codex/{task_slug}",
-                },
-                "created_at": now,
-            }
-        ],
+        "events": events,
     }
 
     payload_path = worktree_path / "task-payload.json"
