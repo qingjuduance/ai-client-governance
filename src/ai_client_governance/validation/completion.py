@@ -42,6 +42,7 @@ class PlannedCheck:
     required: bool = True
     estimated_seconds: int = 5
     cost: str = "cheap"
+    actual_duration_ms: int | None = None
 
 
 @dataclass(frozen=True)
@@ -401,6 +402,18 @@ def build_validation_attribution(
         recommendations.append("optimize or cache the slowest actual validation spans before adding more checks")
     else:
         recommendations.append("run validations through gate-pool/task-run/tool-invocations so duration_ms evidence exists")
+    # Redundancy detection: check for duplicated subjects across validation spans
+    redundant_hints: list[str] = []
+    seen_subjects: dict[str, int] = {}
+    for span in actual:
+        subj = str(span.get("subject", span.get("name", "")) or "")
+        if subj:
+            seen_subjects[subj] = seen_subjects.get(subj, 0) + 1
+    for subj, count in seen_subjects.items():
+        if count > 1:
+            redundant_hints.append(f"{subj} checked {count}x")
+    if redundant_hints:
+        recommendations.append("redundant checks: " + ", ".join(redundant_hints[:5]))
     return ValidationAttribution(
         planned_slowest_required=[planned_check_dict(check) for check in required[:top]],
         planned_slowest_optional=[planned_check_dict(check) for check in optional[:top]],
@@ -531,6 +544,13 @@ def main() -> int:
         print(f"- budget pressure: {validation_attribution.budget_pressure}")
         for item in validation_attribution.likely_bottlenecks:
             print(f"- bottleneck: {item}")
+        print("Slowest planned checks (by estimated_seconds):")
+        for check in validation_attribution.planned_slowest_required[:3]:
+            print(f"  - {check['id']}: ~{check['estimated_seconds']}s [{check['cost']}]")
+        if validation_attribution.actual_slowest_validation_spans:
+            print("Slowest actual validation spans (by duration_ms):")
+            for span in validation_attribution.actual_slowest_validation_spans[:3]:
+                print(f"  - {span.get('name', '?')}: {span.get('duration_ms', '?')}ms")
         for item in validation_attribution.recommendations:
             print(f"- recommendation: {item}")
         print("Completion test plan:")
