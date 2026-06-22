@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
-from dataclasses import asdict, dataclass, field
+from dataclasses import MISSING, asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
@@ -48,6 +48,20 @@ PHASE_ORDER = {
     "final-gate": 800,
     "report": 900,
 }
+
+DECLARATIVE_REGISTRY_PATH = Path("runtime-components.json")
+COMPONENT_TUPLE_FIELDS = {
+    "task_types",
+    "task_sizes",
+    "input_sources",
+    "path_suffixes",
+    "path_prefixes",
+    "events",
+    "requires_facts",
+    "produces_facts",
+    "dependencies",
+}
+TASK_TYPE_TUPLE_FIELDS = {"keywords"}
 
 
 @dataclass(frozen=True)
@@ -1943,8 +1957,79 @@ def default_components() -> list[ComponentDefinition]:
     ]
 
 
+def _field_default(field_obj: Any) -> Any:
+    if field_obj.default is not MISSING:
+        return field_obj.default
+    if field_obj.default_factory is not MISSING:  # type: ignore[attr-defined]
+        return field_obj.default_factory()  # type: ignore[misc]
+    raise ValueError(f"field has no default: {field_obj.name}")
+
+
+def _tuple_value(value: Any) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, tuple):
+        return tuple(str(item) for item in value)
+    if isinstance(value, list):
+        return tuple(str(item) for item in value)
+    raise ValueError(f"expected list/tuple, got {type(value).__name__}")
+
+
+def component_from_manifest(item: dict[str, Any]) -> ComponentDefinition:
+    values: dict[str, Any] = {}
+    for field_obj in fields(ComponentDefinition):
+        if field_obj.name in item:
+            value = item[field_obj.name]
+        else:
+            value = _field_default(field_obj)
+        if field_obj.name in COMPONENT_TUPLE_FIELDS:
+            value = _tuple_value(value)
+        values[field_obj.name] = value
+    return ComponentDefinition(**values)
+
+
+def task_type_from_manifest(item: dict[str, Any]) -> TaskTypeDefinition:
+    values: dict[str, Any] = {}
+    for field_obj in fields(TaskTypeDefinition):
+        if field_obj.name in item:
+            value = item[field_obj.name]
+        else:
+            value = _field_default(field_obj)
+        if field_obj.name in TASK_TYPE_TUPLE_FIELDS:
+            value = _tuple_value(value)
+        values[field_obj.name] = value
+    return TaskTypeDefinition(**values)
+
+
+def declarative_registry_path(root: Path | None = None) -> Path:
+    base = root or Path(__file__).resolve().parents[3]
+    return base / DECLARATIVE_REGISTRY_PATH
+
+
+def serialize_declarative_registry() -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "source": "ai-client-governance runtime declarative registry",
+        "components": [asdict(item) for item in default_components()],
+        "task_types": [asdict(item) for item in TASK_TYPE_DEFINITIONS.values()],
+    }
+
+
+def load_declarative_registry(path: Path | None = None) -> ComponentRegistry | None:
+    registry_path = path or declarative_registry_path()
+    if not registry_path.exists():
+        return None
+    payload = json.loads(registry_path.read_text(encoding="utf-8-sig"))
+    components = [component_from_manifest(item) for item in payload.get("components", [])]
+    task_types = {
+        item.id: item
+        for item in (task_type_from_manifest(row) for row in payload.get("task_types", []))
+    }
+    return ComponentRegistry(components, task_types)
+
+
 def default_registry() -> ComponentRegistry:
-    return ComponentRegistry(default_components(), TASK_TYPE_DEFINITIONS)
+    return load_declarative_registry() or ComponentRegistry(default_components(), TASK_TYPE_DEFINITIONS)
 
 
 def requires_tracking_for(task_types: list[str] | tuple[str, ...], task_size: str) -> bool:
@@ -1988,6 +2073,15 @@ def parse_args() -> argparse.Namespace:
 
     task_types = subparsers.add_parser("task-types", help="List registered task types.")
     task_types.add_argument("--format", choices=("text", "json"), default="text")
+
+    export_declarative = subparsers.add_parser(
+        "export-declarative-registry",
+        help="Generate the declarative runtime component registry from the Python fallback registry.",
+    )
+    common_cli_args.add_common_global_args(export_declarative, names=("root",))
+    export_declarative.add_argument("--output", default=DECLARATIVE_REGISTRY_PATH.as_posix())
+    export_declarative.add_argument("--check", action="store_true", help="Exit non-zero when output would change.")
+    export_declarative.add_argument("--format", choices=("text", "json"), default="text")
 
     manifest_report = subparsers.add_parser("manifest-report", help="Compare runtime registry facts with manifest.json.")
     common_cli_args.add_common_global_args(manifest_report, names=("root",))
@@ -2081,6 +2175,7 @@ def render_task_types(registry: ComponentRegistry, fmt: str) -> str:
 
 EXPECTED_RUNTIME_COMMAND_KEYS = {
     "components",
+    "exportDeclarativeRegistry",
     "contractDescribe",
     "taskRunPlan",
     "taskRunRun",
@@ -2112,6 +2207,42 @@ def manifest_path(root: Path, value: str) -> Path:
     return path if path.is_absolute() else root / path
 
 
+def write_declarative_registry(args: argparse.Namespace) -> dict[str, Any]:
+    root = Path(args.root).resolve()
+    output = manifest_path(root, args.output)
+    payload = serialize_declarative_registry()
+    text = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    existing = output.read_text(encoding="utf-8-sig") if output.exists() else ""
+    changed = existing != text
+    if changed and not args.check:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(text, encoding="utf-8")
+    return {
+        "output": output.as_posix(),
+        "status": "fail" if args.check and changed else "pass",
+        "changed": changed,
+        "component_count": len(payload["components"]),
+        "task_type_count": len(payload["task_types"]),
+        "check": bool(args.check),
+    }
+
+
+def registry_signature(registry: ComponentRegistry) -> dict[str, Any]:
+    def normalize(value: Any) -> Any:
+        return json.loads(json.dumps(value, ensure_ascii=False, sort_keys=True))
+
+    return {
+        "components": sorted(
+            (normalize(asdict(item)) for item in registry.components),
+            key=lambda item: str(item.get("id") or ""),
+        ),
+        "task_types": sorted(
+            (normalize(asdict(item)) for item in registry.task_types.values()),
+            key=lambda item: str(item.get("id") or ""),
+        ),
+    }
+
+
 def build_manifest_report(args: argparse.Namespace) -> dict[str, Any]:
     root = Path(args.root).resolve()
     path = manifest_path(root, args.manifest)
@@ -2120,6 +2251,10 @@ def build_manifest_report(args: argparse.Namespace) -> dict[str, Any]:
     kinds = set(runtime.get("componentKinds") or [])
     contract = set(runtime.get("componentContract") or [])
     commands = set((runtime.get("runtimeCommands") or {}).keys())
+    declarative_value = runtime.get("declarativeRegistry") or DECLARATIVE_REGISTRY_PATH.as_posix()
+    declarative_path = manifest_path(root, str(declarative_value))
+    declarative_registry = load_declarative_registry(declarative_path)
+    fallback_registry = ComponentRegistry(default_components(), TASK_TYPE_DEFINITIONS)
     actual_contract = set(ComponentDefinition.__dataclass_fields__)
     contract_required = actual_contract - {"metadata"}
     drifts: list[dict[str, Any]] = []
@@ -2131,8 +2266,23 @@ def build_manifest_report(args: argparse.Namespace) -> dict[str, Any]:
     add_drift("componentKinds", COMPONENT_KINDS - kinds, kinds - COMPONENT_KINDS)
     add_drift("componentContract", contract_required - contract, contract - actual_contract)
     add_drift("runtimeCommands", EXPECTED_RUNTIME_COMMAND_KEYS - commands, commands - EXPECTED_RUNTIME_COMMAND_KEYS)
+    if declarative_registry is None:
+        drifts.append({"kind": "declarativeRegistry", "missing": [declarative_path.as_posix()], "extra": []})
+        declarative_status = "missing"
+    else:
+        declarative_status = "loaded"
+        if registry_signature(declarative_registry) != registry_signature(fallback_registry):
+            drifts.append(
+                {
+                    "kind": "declarativeRegistryContent",
+                    "missing": ["python-fallback-registry-signature"],
+                    "extra": ["declarative-registry-signature"],
+                }
+            )
     return {
         "manifest": path.as_posix(),
+        "declarative_registry": declarative_path.as_posix(),
+        "declarative_registry_status": declarative_status,
         "status": "pass" if not drifts else "fail",
         "drift_count": len(drifts),
         "drifts": drifts,
@@ -2153,6 +2303,7 @@ def render_manifest_report(report: dict[str, Any]) -> str:
     lines = [
         "AI Client Governance Runtime Manifest Report",
         f"Manifest: {report['manifest']}",
+        f"Declarative registry: {report['declarative_registry']} ({report['declarative_registry_status']})",
         f"Status: {report['status']}",
         f"Drifts: {report['drift_count']}",
     ]
@@ -2172,6 +2323,14 @@ def main() -> int:
     if args.command == "task-types":
         print(render_task_types(registry, args.format))
         return 0
+    if args.command == "export-declarative-registry":
+        result = write_declarative_registry(args)
+        if args.format == "json":
+            print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            verb = "would update" if args.check and result["changed"] else "updated" if result["changed"] else "up to date"
+            print(f"Declarative runtime registry {verb}: {result['output']}")
+        return 1 if result["status"] == "fail" else 0
     if args.command == "manifest-report":
         report = build_manifest_report(args)
         if args.format == "json":

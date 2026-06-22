@@ -1579,6 +1579,90 @@ def test_gate_pool_validate_doc_tracking_context(root: Path, run_dir: Path) -> T
     )
 
 
+def test_gate_pool_doc_index_records_doc_impact(root: Path, run_dir: Path) -> TestResult:
+    db = run_dir / "gate-pool-doc-impact.db"
+    task_id = "TASK-SELFTEST-DOC-IMPACT"
+    payload_path = run_dir / "gate-pool-doc-impact-record.json"
+    doc_path = run_dir / "doc-impact.md"
+    changed_path = doc_path.relative_to(root).as_posix()
+    write_text_lf(payload_path, json.dumps(structured_payload(task_id), ensure_ascii=False, indent=2))
+    write_text_lf(doc_path, "# Doc Impact Selftest\n\nLocal selftest document.\n")
+    commands = [
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "task-record",
+                "--root",
+                str(root),
+                "--db",
+                str(db),
+                "apply",
+                "--json",
+                str(payload_path),
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "gate-pool",
+                "--root",
+                str(root),
+                "--db",
+                str(db),
+                "--task-id",
+                task_id,
+                "--task-type",
+                "docs",
+                "--changed-path",
+                changed_path,
+                "--format",
+                "json",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+    ]
+    events: list[str] = []
+    validations: list[dict[str, str]] = []
+    try:
+        con = state_store.connect(db)
+        events = [
+            str(row["event_type"])
+            for row in con.execute("SELECT event_type FROM events WHERE task_id = ?", (task_id,))
+        ]
+        validations = [
+            {"command": str(row["command"]), "result": str(row["result"]), "summary": str(row["summary"])}
+            for row in con.execute("SELECT command, result, summary FROM validations WHERE task_id = ?", (task_id,))
+        ]
+    except Exception:
+        events = []
+        validations = []
+    finally:
+        try:
+            con.close()  # type: ignore[name-defined]
+        except Exception:
+            pass
+    passed = (
+        all(command.exit_code == 0 for command in commands)
+        and "doc-impact.analysis" in events
+        and any("doc-index" in row["command"] and row["result"] == "pass" for row in validations)
+    )
+    return TestResult(
+        name="gate-pool-doc-index-records-doc-impact",
+        passed=passed,
+        summary=(
+            "gate-pool doc-index changed-path run recorded doc-impact and validation facts"
+            if passed
+            else "gate-pool doc-index did not record doc-impact/validation facts"
+        ),
+        commands=commands,
+    )
+
+
 def structured_payload(task_id: str, include_worktree: bool = True) -> dict[str, object]:
     outputs = []
     for output_type in ("plan", "status", "final", "script", "error", "git_worktree"):
@@ -5385,36 +5469,62 @@ def test_doc_index_defaults_to_host_from_worktree_cwd(root: Path, run_dir: Path)
 
 def test_runtime_manifest_report(root: Path, run_dir: Path) -> TestResult:
     governance_root = ai_client_governance_root()
-    command = run_command(
-        [
-            sys.executable,
-            str(ai_client_governance_entrypoint()),
-            "runtime",
-            "manifest-report",
-            "--root",
-            str(governance_root),
-            "--check-manifest",
-            "--format",
-            "json",
-        ],
-        cwd=root,
-        env_root=root,
-    )
+    commands = [
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "runtime",
+                "export-declarative-registry",
+                "--root",
+                str(governance_root),
+                "--check",
+                "--format",
+                "json",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "runtime",
+                "manifest-report",
+                "--root",
+                str(governance_root),
+                "--check-manifest",
+                "--format",
+                "json",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+    ]
+    export_payload: dict[str, object] = {}
     payload: dict[str, object] = {}
     try:
-        payload = json.loads(command.stdout)
+        export_payload = json.loads(commands[0].stdout)
+        payload = json.loads(commands[1].stdout)
     except json.JSONDecodeError:
         pass
-    passed = command.exit_code == 0 and payload.get("status") == "pass" and payload.get("drift_count") == 0
+    passed = (
+        all(command.exit_code == 0 for command in commands)
+        and export_payload.get("status") == "pass"
+        and export_payload.get("changed") is False
+        and payload.get("status") == "pass"
+        and payload.get("drift_count") == 0
+        and payload.get("declarative_registry_status") == "loaded"
+    )
     return TestResult(
         name="runtime-manifest-report",
         passed=passed,
         summary=(
-            "runtime manifest-report detects no registry/manifest drift"
+            "runtime manifest-report detects no registry/manifest drift and declarative registry is current"
             if passed
-            else "runtime manifest-report found drift or failed"
+            else "runtime manifest-report or declarative registry check found drift or failed"
         ),
-        commands=[command],
+        commands=commands,
     )
 
 
@@ -5879,15 +5989,34 @@ def test_worktree_closeout_all_closes_coord_session(root: Path, run_dir: Path) -
                 cwd=project,
                 env_root=root,
             ),
+            run_command(
+                [
+                    sys.executable,
+                    str(ai_client_governance_entrypoint()),
+                    "task-queue",
+                    "lifecycle",
+                    "--root",
+                    str(project),
+                    "--task-id",
+                    "TASK-SELFTEST-CLOSEOUT",
+                    "--fail-on-drift",
+                    "--format",
+                    "json",
+                ],
+                cwd=project,
+                env_root=root,
+            ),
         ]
     )
     closeout_payload: dict[str, object] = {}
     reconcile_payload: dict[str, object] = {}
     queue_payload: dict[str, object] = {}
+    lifecycle_payload: dict[str, object] = {}
     try:
-        closeout_payload = json.loads(commands[-3].stdout)
-        reconcile_payload = json.loads(commands[-2].stdout)
-        queue_payload = json.loads(commands[-1].stdout)
+        closeout_payload = json.loads(commands[-4].stdout)
+        reconcile_payload = json.loads(commands[-3].stdout)
+        queue_payload = json.loads(commands[-2].stdout)
+        lifecycle_payload = json.loads(commands[-1].stdout)
     except json.JSONDecodeError:
         pass
     coord_store = CoordStateStore(governance / ".git")
@@ -5900,10 +6029,12 @@ def test_worktree_closeout_all_closes_coord_session(root: Path, run_dir: Path) -
         item for item in execution
         if isinstance(item, dict) and item.get("action") == "close-coord-session"
     ]
-    queue_complete_steps = [
+    lifecycle_complete_steps = [
         item for item in execution
-        if isinstance(item, dict) and item.get("action") == "complete-task-queue"
+        if isinstance(item, dict) and item.get("action") == "complete-task-lifecycle"
     ]
+    lifecycle_entries = lifecycle_payload.get("entries", []) if isinstance(lifecycle_payload.get("entries"), list) else []
+    lifecycle_entry = lifecycle_entries[0] if lifecycle_entries and isinstance(lifecycle_entries[0], dict) else {}
     queue_task = next(
         (
             item for item in queue_payload.get("all_tasks", [])
@@ -5917,10 +6048,14 @@ def test_worktree_closeout_all_closes_coord_session(root: Path, run_dir: Path) -
         all(command.exit_code == 0 for command in commands)
         and bool(close_steps)
         and close_steps[-1].get("status") == "done"
-        and bool(queue_complete_steps)
-        and queue_complete_steps[-1].get("status") == "done"
+        and bool(lifecycle_complete_steps)
+        and lifecycle_complete_steps[-1].get("status") == "done"
         and isinstance(queue_task, dict)
         and queue_task.get("status") == "completed"
+        and lifecycle_entry.get("lifecycle_status") == "done"
+        and lifecycle_entry.get("warnings") == []
+        and isinstance(lifecycle_entry.get("task_record"), dict)
+        and lifecycle_entry.get("task_record", {}).get("raw_status") == "done"
         and (
             (isinstance(session, dict) and session.get("status") == "closed_by_closeout")
             or reconcile_report.get("active_session_count") == 0
@@ -5942,9 +6077,9 @@ def test_worktree_closeout_all_closes_coord_session(root: Path, run_dir: Path) -
         name="worktree-closeout-all-closes-coord-session",
         passed=passed,
         summary=(
-            "closeout-all closes coord sessions, releases locks, and completes the active queue task"
+            "closeout-all closes coord sessions, releases locks, and transitions queue/task-record lifecycle to done"
             if passed
-            else "closeout-all left stale coord session/lock state or did not complete the queue task"
+            else "closeout-all left stale coord session/lock state or did not complete the queue/task-record lifecycle"
         ),
         commands=commands,
     )
@@ -6004,6 +6139,7 @@ def main() -> int:
             test_task_lifecycle_transition(root, run_dir),
             test_task_lifecycle_fail_on_blocking_drift(root, run_dir),
             test_gate_pool_validate_doc_tracking_context(root, run_dir),
+            test_gate_pool_doc_index_records_doc_impact(root, run_dir),
             test_structured_task_record_gate(root, run_dir),
             test_session_gate_task_id_skips_markdown_indexes(root, run_dir),
             test_task_gate_correction_db_records_without_markdown(root, run_dir),

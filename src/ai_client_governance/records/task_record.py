@@ -104,6 +104,7 @@ COMMAND_COMPRESSION_EVENT = "command-compression.analysis"
 SCOPE_CLASSIFICATION_TRIGGER = "scope-classification"
 PLAN_APPROVAL_BOUNDARY_EVENT = "plan-approval-boundary.analysis"
 USER_CLAIM_VALIDATION_EVENT = "user-claim-validation.analysis"
+DOC_IMPACT_EVENT = "doc-impact.analysis"
 STATE_ARTIFACT_OWNERSHIP_EVENT = "state-artifact-ownership.analysis"
 PATCH_PREFLIGHT_EVENT = "patch-preflight.analysis"
 DISCOVERED_ISSUE_RECORDING_EVENT = "final-output.discovered-issues-recorded"
@@ -161,6 +162,16 @@ def parse_args() -> argparse.Namespace:
     design_package.add_argument("--event-id", default="")
     design_package.add_argument("--payload-json", default="", help="Design package JSON object.")
     design_package.add_argument("--payload-file", help="UTF-8 JSON file payload. Overrides --payload-json.")
+
+    append_validation = sub.add_parser("append-validation", help="Append one validation evidence row to an existing task.")
+    common_cli_args.add_common_global_args(append_validation, suppress_default=True)
+    append_validation.add_argument("--task-id", required=True)
+    append_validation.add_argument("--validation-id", default="")
+    append_validation.add_argument("--command", dest="validation_command", required=True)
+    append_validation.add_argument("--cwd", required=True)
+    append_validation.add_argument("--result", required=True, choices=VALIDATION_RESULTS)
+    append_validation.add_argument("--summary", required=True)
+    append_validation.add_argument("--evidence", default="")
 
     append_worktree = sub.add_parser("append-worktree", help="Append or replace one worktree evidence row for an existing task.")
     common_cli_args.add_common_global_args(append_worktree, suppress_default=True)
@@ -1103,6 +1114,29 @@ def append_event_row(
     with con:
         insert_rows(con, "events", [row])
     return row["event_id"]
+
+
+def append_validation_row(con: sqlite3.Connection, args: argparse.Namespace) -> str:
+    task_id = args.task_id
+    if task_row(con, task_id) is None:
+        raise ValueError(f"task does not exist: {task_id}")
+    row = {
+        "validation_id": clean_text(
+            args.validation_id or f"VAL-{task_id}-{uuid.uuid4().hex[:8]}",
+            "validations[].validation_id",
+        ),
+        "task_id": task_id,
+        "command": clean_text(args.validation_command, "validations[].command"),
+        "cwd": clean_text(args.cwd, "validations[].cwd"),
+        "result": enum_text(args.result, "validations[].result", VALIDATION_RESULTS),
+        "summary": clean_text(args.summary, "validations[].summary"),
+        "evidence": clean_text(args.evidence, "validations[].evidence", required=False),
+        "created_at": utc_now(),
+    }
+    with con:
+        con.execute("DELETE FROM validations WHERE validation_id = ?", (row["validation_id"],))
+        insert_rows(con, "validations", [row])
+    return row["validation_id"]
 
 
 def append_worktree_row(con: sqlite3.Connection, args: argparse.Namespace) -> str:
@@ -2259,10 +2293,15 @@ def validate_task(con: sqlite3.Connection, db: Path, task_id: str, event: str, e
             add(errors, "error", "rules-script tasks require approval evidence", "approvals")
         elif not any(row["status"] == "approved" and row["label"] == task["approval_label"] for row in approvals):
             add(errors, "error", "rules-script tasks require an approved approval row matching approval_label", "approvals")
-    if "docs" in task_types and not any(
-        "validate-doc" in row["command"] or "doc-index" in row["command"] for row in validations
-    ):
-        add(warnings, "warning", "docs task has no validate-doc/doc-index validation row", "validations")
+    if "docs" in task_types:
+        has_doc_validation = any(
+            "validate-doc" in row["command"] or "doc-index" in row["command"] for row in validations
+        )
+        has_doc_impact = any(row["event_type"] == DOC_IMPACT_EVENT for row in rows(con, "events", task_id))
+        if not has_doc_validation:
+            add(warnings, "warning", "docs task has no validate-doc/doc-index validation row", "validations")
+        if event == "final" and not has_doc_impact:
+            add(warnings, "warning", "docs task has no doc-impact.analysis event from changed-path bubbling", "events")
     if "resume" in task_types and not any("PDF" in row["summary"] or "pdf" in row["command"].lower() for row in validations):
         add(warnings, "warning", "resume task has no PDF/layout validation row", "validations")
 
@@ -2431,6 +2470,11 @@ def main() -> int:
             )
             result = {"db": str(path), "task_id": args.task_id, "event_id": event_id, "appended": True}
             print_json(result) if args.format == "json" else print(f"Appended design package event: {event_id}")
+            return 0
+        if args.command == "append-validation":
+            validation_id = append_validation_row(con, args)
+            result = {"db": str(path), "task_id": args.task_id, "validation_id": validation_id, "appended": True}
+            print_json(result) if args.format == "json" else print(f"Appended validation evidence: {validation_id}")
             return 0
         if args.command == "append-worktree":
             worktree_id = append_worktree_row(con, args)

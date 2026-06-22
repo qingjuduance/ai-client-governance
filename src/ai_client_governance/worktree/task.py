@@ -800,14 +800,25 @@ def add_closeout_completion_actions(plan: dict[str, Any], args: argparse.Namespa
             except ValueError as exc:
                 plan["blockers"].append(str(exc))
                 return
-        command = [sys.executable, str(script), "task-queue", "complete", "--summary", args.complete_summary, "--format", "json"]
+        command = [
+            sys.executable,
+            str(script),
+            "task-queue",
+            "transition",
+            "--to",
+            "done",
+            "--summary",
+            args.complete_summary,
+            "--format",
+            "json",
+        ]
         command.extend(["--task-id", resolved_task_id])
         add_closeout_action(
             plan,
-            action="complete-task-queue",
+            action="complete-task-lifecycle",
             repo="self",
             command=command,
-            reason="mark the queue task completed as part of closeout so final response does not require a separate state turn",
+            reason="transition queue and task-record to done together as part of closeout",
         )
     if args.task_record_final_gate:
         if not (args.complete_task_id or args.complete_current_task):
@@ -1366,13 +1377,24 @@ def execute_closeout_all(plan: dict[str, Any], args: argparse.Namespace) -> int:
                 except ValueError as exc:
                     plan["blockers"].append(str(exc))
                     return 1
-            command = [sys.executable, str(script), "task-queue", "complete", "--summary", args.complete_summary, "--format", "json"]
+            command = [
+                sys.executable,
+                str(script),
+                "task-queue",
+                "transition",
+                "--to",
+                "done",
+                "--summary",
+                args.complete_summary,
+                "--format",
+                "json",
+            ]
             command.extend(["--task-id", completed_queue_task_id])
             completed = run_closeout_process(
                 plan,
                 command,
                 cwd=project_root,
-                action="complete-task-queue",
+                action="complete-task-lifecycle",
                 repo="self",
                 check=False,
             )
@@ -2474,7 +2496,7 @@ def build_parser() -> argparse.ArgumentParser:
     closeout_all.add_argument(
         "--complete-current-task",
         action="store_true",
-        help="Mark the single active queue task completed after successful closeout.",
+        help="Transition the single active queue/task-record lifecycle to done after successful closeout.",
     )
     closeout_all.add_argument(
         "--complete-summary",

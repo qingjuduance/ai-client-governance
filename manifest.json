@@ -167,6 +167,7 @@
       "defaultRule": "reuse active same-task same-scope agents when fresh and uncontaminated; spawn for independent isolated leaves; merge when scopes overlap; close completed agents after writing a context capsule; never pass full history when a capsule and line-bounded reads are sufficient"
     },
     "registryCommand": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py runtime components",
+    "declarativeRegistry": "runtime-components.json",
     "componentKinds": [
       "input-filter",
       "processing-interceptor",
@@ -270,6 +271,7 @@
     ],
     "runtimeCommands": {
       "components": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py runtime components",
+      "exportDeclarativeRegistry": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py runtime export-declarative-registry --check",
       "contractDescribe": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py contract describe",
       "taskRunPlan": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-run plan",
       "taskRunRun": "python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-run run",
