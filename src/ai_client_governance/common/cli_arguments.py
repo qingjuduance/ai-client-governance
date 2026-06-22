@@ -84,3 +84,48 @@ def add_common_global_args(
             add_format_arg(parser, suppress_default=suppress_default)
         else:
             raise ValueError(f"unknown common argparse global: {name}")
+
+
+def migrate_global_args(
+    argv: list[str],
+    *,
+    names: Iterable[str] = COMMON_GLOBAL_ARG_NAMES,
+) -> list[str]:
+    """Move selected root options before subcommands before argparse sees argv.
+
+    This is for nested subcommand CLIs where registering duplicate root options
+    on every parser layer would be noisy. Only use it for options whose spelling
+    and semantics are root-global for the whole command tree.
+    """
+    selected = set(names)
+    unknown = selected.difference(COMMON_GLOBAL_ARG_NAMES)
+    if unknown:
+        raise ValueError(f"unknown common argparse global: {', '.join(sorted(unknown))}")
+    option_names = {f"--{name}" for name in selected}
+    globals_first: list[str] = []
+    remainder: list[str] = []
+    index = 0
+    while index < len(argv):
+        item = argv[index]
+        if item == "--":
+            remainder.extend(argv[index:])
+            break
+        if item in option_names:
+            globals_first.append(item)
+            if index + 1 < len(argv):
+                globals_first.append(argv[index + 1])
+                index += 2
+            else:
+                index += 1
+            continue
+        option_with_value = next(
+            (option for option in option_names if item.startswith(f"{option}=")),
+            None,
+        )
+        if option_with_value is not None:
+            globals_first.append(item)
+            index += 1
+            continue
+        remainder.append(item)
+        index += 1
+    return [*globals_first, *remainder]

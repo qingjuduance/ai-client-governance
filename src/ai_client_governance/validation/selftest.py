@@ -5224,6 +5224,90 @@ def test_sync_check_records_db_state(root: Path, run_dir: Path) -> TestResult:
     )
 
 
+def test_worktree_coord_nested_global_args(root: Path, run_dir: Path) -> TestResult:
+    project = run_dir / "worktree-coord-global-args-project"
+    session_id = "S-SELFTEST-GLOBAL-ARGS"
+    project.mkdir(parents=True, exist_ok=True)
+    write_text_lf(project / "README.md", "# worktree coord global args selftest\n")
+    commands = [
+        run_command(["git", "init", "-b", "main"], cwd=project, env_root=root),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "worktree-coord",
+                "session",
+                "register",
+                "--session-id",
+                session_id,
+                "--title",
+                "global args order selftest",
+                "--scope",
+                "README.md",
+            ],
+            cwd=project,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "worktree-coord",
+                "lock",
+                "acquire",
+                "--session-id",
+                session_id,
+                "--scope",
+                "README.md",
+                "--reason",
+                "nested global args selftest",
+                "--format",
+                "json",
+            ],
+            cwd=project,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "worktree-coord",
+                "status",
+                "--active-only",
+                "--format=json",
+            ],
+            cwd=project,
+            env_root=root,
+        ),
+    ]
+    lock_payload: dict[str, object] = {}
+    status_payload: dict[str, object] = {}
+    try:
+        lock_payload = json.loads(commands[2].stdout)
+        status_payload = json.loads(commands[3].stdout)
+    except json.JSONDecodeError:
+        pass
+    passed = (
+        all(command.exit_code == 0 for command in commands)
+        and lock_payload.get("status") == "acquired"
+        and isinstance(lock_payload.get("locks"), list)
+        and bool(lock_payload.get("locks"))
+        and isinstance(status_payload.get("summary"), dict)
+        and "unrecognized arguments" not in commands[2].stderr
+        and "unrecognized arguments" not in commands[3].stderr
+    )
+    return TestResult(
+        name="worktree-coord-nested-global-args",
+        passed=passed,
+        summary=(
+            "worktree-coord accepts --format after nested subcommands"
+            if passed
+            else "worktree-coord rejected or ignored nested --format global args"
+        ),
+        commands=commands,
+    )
+
+
 def test_worktree_closeout_all_closes_coord_session(root: Path, run_dir: Path) -> TestResult:
     sandbox = Path(tempfile.mkdtemp(prefix="aicg-closeout-"))
     project = sandbox / "p"
@@ -5569,6 +5653,7 @@ def main() -> int:
             test_runtime_manifest_report(root, run_dir),
             test_lifecycle_analysis_contract_preflight(root, run_dir),
             test_sync_check_records_db_state(root, run_dir),
+            test_worktree_coord_nested_global_args(root, run_dir),
             test_worktree_closeout_all_closes_coord_session(root, run_dir),
         ]
     finally:
