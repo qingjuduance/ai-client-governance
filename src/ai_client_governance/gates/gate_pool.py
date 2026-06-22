@@ -44,6 +44,8 @@ TEXT_EXTENSIONS = {
 
 PLACEHOLDER_TASK_ID = "<task-id>"
 PYCACHE_PREFIX_ENV = "AICG_PYTHONPYCACHEPREFIX"
+DOC_INDEX_STEP_NAME = "ai_client_governance.py doc-index"
+DOC_IMPACT_EVENT_TYPE = "doc-impact.analysis"
 
 
 @dataclass(frozen=True)
@@ -150,6 +152,124 @@ def normalize_paths(paths: list[str]) -> list[str]:
 
 def task_type_args(task_types: list[str]) -> list[str]:
     return ["--task-types", *task_types] if task_types else []
+
+
+def doc_impact_payload(
+    *,
+    root: Path,
+    changed_paths: list[str],
+    step: GateStep,
+    exit_code: int,
+    trace_id: str,
+) -> dict[str, object]:
+    directories: list[str] = []
+    local_readmes: list[str] = []
+    reference_records: list[str] = []
+    parent_entrypoints: list[str] = []
+    for value in changed_paths:
+        normalized_path = value.replace("\\", "/")
+        path = Path(normalized_path)
+        directory = "." if str(path.parent) == "." else path.parent.as_posix()
+        if directory not in directories:
+            directories.append(directory)
+        readme = "README.md" if directory == "." else f"{directory}/README.md"
+        if readme not in local_readmes:
+            local_readmes.append(readme)
+        if path.suffix.lower() == ".md":
+            ref = Path(directory) / ".references" / path.name if directory != "." else Path(".references") / path.name
+            reference_records.append(ref.as_posix())
+        parents = list(path.parents)
+        for parent in parents[:3]:
+            parent_text = "." if str(parent) == "." else parent.as_posix()
+            for entry_name in ("README.md", "AGENTS.md"):
+                candidate = entry_name if parent_text == "." else f"{parent_text}/{entry_name}"
+                if candidate not in parent_entrypoints:
+                    parent_entrypoints.append(candidate)
+    return {
+        "source": "gate-pool",
+        "event_type": DOC_IMPACT_EVENT_TYPE,
+        "status": "pass" if exit_code == 0 else "fail",
+        "exit_code": exit_code,
+        "trace_id": trace_id,
+        "cwd": str(root),
+        "command": step.command,
+        "changed_paths": changed_paths,
+        "bubble": {
+            "directories": directories,
+            "local_readmes": local_readmes,
+            "reference_records": sorted(set(reference_records)),
+            "parent_entrypoints": parent_entrypoints,
+            "global_entrypoints": ["README.md", "AGENTS.md", "manifest.json"],
+        },
+        "policy": (
+            "Changed documentation, rules, scripts, manifest, or adapter paths bubble through local README, "
+            ".references, parent entrypoints, manifest/command docs, and inbound links via doc-index."
+        ),
+    }
+
+
+def record_doc_impact_evidence(
+    root: Path,
+    entrypoint: Path,
+    args: argparse.Namespace,
+    step: GateStep,
+    *,
+    exit_code: int,
+    trace_id: str,
+) -> int:
+    if not args.task_id:
+        return 0
+    payload = doc_impact_payload(
+        root=root,
+        changed_paths=normalize_paths(args.changed_path),
+        step=step,
+        exit_code=exit_code,
+        trace_id=trace_id,
+    )
+    env = os.environ.copy()
+    env["PYTHONPYCACHEPREFIX"] = str(pycache_prefix(host_project_root(root)))
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUTF8"] = "1"
+    db_args = structured_db_args(args, root)
+    event_command = [
+        sys.executable,
+        str(entrypoint),
+        "task-record",
+        *db_args,
+        "append-event",
+        "--task-id",
+        args.task_id,
+        "--event-type",
+        DOC_IMPACT_EVENT_TYPE,
+        "--payload-json",
+        json.dumps(payload, ensure_ascii=False, sort_keys=True),
+        "--format",
+        "json",
+    ]
+    validation_command = [
+        sys.executable,
+        str(entrypoint),
+        "task-record",
+        *db_args,
+        "append-validation",
+        "--task-id",
+        args.task_id,
+        "--command",
+        subprocess.list2cmdline(step.command),
+        "--cwd",
+        str(root),
+        "--result",
+        "pass" if exit_code == 0 else "fail",
+        "--summary",
+        f"doc-index changed-path bubbling {'passed' if exit_code == 0 else 'failed'} for {len(payload['changed_paths'])} path(s)",
+        "--evidence",
+        json.dumps(payload, ensure_ascii=False, sort_keys=True),
+        "--format",
+        "json",
+    ]
+    event_result = subprocess.run(event_command, cwd=root, env=env)
+    validation_result = subprocess.run(validation_command, cwd=root, env=env)
+    return event_result.returncode or validation_result.returncode
 
 
 def registry_gate_steps(task_types: list[str], changed_paths: list[str], final: bool, event: str) -> set[str]:
@@ -355,7 +475,7 @@ def build_steps(root: Path, args: argparse.Namespace) -> list[GateStep]:
             doc_index_args.extend(["--changed-path", path])
         steps.append(
             GateStep(
-                name="ai_client_governance.py doc-index",
+                name=DOC_INDEX_STEP_NAME,
                 phase="post-change",
                 command=cli_command(py, entrypoint, "doc-index", *doc_index_args),
                 final_gate=args.final,
@@ -847,8 +967,21 @@ def main() -> int:
             task_types=task_types,
             attempt=index,
         )
+        record_result = 0
+        if step.name == DOC_INDEX_STEP_NAME:
+            record_result = record_doc_impact_evidence(
+                root,
+                entrypoint,
+                args,
+                step,
+                exit_code=result,
+                trace_id=trace_id,
+            )
         if result != 0:
             exit_code = result
+            break
+        if record_result != 0:
+            exit_code = record_result
             break
     run_record(
         root,

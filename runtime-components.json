@@ -1,0 +1,3381 @@
+{
+  "components": [
+    {
+      "condition": "Run before planning, write-intent, resume, or final-output for every non-trivial user message.",
+      "dedupe_key": "task_id:user-message",
+      "dependencies": [],
+      "description": "Mandatory user-message join point that records input-filter facts before processing.",
+      "effect": "state_write",
+      "events": [
+        "user-message"
+      ],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "ai_client_governance.py lifecycle input-filter + task-record gate --event preflight",
+      "gate_step": "input-filter-preflight",
+      "id": "input.filter.user-message-preflight",
+      "input_sources": [],
+      "kind": "input-filter",
+      "mechanism_label": "",
+      "metadata": {
+        "advice": "around",
+        "filter_chain": [
+          "classify-source",
+          "user-claim-validation",
+          "client-identity",
+          "agent-decision",
+          "data-confirmation",
+          "shell-proxy-usage",
+          "history-requirement-recovery",
+          "readonly-side-effect-policy",
+          "decompose-requirements",
+          "recordability-judgement",
+          "network-search-judgement",
+          "acceptance-extract"
+        ],
+        "join_point": "user-message",
+        "required_event": "input-filter.preflight"
+      },
+      "order": 90,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "single message parse plus SQLite gate; no repository scan",
+      "phase": "input",
+      "produces_facts": [
+        "requirements",
+        "triggers",
+        "input_filter_report",
+        "input_filter_preflight_event"
+      ],
+      "requires_changed_paths": false,
+      "requires_facts": [
+        "raw_input"
+      ],
+      "task_sizes": [],
+      "task_types": []
+    },
+    {
+      "condition": "Run at host-client capability boundaries before repository writes or important shell commands. The default raw-shell strategy is local command-proxy activation, like a Python virtual environment; it must not modify user profiles, PATH, terminal settings, or global shell behavior.",
+      "dedupe_key": "task_id:event:host-capability-gateway",
+      "dependencies": [],
+      "description": "Bridge host-client write/shell capabilities to lifecycle, task-record, and local command-proxy facts.",
+      "effect": "state_write",
+      "events": [
+        "user-message",
+        "write-intent",
+        "after-change",
+        "final-output",
+        "resume"
+      ],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "ai_client_governance.py task-record gate requires event_type=capability-gateway.facts",
+      "gate_step": "capability-gateway",
+      "id": "client.runtime.host-capability-gateway",
+      "input_sources": [],
+      "kind": "processing-interceptor",
+      "mechanism_label": "",
+      "metadata": {
+        "lifecycle_boundary": "lifecycle input-filter + task-record gate --event preflight",
+        "non_invasive_policy": {
+          "global_path_modified": false,
+          "profile_policy": "no_profile",
+          "profile_touched": false,
+          "user_shell_impact": "none"
+        },
+        "profile_shim_policy": "explicit opt-in only; not a default enforcement path",
+        "required_event": "capability-gateway.facts",
+        "shell_boundary": "shell-adapter proxy-powershell no-profile command proxy"
+      },
+      "order": 95,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "single SQLite fact check plus optional telemetry read; no profile writes",
+      "phase": "preflight",
+      "produces_facts": [
+        "lifecycle_input_filter_enforced",
+        "prewrite_runtime_adapter_decision",
+        "non_invasive_shell_command_proxy"
+      ],
+      "requires_changed_paths": false,
+      "requires_facts": [
+        "task_id",
+        "input_filter_preflight_event",
+        "capability_gateway_facts"
+      ],
+      "task_sizes": [],
+      "task_types": [
+        "code-debug",
+        "correction",
+        "rules-script",
+        "docs",
+        "git",
+        "frontend",
+        "resume",
+        "multi-agent"
+      ]
+    },
+    {
+      "condition": "Run before write-intent, final-output, or resume gates so audits can identify which client/model combinations skipped the standard flow.",
+      "dedupe_key": "task_id:user-message:client-identity",
+      "dependencies": [],
+      "description": "Record the current AI client and model identity for audit correlation.",
+      "effect": "state_write",
+      "events": [
+        "user-message",
+        "resume"
+      ],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "ai_client_governance.py task-record gate requires event_type=client-identity.analysis",
+      "gate_step": "client-identity",
+      "id": "input.filter.client-identity",
+      "input_sources": [],
+      "kind": "input-filter",
+      "mechanism_label": "ai_client_governance.py lifecycle input-filter client-identity",
+      "metadata": {
+        "aop_role": "around-advice",
+        "join_point": "user-message",
+        "known_client_examples": [
+          "codex",
+          "claude-code",
+          "cursor",
+          "cline",
+          "windsurf",
+          "continue",
+          "trae",
+          "doubao",
+          "roo",
+          "aider"
+        ],
+        "required_event": "client-identity.analysis",
+        "required_fields": [
+          "client_type",
+          "model_id"
+        ],
+        "shell_coverage_pair": "raw shell coverage is audited separately by shell-adapter diagnostics",
+        "unknown_policy": "record explicit unknown values instead of omitting identity"
+      },
+      "order": 106,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "constant-time CLI/env/default identity capture; no repository scan",
+      "phase": "input",
+      "produces_facts": [
+        "client_type",
+        "model_id",
+        "client_identity_event"
+      ],
+      "requires_changed_paths": false,
+      "requires_facts": [
+        "task_id"
+      ],
+      "task_sizes": [],
+      "task_types": []
+    },
+    {
+      "condition": "Run for every new user, web, file, tool, agent, or history input.",
+      "dedupe_key": "",
+      "dependencies": [],
+      "description": "Classify input source and trust boundary.",
+      "effect": "readonly",
+      "events": [
+        "user-message",
+        "resume"
+      ],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "",
+      "gate_step": "",
+      "id": "input.filter.classify-source",
+      "input_sources": [],
+      "kind": "input-filter",
+      "mechanism_label": "",
+      "metadata": {},
+      "order": 100,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "",
+      "phase": "input",
+      "produces_facts": [
+        "input_source",
+        "trust_boundary"
+      ],
+      "requires_changed_paths": false,
+      "requires_facts": [
+        "raw_input"
+      ],
+      "task_sizes": [],
+      "task_types": []
+    },
+    {
+      "condition": "Run before planning or write-intent when a user message contains facts, diagnoses, approvals, or execution claims that may be wrong, stale, or conflict with live state.",
+      "dedupe_key": "task_id:user-message:user-claims",
+      "dependencies": [],
+      "description": "Classify user assertions separately from user goals before they steer execution.",
+      "effect": "state_write",
+      "events": [
+        "user-message",
+        "resume"
+      ],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "ai_client_governance.py task-record gate requires event_type=user-claim-validation.analysis",
+      "gate_step": "user-claim-validation",
+      "id": "input.filter.user-claim-validation",
+      "input_sources": [],
+      "kind": "input-filter",
+      "mechanism_label": "ai_client_governance.py lifecycle input-filter user-claim-validation",
+      "metadata": {
+        "aop_role": "around-advice",
+        "join_point": "user-message",
+        "required_event": "user-claim-validation.analysis"
+      },
+      "order": 105,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "local message segmentation and risk flags only; verification commands are planned separately",
+      "phase": "input",
+      "produces_facts": [
+        "user_claims",
+        "claim_trust_levels",
+        "claim_verification_actions"
+      ],
+      "requires_changed_paths": false,
+      "requires_facts": [
+        "raw_input",
+        "input_source"
+      ],
+      "task_sizes": [],
+      "task_types": []
+    },
+    {
+      "condition": "Run for medium/large, mutating, rules-script, correction, git/worktree, long-running, or user-requested multi-agent work. Not spawning agents still requires a reason and alternate validation.",
+      "dedupe_key": "task_id:user-message:agent-decision",
+      "dependencies": [],
+      "description": "Record whether to spawn, reuse, defer, or skip sub-agents before larger work proceeds.",
+      "effect": "state_write",
+      "events": [
+        "user-message",
+        "resume"
+      ],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "ai_client_governance.py task-record gate requires event_type=agent-decision.analysis",
+      "gate_step": "agent-decision",
+      "id": "input.filter.agent-decision",
+      "input_sources": [],
+      "kind": "input-filter",
+      "mechanism_label": "ai_client_governance.py lifecycle input-filter agent-decision",
+      "metadata": {
+        "required_event": "agent-decision.analysis",
+        "required_fields": [
+          "agent_group_decision",
+          "spawn_count",
+          "no_spawn_reason",
+          "context_pack_ref",
+          "data_confirmation_evidence"
+        ]
+      },
+      "order": 107,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "constant-size decision record; any history or code scan is a separate confirmation step",
+      "phase": "input",
+      "produces_facts": [
+        "agent_group_decision",
+        "spawn_count",
+        "no_spawn_reason",
+        "context_pack_ref"
+      ],
+      "requires_changed_paths": false,
+      "requires_facts": [
+        "task_id",
+        "task_type",
+        "requirement_rows"
+      ],
+      "task_sizes": [],
+      "task_types": []
+    },
+    {
+      "condition": "Run before planning or write-intent for every medium/large or mutating task.",
+      "dedupe_key": "task_id:user-message:data-confirmation",
+      "dependencies": [],
+      "description": "Record confirmed data sources and unchecked boundaries before claims or history steer execution.",
+      "effect": "state_write",
+      "events": [
+        "user-message",
+        "resume"
+      ],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "ai_client_governance.py task-record gate requires event_type=data-confirmation.analysis",
+      "gate_step": "data-confirmation",
+      "id": "input.filter.data-confirmation",
+      "input_sources": [],
+      "kind": "input-filter",
+      "mechanism_label": "ai_client_governance.py lifecycle input-filter data-confirmation",
+      "metadata": {
+        "required_event": "data-confirmation.analysis",
+        "required_fields": [
+          "confirmation_sources",
+          "checked_facts",
+          "unverified_items"
+        ]
+      },
+      "order": 108,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "records confirmation facts only; expensive verification belongs to validation commands",
+      "phase": "input",
+      "produces_facts": [
+        "confirmation_sources",
+        "checked_facts",
+        "unverified_items"
+      ],
+      "requires_changed_paths": false,
+      "requires_facts": [
+        "task_id",
+        "user_claims",
+        "scope_kind"
+      ],
+      "task_sizes": [],
+      "task_types": []
+    },
+    {
+      "condition": "Run for correction, rules-script, multi-agent, long-running, or messages such as 'previously said', 'keeps forgetting', or 'find them all'.",
+      "dedupe_key": "task_id:user-message:history-requirement-recovery",
+      "dependencies": [],
+      "description": "Recover repeated user process requirements from available history before correction or framework work.",
+      "effect": "state_write",
+      "events": [
+        "user-message",
+        "resume"
+      ],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "ai_client_governance.py task-record gate requires event_type=history-requirement-recovery.analysis",
+      "gate_step": "history-requirement-recovery",
+      "id": "input.filter.history-requirement-recovery",
+      "input_sources": [],
+      "kind": "input-filter",
+      "mechanism_label": "ai_client_governance.py lifecycle input-filter history-requirement-recovery",
+      "metadata": {
+        "required_event": "history-requirement-recovery.analysis",
+        "required_fields": [
+          "history_sources",
+          "recovered_requirements"
+        ]
+      },
+      "order": 109,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "bounded scan of declared history sources; long files should use context-extract",
+      "phase": "input",
+      "produces_facts": [
+        "recovered_requirements",
+        "history_record_refs"
+      ],
+      "requires_changed_paths": false,
+      "requires_facts": [
+        "task_id",
+        "raw_input",
+        "history_sources"
+      ],
+      "task_sizes": [],
+      "task_types": []
+    },
+    {
+      "condition": "Run before important Windows PowerShell commands. Complex command strings should use shell-adapter proxy-powershell --powershell-command-file. The proxy is local/no-profile and must not alter user shell profiles, PATH, terminal settings, or global behavior.",
+      "dedupe_key": "task_id:event:shell-proxy-usage",
+      "dependencies": [],
+      "description": "Record the PowerShell proxy plan or gated exception before important local commands run.",
+      "effect": "state_write",
+      "events": [
+        "user-message",
+        "plan-output",
+        "write-intent",
+        "resume",
+        "final-output"
+      ],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "ai_client_governance.py task-record gate requires event_type=shell-proxy-usage.analysis",
+      "gate_step": "shell-proxy-usage",
+      "id": "preflight.interceptor.shell-proxy-usage",
+      "input_sources": [],
+      "kind": "processing-interceptor",
+      "mechanism_label": "ai_client_governance.py lifecycle input-filter shell-proxy-usage",
+      "metadata": {
+        "final_required": "used_proxy=true with enforcement_mode=non-invasive-command-proxy, profile_policy=no_profile, profile_touched=false, user_shell_impact=none, or exception_reason",
+        "required_event": "shell-proxy-usage.analysis",
+        "required_fields": [
+          "policy",
+          "planned_runner"
+        ]
+      },
+      "order": 209,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "constant-size policy record; diagnostics are a separate readonly gate",
+      "phase": "preflight",
+      "produces_facts": [
+        "shell_proxy_usage",
+        "raw_shell_gap_exception"
+      ],
+      "requires_changed_paths": false,
+      "requires_facts": [
+        "task_id",
+        "command_candidates",
+        "execution_environment"
+      ],
+      "task_sizes": [
+        "medium",
+        "large"
+      ],
+      "task_types": []
+    },
+    {
+      "condition": "Run before readonly audits or status commands. Commands such as --record-state or sync-check state writes are forbidden when readonly_contract=true.",
+      "dedupe_key": "task_id:event:readonly-side-effect-policy",
+      "dependencies": [],
+      "description": "Record whether a task is truly readonly and whether DB/status writes are allowed.",
+      "effect": "state_write",
+      "events": [
+        "user-message",
+        "plan-output",
+        "write-intent",
+        "resume",
+        "final-output"
+      ],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "ai_client_governance.py task-record gate requires event_type=readonly-side-effect-policy.analysis",
+      "gate_step": "readonly-side-effect-policy",
+      "id": "preflight.interceptor.readonly-side-effect-policy",
+      "input_sources": [],
+      "kind": "processing-interceptor",
+      "mechanism_label": "ai_client_governance.py lifecycle input-filter readonly-side-effect-policy",
+      "metadata": {
+        "required_event": "readonly-side-effect-policy.analysis",
+        "required_fields": [
+          "readonly_contract",
+          "db_write_allowed",
+          "record_state_allowed",
+          "side_effect_class",
+          "dry_run_supported"
+        ]
+      },
+      "order": 209,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "constant-size policy record; file/DB hashing is a separate validation command",
+      "phase": "preflight",
+      "produces_facts": [
+        "readonly_contract",
+        "db_write_allowed",
+        "record_state_allowed"
+      ],
+      "requires_changed_paths": false,
+      "requires_facts": [
+        "task_id",
+        "command_candidates",
+        "side_effects"
+      ],
+      "task_sizes": [
+        "medium",
+        "large"
+      ],
+      "task_types": []
+    },
+    {
+      "condition": "Run when the input contains a user goal, correction, approval, or new constraint.",
+      "dedupe_key": "",
+      "dependencies": [],
+      "description": "Split user input into stable REQ rows.",
+      "effect": "readonly",
+      "events": [
+        "user-message"
+      ],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "",
+      "gate_step": "",
+      "id": "input.filter.decompose-requirements",
+      "input_sources": [],
+      "kind": "input-filter",
+      "mechanism_label": "",
+      "metadata": {},
+      "order": 110,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "",
+      "phase": "input",
+      "produces_facts": [
+        "requirement_rows"
+      ],
+      "requires_changed_paths": false,
+      "requires_facts": [
+        "raw_input"
+      ],
+      "task_sizes": [],
+      "task_types": []
+    },
+    {
+      "condition": "Run after requirement decomposition and before task tracking decisions.",
+      "dedupe_key": "",
+      "dependencies": [],
+      "description": "Decide whether each requirement must be recorded.",
+      "effect": "readonly",
+      "events": [
+        "user-message"
+      ],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "",
+      "gate_step": "",
+      "id": "input.filter.recordability-judgement",
+      "input_sources": [],
+      "kind": "input-filter",
+      "mechanism_label": "",
+      "metadata": {},
+      "order": 120,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "",
+      "phase": "input",
+      "produces_facts": [
+        "recordability_decisions"
+      ],
+      "requires_changed_paths": false,
+      "requires_facts": [
+        "requirement_rows"
+      ],
+      "task_sizes": [],
+      "task_types": []
+    },
+    {
+      "condition": "Run when user input or task type may depend on current or external facts.",
+      "dedupe_key": "",
+      "dependencies": [],
+      "description": "Decide whether external search or URL evidence is required.",
+      "effect": "readonly",
+      "events": [
+        "user-message"
+      ],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "",
+      "gate_step": "",
+      "id": "input.filter.network-search-judgement",
+      "input_sources": [],
+      "kind": "input-filter",
+      "mechanism_label": "",
+      "metadata": {},
+      "order": 130,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "",
+      "phase": "input",
+      "produces_facts": [
+        "search_required_decisions"
+      ],
+      "requires_changed_paths": false,
+      "requires_facts": [
+        "requirement_rows"
+      ],
+      "task_sizes": [],
+      "task_types": []
+    },
+    {
+      "condition": "Run when the user asks for implementation, plan, redesign, correction, or completion.",
+      "dedupe_key": "",
+      "dependencies": [],
+      "description": "Extract user-visible acceptance criteria before execution.",
+      "effect": "readonly",
+      "events": [
+        "user-message",
+        "plan-output"
+      ],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "",
+      "gate_step": "",
+      "id": "input.filter.acceptance-extract",
+      "input_sources": [],
+      "kind": "input-filter",
+      "mechanism_label": "",
+      "metadata": {},
+      "order": 135,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "",
+      "phase": "input",
+      "produces_facts": [
+        "acceptance_criteria"
+      ],
+      "requires_changed_paths": false,
+      "requires_facts": [
+        "requirement_rows"
+      ],
+      "task_sizes": [],
+      "task_types": []
+    },
+    {
+      "condition": "Run when repository, project, or global skills may match the user's request.",
+      "dedupe_key": "",
+      "dependencies": [],
+      "description": "Select candidate skills as capability plugins without bypassing governance gates.",
+      "effect": "readonly",
+      "events": [
+        "user-message"
+      ],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "",
+      "gate_step": "",
+      "id": "input.filter.skill-router",
+      "input_sources": [],
+      "kind": "input-filter",
+      "mechanism_label": "",
+      "metadata": {},
+      "order": 145,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "",
+      "phase": "input",
+      "produces_facts": [
+        "candidate_skills"
+      ],
+      "requires_changed_paths": false,
+      "requires_facts": [
+        "raw_input",
+        "requirement_rows"
+      ],
+      "task_sizes": [],
+      "task_types": []
+    },
+    {
+      "condition": "",
+      "dedupe_key": "",
+      "dependencies": [],
+      "description": "Keep web facts separate from user instructions.",
+      "effect": "readonly",
+      "events": [],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "",
+      "gate_step": "",
+      "id": "input.filter.citation-boundary",
+      "input_sources": [
+        "web"
+      ],
+      "kind": "input-filter",
+      "mechanism_label": "",
+      "metadata": {},
+      "order": 140,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "",
+      "phase": "input",
+      "produces_facts": [],
+      "requires_changed_paths": false,
+      "requires_facts": [],
+      "task_sizes": [],
+      "task_types": []
+    },
+    {
+      "condition": "",
+      "dedupe_key": "",
+      "dependencies": [],
+      "description": "Require task tracking for medium, large, and gated work.",
+      "effect": "readonly",
+      "events": [],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "",
+      "gate_step": "",
+      "id": "preflight.interceptor.task-tracking",
+      "input_sources": [],
+      "kind": "processing-interceptor",
+      "mechanism_label": "",
+      "metadata": {},
+      "order": 200,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "",
+      "phase": "preflight",
+      "produces_facts": [],
+      "requires_changed_paths": false,
+      "requires_facts": [],
+      "task_sizes": [
+        "medium",
+        "large"
+      ],
+      "task_types": []
+    },
+    {
+      "condition": "Run before gated work so the AI sees required fields and enums before writing.",
+      "dedupe_key": "",
+      "dependencies": [],
+      "description": "Describe typed task-record fields before execution.",
+      "effect": "readonly",
+      "events": [
+        "user-message",
+        "plan-output",
+        "write-intent",
+        "resume"
+      ],
+      "fail_policy": "warn_only",
+      "final_only": false,
+      "gate_label": "",
+      "gate_step": "",
+      "id": "preflight.interceptor.structured-contract",
+      "input_sources": [],
+      "kind": "processing-interceptor",
+      "mechanism_label": "ai_client_governance.py contract describe",
+      "metadata": {},
+      "order": 205,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "local JSON/text render; no repo scan",
+      "phase": "preflight",
+      "produces_facts": [
+        "structured_task_contract"
+      ],
+      "requires_changed_paths": false,
+      "requires_facts": [
+        "task_type",
+        "event"
+      ],
+      "task_sizes": [
+        "medium",
+        "large"
+      ],
+      "task_types": []
+    },
+    {
+      "condition": "Run before editing or expensive validation; if scope, non-goals, risks, or acceptance are unclear, stop before write-intent instead of compensating with broad tests at closeout.",
+      "dedupe_key": "task_id:event:changed_paths:analysis-contract",
+      "dependencies": [],
+      "description": "Require a clear task analysis contract before write-intent.",
+      "effect": "readonly",
+      "events": [
+        "plan-output",
+        "write-intent",
+        "resume",
+        "final-output"
+      ],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "ai_client_governance.py completion-test --require-analysis",
+      "gate_step": "analysis-contract",
+      "id": "preflight.gate.analysis-contract",
+      "input_sources": [],
+      "kind": "cross-cutting-gate",
+      "mechanism_label": "ai_client_governance.py completion-test --require-analysis",
+      "metadata": {
+        "budget_policy": "required validation checks must fit the declared budget unless explicitly upgraded",
+        "required_fields": [
+          "analysis-summary",
+          "analysis-scope",
+          "non-goal",
+          "risk",
+          "acceptance"
+        ]
+      },
+      "order": 205,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "local path classification and constant-size analysis fields; no repository scan",
+      "phase": "preflight",
+      "produces_facts": [
+        "analysis_contract",
+        "validation_budget"
+      ],
+      "requires_changed_paths": false,
+      "requires_facts": [
+        "task_id",
+        "changed_paths",
+        "acceptance_criteria"
+      ],
+      "task_sizes": [
+        "medium",
+        "large"
+      ],
+      "task_types": []
+    },
+    {
+      "condition": "Run before diagnostics, repository writes, stage/commit, or closeout; commit approval never implies push approval.",
+      "dedupe_key": "task_id:event:approval_label:push_policy",
+      "dependencies": [],
+      "description": "Require explicit plan, approval, commit, and push boundaries before execution.",
+      "effect": "state_write",
+      "events": [
+        "user-message",
+        "plan-output",
+        "write-intent",
+        "resume",
+        "final-output"
+      ],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "ai_client_governance.py task-record gate requires event_type=plan-approval-boundary.analysis",
+      "gate_step": "plan-approval-boundary",
+      "id": "preflight.interceptor.plan-approval-boundary",
+      "input_sources": [],
+      "kind": "processing-interceptor",
+      "mechanism_label": "ai_client_governance.py lifecycle input-filter plan-approval-boundary",
+      "metadata": {
+        "aop_role": "around-advice",
+        "join_point": "plan-output",
+        "push_policy": "push_requires_separate_approval",
+        "required_event": "plan-approval-boundary.analysis"
+      },
+      "order": 206,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "constant-time task-record payload check; no repository scan",
+      "phase": "preflight",
+      "produces_facts": [
+        "plan_approval_boundary",
+        "push_policy"
+      ],
+      "requires_changed_paths": false,
+      "requires_facts": [
+        "task_id",
+        "approval_label",
+        "task_type"
+      ],
+      "task_sizes": [
+        "medium",
+        "large"
+      ],
+      "task_types": []
+    },
+    {
+      "condition": "Run before write-intent or final-output for every medium/large or mutating task; prefer one local task-run/gate-pool/telemetry pass over repeated model-mediated command selection.",
+      "dedupe_key": "task_id:event:changed_paths:command_candidates",
+      "dependencies": [],
+      "description": "Analyze whether newly generated local commands can be deduped, batched, or replaced by a local runner.",
+      "effect": "readonly",
+      "events": [
+        "user-message",
+        "plan-output",
+        "write-intent",
+        "resume",
+        "final-output"
+      ],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "ai_client_governance.py task-record gate requires event_type=command-compression.analysis",
+      "gate_step": "command-compression",
+      "id": "preflight.interceptor.command-compression",
+      "input_sources": [],
+      "kind": "processing-interceptor",
+      "mechanism_label": "ai_client_governance.py task-run plan",
+      "metadata": {
+        "aop_role": "around-advice",
+        "join_point": "write-intent",
+        "required_event": "command-compression.analysis",
+        "telemetry_policy": "write execution spans to aicg.db through task-run, gate-pool, shell-adapter, telemetry record, or the command adapter until host shell interception exists"
+      },
+      "order": 208,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "local command list normalization and grouping only; no repository scan unless explicit commands do it",
+      "phase": "preflight",
+      "produces_facts": [
+        "command_compression_analysis",
+        "command_compression_event"
+      ],
+      "requires_changed_paths": false,
+      "requires_facts": [
+        "task_id",
+        "task_type",
+        "command_candidates"
+      ],
+      "task_sizes": [
+        "medium",
+        "large"
+      ],
+      "task_types": []
+    },
+    {
+      "condition": "Run before write-intent or final-output for every mutating task, including small edits; the medium/large node covers large non-mutating planning while this node closes the mutation gap.",
+      "dedupe_key": "task_id:event:changed_paths:command_candidates",
+      "dependencies": [],
+      "description": "Analyze command compression for mutating tasks even when they are classified as small.",
+      "effect": "readonly",
+      "events": [
+        "user-message",
+        "plan-output",
+        "write-intent",
+        "resume",
+        "final-output"
+      ],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "ai_client_governance.py task-record gate requires event_type=command-compression.analysis",
+      "gate_step": "command-compression",
+      "id": "preflight.interceptor.command-compression.mutating",
+      "input_sources": [],
+      "kind": "processing-interceptor",
+      "mechanism_label": "ai_client_governance.py task-run plan",
+      "metadata": {
+        "aop_role": "around-advice",
+        "coverage": "mutating-task-fast-path",
+        "join_point": "write-intent",
+        "required_event": "command-compression.analysis",
+        "telemetry_policy": "write execution spans to aicg.db through task-run, gate-pool, shell-adapter, telemetry record, or the command adapter until host shell interception exists"
+      },
+      "order": 208,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "local command list normalization and grouping only; no repository scan unless explicit commands do it",
+      "phase": "preflight",
+      "produces_facts": [
+        "command_compression_analysis",
+        "command_compression_event"
+      ],
+      "requires_changed_paths": false,
+      "requires_facts": [
+        "task_id",
+        "task_type",
+        "command_candidates"
+      ],
+      "task_sizes": [],
+      "task_types": [
+        "code-debug",
+        "correction",
+        "rules-script",
+        "docs",
+        "git",
+        "frontend",
+        "resume",
+        "multi-agent"
+      ]
+    },
+    {
+      "condition": "Run whenever a task may touch rules, scripts, skills, records, or project files; common facts stay in ai-client-governance and project-specific facts stay in .ai-client/project or native project assets.",
+      "dedupe_key": "task_id:event:changed_paths:command_candidates:scope",
+      "dependencies": [],
+      "description": "Classify each task as common governance, project specialization, native project, or mixed before write-intent.",
+      "effect": "readonly",
+      "events": [
+        "user-message",
+        "plan-output",
+        "write-intent",
+        "resume",
+        "final-output"
+      ],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "ai_client_governance.py task-record gate checks scope-classification trigger",
+      "gate_step": "scope-classification",
+      "id": "preflight.interceptor.scope-classification",
+      "input_sources": [],
+      "kind": "processing-interceptor",
+      "mechanism_label": "ai_client_governance.py lifecycle input-filter scope-classification",
+      "metadata": {
+        "aop_role": "before-advice",
+        "join_point": "user-message",
+        "scope_kinds": [
+          "ai-client-governance-common",
+          "project-specialization",
+          "native-project-assets",
+          "mixed",
+          "unknown"
+        ]
+      },
+      "order": 208,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "local path and command-token classification only",
+      "phase": "preflight",
+      "produces_facts": [
+        "scope_kind",
+        "scope_reason",
+        "scope_paths"
+      ],
+      "requires_changed_paths": false,
+      "requires_facts": [
+        "changed_paths",
+        "command_candidates"
+      ],
+      "task_sizes": [
+        "medium",
+        "large"
+      ],
+      "task_types": []
+    },
+    {
+      "condition": "Run when scripts generate coord sessions, locks, lifecycle state, doc-index, pycache, or selftest artifacts; generated telemetry must be repaired by scripts, not hand-edited.",
+      "dedupe_key": "task_id:event:state-artifact-ownership",
+      "dependencies": [],
+      "description": "Require script-generated state and artifacts to declare owner and cleanup commands.",
+      "effect": "state_write",
+      "events": [
+        "write-intent",
+        "after-change",
+        "resume",
+        "final-output"
+      ],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "ai_client_governance.py task-record gate requires event_type=state-artifact-ownership.analysis",
+      "gate_step": "state-artifact-ownership",
+      "id": "preflight.interceptor.state-artifact-ownership",
+      "input_sources": [],
+      "kind": "processing-interceptor",
+      "mechanism_label": "ai_client_governance.py lifecycle input-filter state-artifact-ownership",
+      "metadata": {
+        "aop_role": "around-advice",
+        "join_point": "write-intent",
+        "manual_edit_policy": "forbidden_without_break_glass"
+      },
+      "order": 209,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "constant-time manifest check plus optional owner-command validation",
+      "phase": "preflight",
+      "produces_facts": [
+        "state_artifact_ownership",
+        "cleanup_policy"
+      ],
+      "requires_changed_paths": false,
+      "requires_facts": [
+        "changed_paths",
+        "script_generated_state"
+      ],
+      "task_sizes": [],
+      "task_types": [
+        "rules-script"
+      ]
+    },
+    {
+      "condition": "Run before applying patches to long files, frequently edited governance files, or files touched by multiple worktrees.",
+      "dedupe_key": "task_id:event:patch-targets",
+      "dependencies": [],
+      "description": "Require stable anchors and small-step patches before editing long or hot files.",
+      "effect": "readonly",
+      "events": [
+        "write-intent",
+        "after-change",
+        "resume"
+      ],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "ai_client_governance.py task-record gate requires event_type=patch-preflight.analysis",
+      "gate_step": "patch-preflight",
+      "id": "preflight.interceptor.patch-preflight",
+      "input_sources": [],
+      "kind": "processing-interceptor",
+      "mechanism_label": "context-extract + anchor uniqueness check",
+      "metadata": {
+        "anchor_policy": "verify_unique_or_reextract",
+        "apply_policy": "small_step_patch",
+        "join_point": "write-intent"
+      },
+      "order": 210,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "local rg/context-extract only; no broad repository scan",
+      "phase": "preflight",
+      "produces_facts": [
+        "patch_anchor_policy",
+        "patch_apply_policy"
+      ],
+      "requires_changed_paths": false,
+      "requires_facts": [
+        "changed_paths",
+        "patch_targets"
+      ],
+      "task_sizes": [],
+      "task_types": [
+        "rules-script",
+        "docs",
+        "correction"
+      ]
+    },
+    {
+      "condition": "Run after command-compression analysis when local commands are deterministic enough to execute; readonly and validation groups may parallelize/cache, stateful groups remain ordered and no-cache.",
+      "dedupe_key": "task_id:event:changed_paths:command_candidates:input_hashes",
+      "dependencies": [
+        "preflight.interceptor.command-compression"
+      ],
+      "description": "Execute compressed command groups through the local task-run DAG runner when commands are ready to run.",
+      "effect": "state_write",
+      "events": [
+        "write-intent",
+        "after-change",
+        "resume",
+        "final-output"
+      ],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "ai_client_governance.py task-run diagnose",
+      "gate_step": "task-run-diagnostics",
+      "id": "preflight.interceptor.task-run-dag",
+      "input_sources": [],
+      "kind": "processing-interceptor",
+      "mechanism_label": "ai_client_governance.py task-run run",
+      "metadata": {
+        "aop_role": "around-advice",
+        "cache_key_inputs": [
+          "runner_version",
+          "command",
+          "cwd",
+          "kind",
+          "task_types",
+          "changed_paths",
+          "declared_input_hashes",
+          "git_head"
+        ],
+        "join_point": "write-intent",
+        "observability": "trace_json plus execution telemetry spans in aicg.db",
+        "runner": "task-run run",
+        "uncacheable": "stateful/sequential commands and live worktree probes such as git status/git diff"
+      },
+      "order": 209,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "single local DAG pass; cache only readonly/validation nodes with declared inputs; telemetry writes to aicg.db are mandatory by default",
+      "phase": "preflight",
+      "produces_facts": [
+        "task_run_report",
+        "execution_telemetry",
+        "cache_decision"
+      ],
+      "requires_changed_paths": false,
+      "requires_facts": [
+        "task_id",
+        "command_compression_analysis",
+        "command_candidates"
+      ],
+      "task_sizes": [
+        "medium",
+        "large"
+      ],
+      "task_types": []
+    },
+    {
+      "condition": "Run when a structured task id exists; fail before processing or final output if input-filter facts or required rows are missing.",
+      "dedupe_key": "",
+      "dependencies": [],
+      "description": "Require typed SQLite task records for gated work.",
+      "effect": "readonly",
+      "events": [
+        "user-message",
+        "write-intent",
+        "final-output",
+        "resume"
+      ],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "ai_client_governance.py task-record gate",
+      "gate_step": "task-record",
+      "id": "preflight.gate.structured-task-record",
+      "input_sources": [],
+      "kind": "cross-cutting-gate",
+      "mechanism_label": "",
+      "metadata": {},
+      "order": 212,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "single SQLite read; no Markdown parsing",
+      "phase": "preflight",
+      "produces_facts": [
+        "structured_task_record_gate_result"
+      ],
+      "requires_changed_paths": false,
+      "requires_facts": [
+        "task_id",
+        "structured_task_record"
+      ],
+      "task_sizes": [
+        "medium",
+        "large"
+      ],
+      "task_types": []
+    },
+    {
+      "condition": "",
+      "dedupe_key": "",
+      "dependencies": [],
+      "description": "Record task size and blast-radius reasons.",
+      "effect": "readonly",
+      "events": [],
+      "fail_policy": "warn_only",
+      "final_only": false,
+      "gate_label": "",
+      "gate_step": "",
+      "id": "preflight.interceptor.task-size",
+      "input_sources": [],
+      "kind": "processing-interceptor",
+      "mechanism_label": "",
+      "metadata": {},
+      "order": 210,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "",
+      "phase": "preflight",
+      "produces_facts": [],
+      "requires_changed_paths": false,
+      "requires_facts": [],
+      "task_sizes": [
+        "medium",
+        "large"
+      ],
+      "task_types": []
+    },
+    {
+      "condition": "",
+      "dedupe_key": "",
+      "dependencies": [],
+      "description": "Require structured input decomposition and user requirement evidence.",
+      "effect": "readonly",
+      "events": [],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "ai_client_governance.py task-gate:user-input-and-requirements",
+      "gate_step": "",
+      "id": "preflight.gate.task-gate.requirements",
+      "input_sources": [],
+      "kind": "cross-cutting-gate",
+      "mechanism_label": "",
+      "metadata": {},
+      "order": 215,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "",
+      "phase": "preflight",
+      "produces_facts": [],
+      "requires_changed_paths": false,
+      "requires_facts": [],
+      "task_sizes": [
+        "medium",
+        "large"
+      ],
+      "task_types": []
+    },
+    {
+      "condition": "Block repo/state/Git writes unless an explicit labeled approval is present.",
+      "dedupe_key": "",
+      "dependencies": [],
+      "description": "Require explicit approval before mutating rules/scripts/docs/git-sensitive scopes.",
+      "effect": "human_interrupt",
+      "events": [
+        "write-intent",
+        "plan-output"
+      ],
+      "fail_policy": "requires_approval",
+      "final_only": false,
+      "gate_label": "",
+      "gate_step": "",
+      "id": "preflight.interceptor.approval",
+      "input_sources": [],
+      "kind": "processing-interceptor",
+      "mechanism_label": "",
+      "metadata": {},
+      "order": 220,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "",
+      "phase": "preflight",
+      "produces_facts": [
+        "approval_state"
+      ],
+      "requires_changed_paths": false,
+      "requires_facts": [
+        "task_type",
+        "changed_paths_or_write_intent",
+        "approval_label"
+      ],
+      "task_sizes": [],
+      "task_types": [
+        "rules-script",
+        "docs",
+        "git",
+        "resume",
+        "correction",
+        "multi-agent"
+      ]
+    },
+    {
+      "condition": "",
+      "dedupe_key": "",
+      "dependencies": [],
+      "description": "Require task-gate evidence for rules and script architecture changes.",
+      "effect": "readonly",
+      "events": [],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "ai_client_governance.py task-gate",
+      "gate_step": "task-gate",
+      "id": "preflight.gate.task-gate.rules-script",
+      "input_sources": [],
+      "kind": "cross-cutting-gate",
+      "mechanism_label": "",
+      "metadata": {},
+      "order": 225,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "",
+      "phase": "preflight",
+      "produces_facts": [],
+      "requires_changed_paths": false,
+      "requires_facts": [],
+      "task_sizes": [],
+      "task_types": [
+        "rules-script"
+      ]
+    },
+    {
+      "condition": "",
+      "dedupe_key": "",
+      "dependencies": [],
+      "description": "Require session-gate evidence for rules and script architecture changes.",
+      "effect": "readonly",
+      "events": [],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "ai_client_governance.py session-gate",
+      "gate_step": "session-gate",
+      "id": "preflight.gate.session-gate.rules-script",
+      "input_sources": [],
+      "kind": "cross-cutting-gate",
+      "mechanism_label": "",
+      "metadata": {},
+      "order": 226,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "",
+      "phase": "preflight",
+      "produces_facts": [],
+      "requires_changed_paths": false,
+      "requires_facts": [],
+      "task_sizes": [],
+      "task_types": [
+        "rules-script"
+      ]
+    },
+    {
+      "condition": "Run before rules/governance architecture changes unless authoritative local evidence is sufficient and recorded.",
+      "dedupe_key": "",
+      "dependencies": [],
+      "description": "Record external mature-practice checks for rules and script architecture changes.",
+      "effect": "network",
+      "events": [],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "",
+      "gate_step": "",
+      "id": "preflight.interceptor.external-practice-check",
+      "input_sources": [],
+      "kind": "processing-interceptor",
+      "mechanism_label": "",
+      "metadata": {},
+      "order": 230,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "",
+      "phase": "preflight",
+      "produces_facts": [],
+      "requires_changed_paths": false,
+      "requires_facts": [],
+      "task_sizes": [],
+      "task_types": [
+        "rules-script"
+      ]
+    },
+    {
+      "condition": "Run for Git stage, commit, push, worktree, dirty tree, or branch-state operations.",
+      "dedupe_key": "",
+      "dependencies": [],
+      "description": "Enforce stage, commit, push, worktree, and dirty-tree boundaries.",
+      "effect": "readonly",
+      "events": [
+        "plan-output",
+        "write-intent",
+        "final-output"
+      ],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "",
+      "gate_step": "",
+      "id": "preflight.interceptor.git-boundary",
+      "input_sources": [],
+      "kind": "processing-interceptor",
+      "mechanism_label": "",
+      "metadata": {},
+      "order": 240,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "",
+      "phase": "preflight",
+      "produces_facts": [
+        "git_boundary_decision"
+      ],
+      "requires_changed_paths": false,
+      "requires_facts": [
+        "git_status",
+        "approval_state"
+      ],
+      "task_sizes": [],
+      "task_types": [
+        "git"
+      ]
+    },
+    {
+      "condition": "Run before creating or reusing a task worktree for mutating work. Use worktree-task create by default; raw git worktree add is a break-glass path that must record the reason and source snapshot handling.",
+      "dedupe_key": "worktree-creation-policy:task-tracking",
+      "dependencies": [],
+      "description": "Require an explicit task-worktree creation method and sparse-checkout strategy before task writes.",
+      "effect": "readonly",
+      "events": [
+        "plan-output",
+        "write-intent",
+        "resume"
+      ],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "ai_client_governance.py task-gate --only-worktree-creation-policy",
+      "gate_step": "worktree-creation-policy",
+      "id": "preflight.gate.worktree-creation-policy",
+      "input_sources": [],
+      "kind": "cross-cutting-gate",
+      "mechanism_label": "",
+      "metadata": {},
+      "order": 245,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "One task tracking file read; no Git scan.",
+      "phase": "preflight",
+      "produces_facts": [
+        "worktree_creation_policy_decision"
+      ],
+      "requires_changed_paths": false,
+      "requires_facts": [
+        "task_tracking",
+        "worktree_creation_method",
+        "sparse_checkout_strategy"
+      ],
+      "task_sizes": [],
+      "task_types": [
+        "code-debug",
+        "correction",
+        "rules-script",
+        "docs",
+        "git",
+        "frontend",
+        "resume",
+        "multi-agent"
+      ]
+    },
+    {
+      "condition": "Run when a task may write, recover, merge, clean up, or claim final worktree state.",
+      "dedupe_key": "worktree-live-state:project-root",
+      "dependencies": [],
+      "description": "Reconcile coord/session/queue records against Git live worktree state before writes, resume, merge cleanup, or final output.",
+      "effect": "readonly",
+      "events": [
+        "write-intent",
+        "resume",
+        "merge-cleanup",
+        "final-output"
+      ],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "ai_client_governance.py worktree-task reconcile",
+      "gate_step": "worktree-live-state",
+      "id": "prewrite.gate.worktree-live-state",
+      "input_sources": [],
+      "kind": "cross-cutting-gate",
+      "mechanism_label": "",
+      "metadata": {},
+      "order": 320,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "One git worktree list per repository and one coord state read per repository.",
+      "phase": "coordination",
+      "produces_facts": [
+        "worktree_reconcile_report"
+      ],
+      "requires_changed_paths": false,
+      "requires_facts": [
+        "coord_state",
+        "git_worktree_list"
+      ],
+      "task_sizes": [],
+      "task_types": [
+        "code-debug",
+        "correction",
+        "rules-script",
+        "docs",
+        "git",
+        "frontend",
+        "resume",
+        "multi-agent"
+      ]
+    },
+    {
+      "condition": "Run after live-state reconciliation and before the first file or Git write.",
+      "dedupe_key": "",
+      "dependencies": [],
+      "description": "Require task-level worktree isolation before repository writes.",
+      "effect": "readonly",
+      "events": [
+        "write-intent"
+      ],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "",
+      "gate_step": "",
+      "id": "prewrite.interceptor.worktree-isolation",
+      "input_sources": [],
+      "kind": "processing-interceptor",
+      "mechanism_label": "",
+      "metadata": {},
+      "order": 330,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "",
+      "phase": "coordination",
+      "produces_facts": [
+        "worktree_isolation_decision"
+      ],
+      "requires_changed_paths": false,
+      "requires_facts": [
+        "approval_state",
+        "worktree_reconcile_report"
+      ],
+      "task_sizes": [],
+      "task_types": [
+        "code-debug",
+        "correction",
+        "rules-script",
+        "docs",
+        "git",
+        "frontend",
+        "resume",
+        "multi-agent"
+      ]
+    },
+    {
+      "condition": "Run at the host-client write boundary. Entry documents and model instructions are insufficient; Trae/Doubao/Codex-style writes must be backed by an approved active task and a task worktree row.",
+      "dedupe_key": "task_id:write-intent:approved-task-worktree",
+      "dependencies": [],
+      "description": "Fail closed before mutating writes unless task-record proves explicit approval and task worktree evidence.",
+      "effect": "readonly",
+      "events": [
+        "write-intent"
+      ],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "ai_client_governance.py task-record gate --event preflight",
+      "gate_step": "task-record",
+      "id": "prewrite.gate.approved-task-worktree",
+      "input_sources": [],
+      "kind": "cross-cutting-gate",
+      "mechanism_label": "",
+      "metadata": {
+        "adapter_role": "prewrite-approval-worktree",
+        "blocked_gap": "client can otherwise write files or run shell commands after reading prose rules only"
+      },
+      "order": 331,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "single SQLite task-record read; no repository scan",
+      "phase": "coordination",
+      "produces_facts": [
+        "prewrite_runtime_adapter_decision"
+      ],
+      "requires_changed_paths": false,
+      "requires_facts": [
+        "task_id",
+        "approval_label",
+        "approved_approval_row",
+        "task_worktree"
+      ],
+      "task_sizes": [],
+      "task_types": [
+        "code-debug",
+        "correction",
+        "rules-script",
+        "docs",
+        "git",
+        "frontend",
+        "resume",
+        "multi-agent"
+      ]
+    },
+    {
+      "condition": "Run when an ai-client-governance worktree merge or embedded submodule closeout is in scope; the node checks the host gitlink plus task state/tracking, not only the child repository.",
+      "dedupe_key": "host-submodule-closeout:project-root:ai-client-governance",
+      "dependencies": [],
+      "description": "Verify host repository gitlink, worktree state, and task tracking after embedded ai-client-governance merges.",
+      "effect": "readonly",
+      "events": [
+        "merge-cleanup",
+        "final-output"
+      ],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "ai_client_governance.py worktree-task host-closeout",
+      "gate_step": "host-submodule-closeout",
+      "id": "coordination.gate.host-submodule-closeout",
+      "input_sources": [],
+      "kind": "cross-cutting-gate",
+      "mechanism_label": "",
+      "metadata": {},
+      "order": 340,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "One host git status, one gitlink lookup, one state JSON read, and targeted task tracking reads.",
+      "phase": "coordination",
+      "produces_facts": [
+        "host_submodule_closeout_report"
+      ],
+      "requires_changed_paths": false,
+      "requires_facts": [
+        "git_status",
+        "worktree_reconcile_report",
+        "task_tracking"
+      ],
+      "task_sizes": [],
+      "task_types": [
+        "git",
+        "rules-script"
+      ]
+    },
+    {
+      "condition": "Run before spawning delegated agents and before sending follow-up work to an existing agent; reuse only when task id, scope, retained facts, heartbeat freshness, and contamination checks pass.",
+      "dedupe_key": "",
+      "dependencies": [],
+      "description": "Decide whether to reuse an existing agent context, spawn a new agent, merge work, or close completed agents.",
+      "effect": "readonly",
+      "events": [],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "",
+      "gate_step": "",
+      "id": "coordination.interceptor.agent-context-reuse",
+      "input_sources": [],
+      "kind": "processing-interceptor",
+      "mechanism_label": "",
+      "metadata": {
+        "agent_count_policy": "dynamic-by-task-tree-scope-locks-and-context-budget-not-fixed-small-cap",
+        "allowed_decisions": [
+          "reuse",
+          "spawn",
+          "merge",
+          "close"
+        ],
+        "required_brief_fields": [
+          "task_id",
+          "worktree_path",
+          "write_scope",
+          "forbidden_paths",
+          "validation_commands",
+          "return_capsule",
+          "context_reuse",
+          "reuse_key",
+          "retained_facts",
+          "skip_inputs",
+          "context_capsule",
+          "context_ttl",
+          "contamination_boundary",
+          "minimal_resume_inputs",
+          "token_budget",
+          "token_proxy_metrics",
+          "token_usage_source"
+        ]
+      },
+      "order": 295,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "local status/brief/capsule inspection only; do not read full chat history by default",
+      "phase": "coordination",
+      "produces_facts": [
+        "agent_context_reuse_decision",
+        "reuse_key",
+        "context_capsule",
+        "context_ttl",
+        "token_budget",
+        "token_proxy_metrics"
+      ],
+      "requires_changed_paths": false,
+      "requires_facts": [
+        "task_tree",
+        "write_scope",
+        "agent_status",
+        "context_budget",
+        "contamination_boundary"
+      ],
+      "task_sizes": [],
+      "task_types": [
+        "multi-agent"
+      ]
+    },
+    {
+      "condition": "",
+      "dedupe_key": "",
+      "dependencies": [],
+      "description": "Require Agent Brief before spawning delegated agents.",
+      "effect": "readonly",
+      "events": [],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "",
+      "gate_step": "",
+      "id": "coordination.interceptor.agent-brief",
+      "input_sources": [],
+      "kind": "processing-interceptor",
+      "mechanism_label": "",
+      "metadata": {
+        "dispatch_adapter": "worktree-task dispatch records agent_dispatch_brief when task_type includes multi-agent",
+        "required_fields": [
+          "task_id",
+          "worktree_path",
+          "write_scope",
+          "forbidden_paths",
+          "validation_commands",
+          "return_capsule",
+          "context_reuse"
+        ]
+      },
+      "order": 300,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "",
+      "phase": "coordination",
+      "produces_facts": [
+        "agent_brief",
+        "agent_dispatch_contract"
+      ],
+      "requires_changed_paths": false,
+      "requires_facts": [
+        "task_id",
+        "worktree_path",
+        "write_scope",
+        "forbidden_paths",
+        "validation_commands",
+        "return_capsule"
+      ],
+      "task_sizes": [],
+      "task_types": [
+        "multi-agent"
+      ]
+    },
+    {
+      "condition": "Use when updating Codex/Trae/client UI Todo items; Todo state must be regenerated from task-queue/task-record rather than treated as an independent fact source.",
+      "dedupe_key": "",
+      "dependencies": [],
+      "description": "Expose client Todo lists as a derived view from durable task-queue/task-record state.",
+      "effect": "readonly",
+      "events": [
+        "status-output",
+        "resume",
+        "final-output"
+      ],
+      "fail_policy": "report_only",
+      "final_only": false,
+      "gate_label": "",
+      "gate_step": "task-record-queue-alignment",
+      "id": "coordination.interceptor.todo-task-record-adapter",
+      "input_sources": [],
+      "kind": "processing-interceptor",
+      "mechanism_label": "ai_client_governance.py task-queue todo",
+      "metadata": {
+        "durable_sources": [
+          "task-queue",
+          "task-record"
+        ],
+        "source_policy": "derived_from_task_queue_not_fact_source"
+      },
+      "order": 315,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "single SQLite task-queue read; no repository scan",
+      "phase": "coordination",
+      "produces_facts": [
+        "todo_projection"
+      ],
+      "requires_changed_paths": false,
+      "requires_facts": [],
+      "task_sizes": [],
+      "task_types": []
+    },
+    {
+      "condition": "",
+      "dedupe_key": "",
+      "dependencies": [],
+      "description": "Require structured multi-agent acceptance matrix evidence.",
+      "effect": "readonly",
+      "events": [],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "",
+      "gate_step": "",
+      "id": "coordination.interceptor.agent-acceptance-matrix",
+      "input_sources": [],
+      "kind": "processing-interceptor",
+      "mechanism_label": "",
+      "metadata": {},
+      "order": 310,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "",
+      "phase": "coordination",
+      "produces_facts": [],
+      "requires_changed_paths": false,
+      "requires_facts": [],
+      "task_sizes": [],
+      "task_types": [
+        "multi-agent"
+      ]
+    },
+    {
+      "condition": "",
+      "dedupe_key": "",
+      "dependencies": [],
+      "description": "Preserve pending-task recovery state for long-running work.",
+      "effect": "readonly",
+      "events": [],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "",
+      "gate_step": "",
+      "id": "session.interceptor.pending-recovery",
+      "input_sources": [],
+      "kind": "processing-interceptor",
+      "mechanism_label": "",
+      "metadata": {},
+      "order": 400,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "",
+      "phase": "session",
+      "produces_facts": [],
+      "requires_changed_paths": false,
+      "requires_facts": [],
+      "task_sizes": [],
+      "task_types": [
+        "long-running"
+      ]
+    },
+    {
+      "condition": "Run at session start or status output; this is not a timed scheduler.",
+      "dedupe_key": "",
+      "dependencies": [],
+      "description": "Run per-session embedded ai-client-governance sync state checks.",
+      "effect": "readonly",
+      "events": [
+        "session-start",
+        "status-output"
+      ],
+      "fail_policy": "warn_only",
+      "final_only": false,
+      "gate_label": "",
+      "gate_step": "",
+      "id": "state.filter.sync-check",
+      "input_sources": [],
+      "kind": "processing-interceptor",
+      "mechanism_label": "",
+      "metadata": {
+        "previous_id": "periodic.filter.sync-check"
+      },
+      "order": 410,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "",
+      "phase": "session",
+      "produces_facts": [
+        "sync_check_report"
+      ],
+      "requires_changed_paths": false,
+      "requires_facts": [
+        "embedded_repo_state"
+      ],
+      "task_sizes": [],
+      "task_types": [
+        "long-running"
+      ]
+    },
+    {
+      "condition": "Run when recovering or reporting long-running state; this is not a timed scheduler.",
+      "dedupe_key": "",
+      "dependencies": [],
+      "description": "Audit long-running state before closeout, resume, or status output.",
+      "effect": "readonly",
+      "events": [
+        "resume",
+        "status-output",
+        "final-output"
+      ],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "",
+      "gate_step": "",
+      "id": "state.interceptor.session-audit",
+      "input_sources": [],
+      "kind": "processing-interceptor",
+      "mechanism_label": "",
+      "metadata": {
+        "previous_id": "periodic.interceptor.state-audit"
+      },
+      "order": 420,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "",
+      "phase": "session",
+      "produces_facts": [
+        "session_state_audit"
+      ],
+      "requires_changed_paths": false,
+      "requires_facts": [
+        "task_queue_state",
+        "pending_records",
+        "coord_state"
+      ],
+      "task_sizes": [],
+      "task_types": [
+        "long-running"
+      ]
+    },
+    {
+      "condition": "",
+      "dedupe_key": "",
+      "dependencies": [],
+      "description": "Check changed paths for diff and whitespace hazards.",
+      "effect": "readonly",
+      "events": [],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "encoding-or-whitespace-check",
+      "gate_step": "git-diff-check",
+      "id": "post-change.interceptor.diff-check",
+      "input_sources": [],
+      "kind": "processing-interceptor",
+      "mechanism_label": "",
+      "metadata": {},
+      "order": 500,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "",
+      "phase": "post-change",
+      "produces_facts": [],
+      "requires_changed_paths": true,
+      "requires_facts": [],
+      "task_sizes": [],
+      "task_types": []
+    },
+    {
+      "condition": "",
+      "dedupe_key": "",
+      "dependencies": [],
+      "description": "Bubble document-index checks through README and reference scopes.",
+      "effect": "readonly",
+      "events": [],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "ai_client_governance.py doc-index",
+      "gate_step": "doc-index",
+      "id": "post-change.interceptor.doc-index-bubble",
+      "input_sources": [],
+      "kind": "processing-interceptor",
+      "mechanism_label": "",
+      "metadata": {},
+      "order": 510,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "",
+      "phase": "post-change",
+      "produces_facts": [],
+      "requires_changed_paths": false,
+      "requires_facts": [],
+      "task_sizes": [],
+      "task_types": [
+        "docs"
+      ]
+    },
+    {
+      "condition": "",
+      "dedupe_key": "",
+      "dependencies": [],
+      "description": "After rules, scripts, skills, manifest, or docs change, require affected-document and reference sync judgement.",
+      "effect": "readonly",
+      "events": [],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "ai_client_governance.py doc-index",
+      "gate_step": "doc-index",
+      "id": "post-change.interceptor.document-impact-sync",
+      "input_sources": [],
+      "kind": "processing-interceptor",
+      "mechanism_label": "",
+      "metadata": {
+        "dedupe_key": "doc-index:changed-paths",
+        "performance_budget": "aggregate changed paths and run one indexed reference check per gate-pool invocation",
+        "requires_tracking_evidence": "record affected docs, updated docs/references, or no-impact rationale"
+      },
+      "order": 511,
+      "path_prefixes": [],
+      "path_suffixes": [
+        ".json",
+        ".md",
+        ".ps1",
+        ".py",
+        ".toml",
+        ".yaml",
+        ".yml"
+      ],
+      "performance_budget": "",
+      "phase": "post-change",
+      "produces_facts": [],
+      "requires_changed_paths": true,
+      "requires_facts": [],
+      "task_sizes": [],
+      "task_types": [
+        "rules-script",
+        "docs"
+      ]
+    },
+    {
+      "condition": "",
+      "dedupe_key": "",
+      "dependencies": [],
+      "description": "Check Markdown references and cycle-risk boundaries.",
+      "effect": "readonly",
+      "events": [],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "ai_client_governance.py validate-doc",
+      "gate_step": "validate-doc",
+      "id": "post-change.interceptor.reference-check",
+      "input_sources": [],
+      "kind": "processing-interceptor",
+      "mechanism_label": "",
+      "metadata": {},
+      "order": 520,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "",
+      "phase": "post-change",
+      "produces_facts": [],
+      "requires_changed_paths": false,
+      "requires_facts": [],
+      "task_sizes": [],
+      "task_types": [
+        "docs"
+      ]
+    },
+    {
+      "condition": "",
+      "dedupe_key": "",
+      "dependencies": [],
+      "description": "Check Markdown references when changed paths contain Markdown.",
+      "effect": "readonly",
+      "events": [],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "ai_client_governance.py validate-doc",
+      "gate_step": "validate-doc",
+      "id": "post-change.interceptor.reference-check.markdown-path",
+      "input_sources": [],
+      "kind": "processing-interceptor",
+      "mechanism_label": "",
+      "metadata": {},
+      "order": 521,
+      "path_prefixes": [],
+      "path_suffixes": [
+        ".md"
+      ],
+      "performance_budget": "",
+      "phase": "post-change",
+      "produces_facts": [],
+      "requires_changed_paths": false,
+      "requires_facts": [],
+      "task_sizes": [],
+      "task_types": []
+    },
+    {
+      "condition": "",
+      "dedupe_key": "",
+      "dependencies": [],
+      "description": "Run document reference index checks when changed paths contain Markdown.",
+      "effect": "readonly",
+      "events": [],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "ai_client_governance.py doc-index",
+      "gate_step": "doc-index",
+      "id": "post-change.gate.doc-index.markdown-path",
+      "input_sources": [],
+      "kind": "cross-cutting-gate",
+      "mechanism_label": "",
+      "metadata": {},
+      "order": 522,
+      "path_prefixes": [],
+      "path_suffixes": [
+        ".md"
+      ],
+      "performance_budget": "",
+      "phase": "post-change",
+      "produces_facts": [],
+      "requires_changed_paths": false,
+      "requires_facts": [],
+      "task_sizes": [],
+      "task_types": []
+    },
+    {
+      "condition": "",
+      "dedupe_key": "",
+      "dependencies": [],
+      "description": "Run one scoped document impact index for changed rules, scripts, manifests, and docs.",
+      "effect": "readonly",
+      "events": [],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "ai_client_governance.py doc-index",
+      "gate_step": "doc-index",
+      "id": "post-change.gate.document-impact-index",
+      "input_sources": [],
+      "kind": "cross-cutting-gate",
+      "mechanism_label": "",
+      "metadata": {
+        "dedupe_key": "doc-index:changed-paths",
+        "observability": "visible in runtime components and gate-pool dry-run"
+      },
+      "order": 523,
+      "path_prefixes": [],
+      "path_suffixes": [
+        ".json",
+        ".md",
+        ".ps1",
+        ".py",
+        ".toml",
+        ".yaml",
+        ".yml"
+      ],
+      "performance_budget": "",
+      "phase": "post-change",
+      "produces_facts": [],
+      "requires_changed_paths": true,
+      "requires_facts": [],
+      "task_sizes": [],
+      "task_types": [
+        "rules-script",
+        "docs"
+      ]
+    },
+    {
+      "condition": "",
+      "dedupe_key": "",
+      "dependencies": [],
+      "description": "Export and visually check affected resume PDFs.",
+      "effect": "readonly",
+      "events": [],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "PDF export/layout check",
+      "gate_step": "",
+      "id": "post-change.interceptor.resume-export",
+      "input_sources": [],
+      "kind": "processing-interceptor",
+      "mechanism_label": "",
+      "metadata": {},
+      "order": 530,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "",
+      "phase": "post-change",
+      "produces_facts": [],
+      "requires_changed_paths": false,
+      "requires_facts": [],
+      "task_sizes": [],
+      "task_types": [
+        "resume"
+      ]
+    },
+    {
+      "condition": "",
+      "dedupe_key": "",
+      "dependencies": [],
+      "description": "Compile changed Python files.",
+      "effect": "readonly",
+      "events": [],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "py_compile",
+      "gate_step": "py-compile",
+      "id": "validation.gate.py-compile",
+      "input_sources": [],
+      "kind": "cross-cutting-gate",
+      "mechanism_label": "",
+      "metadata": {},
+      "order": 600,
+      "path_prefixes": [],
+      "path_suffixes": [
+        ".py"
+      ],
+      "performance_budget": "",
+      "phase": "validation",
+      "produces_facts": [],
+      "requires_changed_paths": false,
+      "requires_facts": [],
+      "task_sizes": [],
+      "task_types": []
+    },
+    {
+      "condition": "",
+      "dedupe_key": "",
+      "dependencies": [],
+      "description": "Validate UTF-8 and text source hygiene for changed text files.",
+      "effect": "readonly",
+      "events": [],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "encoding-or-whitespace-check",
+      "gate_step": "validate-encoding",
+      "id": "validation.gate.encoding",
+      "input_sources": [],
+      "kind": "cross-cutting-gate",
+      "mechanism_label": "",
+      "metadata": {},
+      "order": 610,
+      "path_prefixes": [],
+      "path_suffixes": [
+        ".css",
+        ".html",
+        ".js",
+        ".json",
+        ".md",
+        ".ps1",
+        ".py",
+        ".toml",
+        ".ts",
+        ".yaml",
+        ".yml"
+      ],
+      "performance_budget": "",
+      "phase": "validation",
+      "produces_facts": [],
+      "requires_changed_paths": false,
+      "requires_facts": [],
+      "task_sizes": [],
+      "task_types": []
+    },
+    {
+      "condition": "Run after content changes and before final output for prompt injection, sensitive text, command injection, supply-chain, and path-boundary risk. The plugin cannot intercept host-native shell internally, so the enforceable surface is governed file/command paths plus fail-closed diagnostics.",
+      "dedupe_key": "security-policy:changed-text-paths",
+      "dependencies": [],
+      "description": "Assess changed text files through the unified local security policy gate.",
+      "effect": "readonly",
+      "events": [
+        "after-change",
+        "completion-test",
+        "final-output"
+      ],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "ai_client_governance.py policy assess",
+      "gate_step": "security-policy",
+      "id": "validation.gate.security-policy",
+      "input_sources": [],
+      "kind": "cross-cutting-gate",
+      "mechanism_label": "",
+      "metadata": {
+        "policy_backend": "local-rule-based-now; future OPA/declarative backend can replace this gate",
+        "standards": [
+          "OWASP LLM Top 10",
+          "NIST AI RMF / GenAI Profile",
+          "policy-as-code"
+        ]
+      },
+      "order": 615,
+      "path_prefixes": [],
+      "path_suffixes": [
+        ".css",
+        ".html",
+        ".js",
+        ".json",
+        ".md",
+        ".ps1",
+        ".py",
+        ".toml",
+        ".ts",
+        ".yaml",
+        ".yml"
+      ],
+      "performance_budget": "Read changed text files once with deterministic regex policy; no network or model call.",
+      "phase": "validation",
+      "produces_facts": [
+        "security_policy_decision",
+        "redaction_boundary",
+        "command_policy_findings"
+      ],
+      "requires_changed_paths": true,
+      "requires_facts": [
+        "changed_paths",
+        "policy_assessment"
+      ],
+      "task_sizes": [],
+      "task_types": [
+        "code-debug",
+        "correction",
+        "rules-script",
+        "docs",
+        "git",
+        "frontend",
+        "resume",
+        "multi-agent"
+      ]
+    },
+    {
+      "condition": "",
+      "dedupe_key": "",
+      "dependencies": [],
+      "description": "Validate changed Markdown document task evidence.",
+      "effect": "readonly",
+      "events": [],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "ai_client_governance.py validate-doc",
+      "gate_step": "validate-doc",
+      "id": "validation.gate.validate-doc",
+      "input_sources": [],
+      "kind": "cross-cutting-gate",
+      "mechanism_label": "",
+      "metadata": {},
+      "order": 620,
+      "path_prefixes": [],
+      "path_suffixes": [
+        ".md"
+      ],
+      "performance_budget": "",
+      "phase": "validation",
+      "produces_facts": [],
+      "requires_changed_paths": false,
+      "requires_facts": [],
+      "task_sizes": [],
+      "task_types": []
+    },
+    {
+      "condition": "",
+      "dedupe_key": "",
+      "dependencies": [],
+      "description": "Scan correction records when correction work is in scope.",
+      "effect": "readonly",
+      "events": [],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "ai_client_governance.py scan-corrections",
+      "gate_step": "scan-corrections",
+      "id": "validation.gate.scan-corrections",
+      "input_sources": [],
+      "kind": "cross-cutting-gate",
+      "mechanism_label": "",
+      "metadata": {},
+      "order": 630,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "",
+      "phase": "validation",
+      "produces_facts": [],
+      "requires_changed_paths": false,
+      "requires_facts": [],
+      "task_sizes": [],
+      "task_types": [
+        "correction"
+      ]
+    },
+    {
+      "condition": "",
+      "dedupe_key": "",
+      "dependencies": [],
+      "description": "Scan correction records when changed paths touch corrections.",
+      "effect": "readonly",
+      "events": [],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "ai_client_governance.py scan-corrections",
+      "gate_step": "scan-corrections",
+      "id": "validation.gate.scan-corrections.path",
+      "input_sources": [],
+      "kind": "cross-cutting-gate",
+      "mechanism_label": "",
+      "metadata": {},
+      "order": 631,
+      "path_prefixes": [
+        ".ai-client/project/records/corrections/",
+        ".ai-client/corrections/"
+      ],
+      "path_suffixes": [],
+      "performance_budget": "",
+      "phase": "validation",
+      "produces_facts": [],
+      "requires_changed_paths": false,
+      "requires_facts": [],
+      "task_sizes": [],
+      "task_types": []
+    },
+    {
+      "condition": "",
+      "dedupe_key": "",
+      "dependencies": [],
+      "description": "Run git diff whitespace validation for changed paths.",
+      "effect": "readonly",
+      "events": [],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "git diff --check",
+      "gate_step": "git-diff-check",
+      "id": "validation.gate.git-diff-check",
+      "input_sources": [],
+      "kind": "cross-cutting-gate",
+      "mechanism_label": "",
+      "metadata": {},
+      "order": 640,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "",
+      "phase": "validation",
+      "produces_facts": [],
+      "requires_changed_paths": true,
+      "requires_facts": [],
+      "task_sizes": [],
+      "task_types": []
+    },
+    {
+      "condition": "Run after changes and before final answer when implementation or docs claim completion.",
+      "dedupe_key": "completion-test-plan:changed-paths:task-types",
+      "dependencies": [],
+      "description": "Plan task completion tests from changed paths, task types, and acceptance criteria.",
+      "effect": "readonly",
+      "events": [
+        "completion-test",
+        "final-output"
+      ],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "ai_client_governance.py completion-test",
+      "gate_step": "completion-test-plan",
+      "id": "completion.gate.test-plan",
+      "input_sources": [],
+      "kind": "cross-cutting-gate",
+      "mechanism_label": "",
+      "metadata": {},
+      "order": 650,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "Read-only path classification plus optional task tracking evidence scan.",
+      "phase": "completion",
+      "produces_facts": [
+        "completion_test_plan"
+      ],
+      "requires_changed_paths": true,
+      "requires_facts": [
+        "changed_paths",
+        "task_types",
+        "acceptance_criteria"
+      ],
+      "task_sizes": [],
+      "task_types": []
+    },
+    {
+      "condition": "Run before user-visible plans, status reports, and final conclusions.",
+      "dedupe_key": "",
+      "dependencies": [],
+      "description": "Audit Git/worktree state at plan, status, and final output boundaries without pushing.",
+      "effect": "readonly",
+      "events": [
+        "plan-output",
+        "status-output",
+        "final-output"
+      ],
+      "fail_policy": "report_only",
+      "final_only": false,
+      "gate_label": "git status --short --branch",
+      "gate_step": "git-state-audit",
+      "id": "output.gate.git-state-audit",
+      "input_sources": [],
+      "kind": "cross-cutting-gate",
+      "mechanism_label": "",
+      "metadata": {},
+      "order": 695,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "One git status --short --branch per relevant repository.",
+      "phase": "output",
+      "produces_facts": [
+        "git_state_audit"
+      ],
+      "requires_changed_paths": false,
+      "requires_facts": [
+        "git_status",
+        "worktree_reconcile_report"
+      ],
+      "task_sizes": [],
+      "task_types": []
+    },
+    {
+      "condition": "",
+      "dedupe_key": "",
+      "dependencies": [],
+      "description": "Check final answer quality and user satisfaction coverage.",
+      "effect": "readonly",
+      "events": [],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "",
+      "gate_step": "",
+      "id": "output.interceptor.answer-quality",
+      "input_sources": [],
+      "kind": "output-interceptor",
+      "mechanism_label": "",
+      "metadata": {},
+      "order": 700,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "",
+      "phase": "output",
+      "produces_facts": [],
+      "requires_changed_paths": false,
+      "requires_facts": [],
+      "task_sizes": [],
+      "task_types": []
+    },
+    {
+      "condition": "",
+      "dedupe_key": "",
+      "dependencies": [],
+      "description": "Ensure final response covers user-visible acceptance criteria.",
+      "effect": "readonly",
+      "events": [],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "",
+      "gate_step": "",
+      "id": "output.interceptor.user-satisfaction",
+      "input_sources": [],
+      "kind": "output-interceptor",
+      "mechanism_label": "",
+      "metadata": {},
+      "order": 710,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "",
+      "phase": "output",
+      "produces_facts": [],
+      "requires_changed_paths": false,
+      "requires_facts": [],
+      "task_sizes": [],
+      "task_types": []
+    },
+    {
+      "condition": "",
+      "dedupe_key": "",
+      "dependencies": [],
+      "description": "Ensure document/index sync status is reflected in final output.",
+      "effect": "readonly",
+      "events": [],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "",
+      "gate_step": "",
+      "id": "output.interceptor.document-sync",
+      "input_sources": [],
+      "kind": "output-interceptor",
+      "mechanism_label": "",
+      "metadata": {},
+      "order": 720,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "",
+      "phase": "output",
+      "produces_facts": [],
+      "requires_changed_paths": false,
+      "requires_facts": [],
+      "task_sizes": [],
+      "task_types": [
+        "docs"
+      ]
+    },
+    {
+      "condition": "",
+      "dedupe_key": "",
+      "dependencies": [],
+      "description": "Report whether registered governance nodes were visible, executed, de-duplicated, and efficient enough.",
+      "effect": "readonly",
+      "events": [],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "",
+      "gate_step": "",
+      "id": "output.interceptor.runtime-effectiveness",
+      "input_sources": [],
+      "kind": "output-interceptor",
+      "mechanism_label": "",
+      "metadata": {
+        "evidence": "runtime components registry, gate-pool plan, tool-flow trace, and task tracking validation notes"
+      },
+      "order": 725,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "",
+      "phase": "output",
+      "produces_facts": [],
+      "requires_changed_paths": false,
+      "requires_facts": [],
+      "task_sizes": [],
+      "task_types": [
+        "rules-script",
+        "docs"
+      ]
+    },
+    {
+      "condition": "",
+      "dedupe_key": "",
+      "dependencies": [],
+      "description": "Report completed, unverified, blocked, active pending, and Git/worktree state.",
+      "effect": "readonly",
+      "events": [],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "",
+      "gate_step": "",
+      "id": "output.interceptor.finalize-closeout",
+      "input_sources": [],
+      "kind": "output-interceptor",
+      "mechanism_label": "",
+      "metadata": {},
+      "order": 730,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "",
+      "phase": "output",
+      "produces_facts": [],
+      "requires_changed_paths": false,
+      "requires_facts": [],
+      "task_sizes": [],
+      "task_types": []
+    },
+    {
+      "condition": "Run before the final reply when analysis found problems, risks, follow-up tasks, or no-action decisions; facts must land in task-record, task-queue, framework-debt, correction, pending, or an explicit no-action row.",
+      "dedupe_key": "task_id:final-output:discovered-issue-recording",
+      "dependencies": [],
+      "description": "Fail final output unless newly discovered issues are recorded or explicitly marked no-action.",
+      "effect": "readonly",
+      "events": [
+        "final-output"
+      ],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "ai_client_governance.py task-record gate --event final",
+      "gate_step": "task-record",
+      "id": "output.gate.discovered-issue-recording",
+      "input_sources": [],
+      "kind": "cross-cutting-gate",
+      "mechanism_label": "",
+      "metadata": {
+        "adapter_role": "final-output-discovered-issue-recording",
+        "allowed_destinations": [
+          "task-record",
+          "task-queue",
+          "framework-debt",
+          "correction",
+          "pending",
+          "no-action"
+        ]
+      },
+      "order": 735,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "single SQLite task-record read; no repository scan",
+      "phase": "output",
+      "produces_facts": [
+        "final_output_discovered_issue_decision"
+      ],
+      "requires_changed_paths": false,
+      "requires_facts": [
+        "task_id",
+        "discovered_issue_recording_event"
+      ],
+      "task_sizes": [],
+      "task_types": [
+        "correction",
+        "rules-script",
+        "docs",
+        "git",
+        "resume",
+        "multi-agent",
+        "long-running"
+      ]
+    },
+    {
+      "condition": "",
+      "dedupe_key": "",
+      "dependencies": [],
+      "description": "Validate ai-client-governance architecture boundaries before closeout.",
+      "effect": "readonly",
+      "events": [],
+      "fail_policy": "fail_closed",
+      "final_only": true,
+      "gate_label": "ai_client_governance.py architecture-guard",
+      "gate_step": "architecture-guard",
+      "id": "final.gate.architecture-guard",
+      "input_sources": [],
+      "kind": "cross-cutting-gate",
+      "mechanism_label": "",
+      "metadata": {},
+      "order": 800,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "",
+      "phase": "final-gate",
+      "produces_facts": [],
+      "requires_changed_paths": false,
+      "requires_facts": [],
+      "task_sizes": [],
+      "task_types": []
+    },
+    {
+      "condition": "Run before closeout so generated DB/log/worktree artifacts cannot be committed by the host project.",
+      "dedupe_key": "host-project:file-ownership",
+      "dependencies": [],
+      "description": "Validate host-project .ai-client file ownership, .gitignore runtime block, and tracked live-state.",
+      "effect": "readonly",
+      "events": [],
+      "fail_policy": "fail_closed",
+      "final_only": true,
+      "gate_label": "ai_client_governance.py file-ownership audit",
+      "gate_step": "file-ownership",
+      "id": "final.gate.file-ownership",
+      "input_sources": [],
+      "kind": "cross-cutting-gate",
+      "mechanism_label": "",
+      "metadata": {},
+      "order": 805,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "One git ls-files, one git status --ignored, and one .gitignore read.",
+      "phase": "final-gate",
+      "produces_facts": [
+        "file_ownership_audit"
+      ],
+      "requires_changed_paths": false,
+      "requires_facts": [
+        "git_index",
+        "gitignore_policy"
+      ],
+      "task_sizes": [],
+      "task_types": []
+    },
+    {
+      "condition": "",
+      "dedupe_key": "",
+      "dependencies": [],
+      "description": "Validate task-type, user requirement, and output closeout evidence.",
+      "effect": "readonly",
+      "events": [],
+      "fail_policy": "fail_closed",
+      "final_only": true,
+      "gate_label": "ai_client_governance.py task-gate",
+      "gate_step": "task-gate",
+      "id": "final.gate.task-gate",
+      "input_sources": [],
+      "kind": "cross-cutting-gate",
+      "mechanism_label": "",
+      "metadata": {},
+      "order": 810,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "",
+      "phase": "final-gate",
+      "produces_facts": [],
+      "requires_changed_paths": false,
+      "requires_facts": [],
+      "task_sizes": [],
+      "task_types": []
+    },
+    {
+      "condition": "",
+      "dedupe_key": "",
+      "dependencies": [],
+      "description": "Validate session closeout evidence.",
+      "effect": "readonly",
+      "events": [],
+      "fail_policy": "fail_closed",
+      "final_only": true,
+      "gate_label": "ai_client_governance.py session-gate",
+      "gate_step": "session-gate",
+      "id": "final.gate.session-gate",
+      "input_sources": [],
+      "kind": "cross-cutting-gate",
+      "mechanism_label": "",
+      "metadata": {},
+      "order": 820,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "",
+      "phase": "final-gate",
+      "produces_facts": [],
+      "requires_changed_paths": false,
+      "requires_facts": [],
+      "task_sizes": [],
+      "task_types": []
+    },
+    {
+      "condition": "",
+      "dedupe_key": "",
+      "dependencies": [],
+      "description": "Validate active task queue state before closeout.",
+      "effect": "readonly",
+      "events": [],
+      "fail_policy": "fail_closed",
+      "final_only": true,
+      "gate_label": "ai_client_governance.py task-queue",
+      "gate_step": "task-queue",
+      "id": "final.gate.task-queue",
+      "input_sources": [],
+      "kind": "cross-cutting-gate",
+      "mechanism_label": "",
+      "metadata": {},
+      "order": 830,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "",
+      "phase": "final-gate",
+      "produces_facts": [],
+      "requires_changed_paths": false,
+      "requires_facts": [],
+      "task_sizes": [],
+      "task_types": []
+    },
+    {
+      "condition": "Run when execution volume, duration, cache, duplicate, failure, or trace statistics are needed.",
+      "dedupe_key": "",
+      "dependencies": [],
+      "description": "Report unified execution telemetry from aicg.db.",
+      "effect": "readonly",
+      "events": [
+        "status-output",
+        "resume",
+        "final-output"
+      ],
+      "fail_policy": "report_only",
+      "final_only": true,
+      "gate_label": "",
+      "gate_step": "telemetry",
+      "id": "reporter.telemetry",
+      "input_sources": [],
+      "kind": "reporter",
+      "mechanism_label": "ai_client_governance.py telemetry report",
+      "metadata": {
+        "fact_source": ".ai-client/project/state/aicg.db",
+        "reports": [
+          "top operations",
+          "top subjects",
+          "duplicate subjects",
+          "span kind counts",
+          "subject type counts",
+          "failure rate",
+          "duration p50/p95/max",
+          "cache hit/miss counts",
+          "scope kind counts",
+          "adapter enforcement counts"
+        ]
+      },
+      "order": 895,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "read indexed SQLite execution_spans/execution_events only; no command execution",
+      "phase": "report",
+      "produces_facts": [
+        "execution_telemetry_report"
+      ],
+      "requires_changed_paths": false,
+      "requires_facts": [],
+      "task_sizes": [],
+      "task_types": []
+    },
+    {
+      "condition": "Run when final or status output depends on execution telemetry coverage.",
+      "dedupe_key": "",
+      "dependencies": [],
+      "description": "Report whether the host shell path is adapter-backed or still a raw-shell gap.",
+      "effect": "readonly",
+      "events": [
+        "status-output",
+        "resume",
+        "final-output"
+      ],
+      "fail_policy": "report_only",
+      "final_only": true,
+      "gate_label": "",
+      "gate_step": "shell-adapter-diagnostics",
+      "id": "reporter.shell-adapter-diagnostics",
+      "input_sources": [],
+      "kind": "reporter",
+      "mechanism_label": "ai_client_governance.py shell-adapter diagnose",
+      "metadata": {
+        "fact_source": ".ai-client/project/state/aicg.db plus optional PowerShell profile marker; command proxy must not write user profiles",
+        "non_invasive_default": "no-profile command proxy, comparable to a project-local virtual environment activation",
+        "reports": [
+          "local env adapter activation",
+          "no-profile command proxy telemetry",
+          "optional explicit profile shim marker",
+          "adapter telemetry event count",
+          "fail-closed readiness",
+          "raw shell gap"
+        ]
+      },
+      "order": 900,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "read local env and indexed SQLite telemetry events; profile marker is optional explicit opt-in evidence",
+      "phase": "report",
+      "produces_facts": [
+        "shell_adapter_diagnostics"
+      ],
+      "requires_changed_paths": false,
+      "requires_facts": [],
+      "task_sizes": [],
+      "task_types": []
+    },
+    {
+      "condition": "Run before final output when structured task records and workflow queue state may diverge.",
+      "dedupe_key": "",
+      "dependencies": [],
+      "description": "Report task-record and task-queue scope differences for recovery and monitoring.",
+      "effect": "readonly",
+      "events": [
+        "status-output",
+        "resume",
+        "final-output"
+      ],
+      "fail_policy": "report_only",
+      "final_only": true,
+      "gate_label": "",
+      "gate_step": "task-record-queue-alignment",
+      "id": "reporter.task-record-queue-alignment",
+      "input_sources": [],
+      "kind": "reporter",
+      "mechanism_label": "ai_client_governance.py task-run diagnose",
+      "metadata": {
+        "fact_source": ".ai-client/project/state/aicg.db",
+        "reports": [
+          "task-record task counts",
+          "task-queue workflow counts",
+          "current task presence in both stores",
+          "task_record_minus_queue_total delta"
+        ]
+      },
+      "order": 905,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "read one SQLite DB summary and queue state only",
+      "phase": "report",
+      "produces_facts": [
+        "task_record_queue_alignment"
+      ],
+      "requires_changed_paths": false,
+      "requires_facts": [],
+      "task_sizes": [],
+      "task_types": []
+    },
+    {
+      "condition": "Run when a design flaw is real but needs a framework-level change window, such as CLI parser ergonomics or repo-context-aware scope classification.",
+      "dedupe_key": "",
+      "dependencies": [],
+      "description": "Report open framework design debt before architecture passes.",
+      "effect": "readonly",
+      "events": [
+        "plan-output",
+        "resume",
+        "final-output"
+      ],
+      "fail_policy": "report_only",
+      "final_only": false,
+      "gate_label": "",
+      "gate_step": "framework-debt",
+      "id": "reporter.framework-debt",
+      "input_sources": [],
+      "kind": "cross-cutting-gate",
+      "mechanism_label": "ai_client_governance.py framework-debt list",
+      "metadata": {},
+      "order": 906,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "single SQLite read; no repository scan",
+      "phase": "report",
+      "produces_facts": [
+        "framework_debt_items"
+      ],
+      "requires_changed_paths": false,
+      "requires_facts": [],
+      "task_sizes": [],
+      "task_types": []
+    },
+    {
+      "condition": "",
+      "dedupe_key": "",
+      "dependencies": [],
+      "description": "Verify trace flow after final gates.",
+      "effect": "readonly",
+      "events": [],
+      "fail_policy": "report_only",
+      "final_only": true,
+      "gate_label": "",
+      "gate_step": "tool-flow",
+      "id": "reporter.tool-flow",
+      "input_sources": [],
+      "kind": "reporter",
+      "mechanism_label": "",
+      "metadata": {},
+      "order": 910,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "",
+      "phase": "report",
+      "produces_facts": [],
+      "requires_changed_paths": false,
+      "requires_facts": [],
+      "task_sizes": [],
+      "task_types": []
+    },
+    {
+      "condition": "Run when reporting current execution health, final closeout, or resumed task state.",
+      "dedupe_key": "",
+      "dependencies": [],
+      "description": "Report task-run cache, execution telemetry, and worktree coordination diagnostics.",
+      "effect": "readonly",
+      "events": [
+        "status-output",
+        "resume",
+        "final-output"
+      ],
+      "fail_policy": "report_only",
+      "final_only": false,
+      "gate_label": "",
+      "gate_step": "task-run-diagnostics",
+      "id": "reporter.task-run-diagnostics",
+      "input_sources": [],
+      "kind": "reporter",
+      "mechanism_label": "ai_client_governance.py task-run diagnose",
+      "metadata": {
+        "reports": [
+          "duplicate terminal commands",
+          "failed telemetry events",
+          "cache hit/miss counts",
+          "active locks",
+          "missing worktree sessions",
+          "shell adapter evidence and raw shell interception gap",
+          "common/project/native scope kind counts"
+        ]
+      },
+      "order": 920,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "read SQLite telemetry and coord state only; no command execution",
+      "phase": "report",
+      "produces_facts": [
+        "task_run_diagnostics"
+      ],
+      "requires_changed_paths": false,
+      "requires_facts": [],
+      "task_sizes": [],
+      "task_types": []
+    },
+    {
+      "condition": "Run after command-compression analysis for mutating tasks; readonly and validation groups may parallelize/cache, stateful groups remain ordered and no-cache.",
+      "dedupe_key": "task_id:event:changed_paths:command_candidates:input_hashes",
+      "dependencies": [
+        "preflight.interceptor.command-compression.mutating"
+      ],
+      "description": "Execute compressed command groups for mutating tasks, including small edits, once commands are ready.",
+      "effect": "state_write",
+      "events": [
+        "write-intent",
+        "after-change",
+        "resume",
+        "final-output"
+      ],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "ai_client_governance.py task-run diagnose",
+      "gate_step": "task-run-diagnostics",
+      "id": "preflight.interceptor.task-run-dag.mutating",
+      "input_sources": [],
+      "kind": "processing-interceptor",
+      "mechanism_label": "ai_client_governance.py task-run run",
+      "metadata": {
+        "aop_role": "around-advice",
+        "coverage": "mutating-task-fast-path",
+        "join_point": "write-intent",
+        "runner": "task-run run"
+      },
+      "order": 209,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "single local DAG pass; cache only readonly/validation nodes with declared inputs; telemetry writes to aicg.db are mandatory by default",
+      "phase": "preflight",
+      "produces_facts": [
+        "task_run_report",
+        "execution_telemetry",
+        "cache_decision"
+      ],
+      "requires_changed_paths": false,
+      "requires_facts": [
+        "task_id",
+        "command_compression_analysis",
+        "command_candidates"
+      ],
+      "task_sizes": [],
+      "task_types": [
+        "code-debug",
+        "correction",
+        "rules-script",
+        "docs",
+        "git",
+        "frontend",
+        "resume",
+        "multi-agent"
+      ]
+    },
+    {
+      "condition": "Run when important local commands must prove shell coverage. Task-run/tool telemetry can prove commands were wrapped, while local env activation or no-profile command-proxy telemetry closes the raw host shell gap for governed commands; profile shims are explicit opt-in only.",
+      "dedupe_key": "task_id:event:trace_id:raw-shell-coverage",
+      "dependencies": [
+        "preflight.interceptor.task-run-dag.mutating"
+      ],
+      "description": "Fail closed when a mutating task claims raw host shell coverage without auto-intercept or command-proxy evidence.",
+      "effect": "readonly",
+      "events": [
+        "write-intent",
+        "after-change",
+        "resume",
+        "final-output"
+      ],
+      "fail_policy": "fail_closed",
+      "final_only": false,
+      "gate_label": "ai_client_governance.py task-run diagnose --require-raw-shell-coverage",
+      "gate_step": "raw-shell-coverage",
+      "id": "preflight.interceptor.raw-shell-coverage",
+      "input_sources": [],
+      "kind": "processing-interceptor",
+      "mechanism_label": "ai_client_governance.py task-run diagnose --require-raw-shell-coverage",
+      "metadata": {
+        "command_proxy_cli": "shell-adapter proxy-powershell",
+        "required_cli": "task-run diagnose --require-raw-shell-coverage",
+        "shell_adapter_cli": "shell-adapter diagnose --require-command-proxy",
+        "wrapped_telemetry_policy": "task-run/tool telemetry counts as compensation evidence; shell-adapter command-proxy telemetry clears raw_shell_gap for governed commands without touching user profiles"
+      },
+      "order": 211,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "read SQLite/JSONL telemetry and optional profile marker only; no command execution or profile writes",
+      "phase": "preflight",
+      "produces_facts": [
+        "raw_shell_gap_status",
+        "shell_adapter_auto_intercept",
+        "shell_command_proxy",
+        "telemetry_wrapped_commands"
+      ],
+      "requires_changed_paths": false,
+      "requires_facts": [
+        "task_id",
+        "execution_telemetry",
+        "raw_shell_coverage_decision"
+      ],
+      "task_sizes": [],
+      "task_types": [
+        "code-debug",
+        "correction",
+        "rules-script",
+        "docs",
+        "git",
+        "frontend",
+        "resume",
+        "multi-agent"
+      ]
+    }
+  ],
+  "schema_version": 1,
+  "source": "ai-client-governance runtime declarative registry",
+  "task_types": [
+    {
+      "description": "Code debugging, logs, exceptions, and behavior fixes.",
+      "id": "code-debug",
+      "keywords": [
+        "bug",
+        "debug",
+        "error",
+        "exception",
+        "log",
+        "traceback",
+        "报错",
+        "调试",
+        "日志",
+        "异常"
+      ],
+      "mutating": true,
+      "requires_approval": false,
+      "requires_tracking": false
+    },
+    {
+      "description": "User correction, missed requirement, or process failure.",
+      "id": "correction",
+      "keywords": [
+        "correction",
+        "漏",
+        "错",
+        "纠错",
+        "修正",
+        "没按",
+        "遗漏"
+      ],
+      "mutating": true,
+      "requires_approval": true,
+      "requires_tracking": true
+    },
+    {
+      "description": "AI Client Governance, scripts, skills, lifecycle, gates, or adapters.",
+      "id": "rules-script",
+      "keywords": [
+        "AGENTS",
+        "CLAUDE.md",
+        "GEMINI.md",
+        "CONVENTIONS.md",
+        "copilot-instructions",
+        ".cursor/rules",
+        ".clinerules",
+        ".windsurf/rules",
+        ".continue/rules",
+        ".roo/rules",
+        "adapter",
+        "SKILL",
+        "ai-client-governance",
+        "gate",
+        "hook",
+        "lifecycle",
+        "pipeline",
+        "script",
+        "state machine",
+        "workflow",
+        "callback",
+        "wrapper",
+        "生命周期",
+        "流水线",
+        "状态机",
+        "中间层",
+        "回调",
+        "包装器",
+        "规则",
+        "脚本",
+        "门禁"
+      ],
+      "mutating": true,
+      "requires_approval": true,
+      "requires_tracking": true
+    },
+    {
+      "description": "Markdown documents, README, references, indexes, or links.",
+      "id": "docs",
+      "keywords": [
+        "README",
+        "docs",
+        "markdown",
+        "reference",
+        "文档",
+        "索引",
+        "引用",
+        "链接"
+      ],
+      "mutating": true,
+      "requires_approval": true,
+      "requires_tracking": true
+    },
+    {
+      "description": "Git staging, commits, pushes, worktrees, and branch state.",
+      "id": "git",
+      "keywords": [
+        "commit",
+        "push",
+        "stage",
+        "stash",
+        "git",
+        "提交",
+        "推送",
+        "暂存"
+      ],
+      "mutating": true,
+      "requires_approval": true,
+      "requires_tracking": true
+    },
+    {
+      "description": "Frontend, browser, Playwright, local UI, and localhost work.",
+      "id": "frontend",
+      "keywords": [
+        "browser",
+        "frontend",
+        "localhost",
+        "playwright",
+        "ui",
+        "页面",
+        "浏览器"
+      ],
+      "mutating": true,
+      "requires_approval": false,
+      "requires_tracking": false
+    },
+    {
+      "description": "Resume markdown, PDF export, layout, and delivery files.",
+      "id": "resume",
+      "keywords": [
+        "PDF",
+        "resumes/",
+        "resumes\\",
+        "简历",
+        "导出"
+      ],
+      "mutating": true,
+      "requires_approval": true,
+      "requires_tracking": true
+    },
+    {
+      "description": "Sub-agent, multi-agent, delegation, and acceptance matrix work.",
+      "id": "multi-agent",
+      "keywords": [
+        "multi-agent",
+        "sub-agent",
+        "delegated agent",
+        "主从",
+        "子 AI",
+        "子AI",
+        "多智能体"
+      ],
+      "mutating": true,
+      "requires_approval": true,
+      "requires_tracking": true
+    },
+    {
+      "description": "Pending tasks, recovery, periodic checks, and long-running work.",
+      "id": "long-running",
+      "keywords": [
+        "pending",
+        "恢复",
+        "继续",
+        "长任务",
+        "未完成",
+        "定时",
+        "周期"
+      ],
+      "mutating": true,
+      "requires_approval": false,
+      "requires_tracking": true
+    }
+  ]
+}
