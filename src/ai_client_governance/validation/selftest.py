@@ -3732,6 +3732,32 @@ def test_telemetry_trace_context_effectiveness(root: Path, run_dir: Path) -> Tes
                 sys.executable,
                 str(ai_client_governance_entrypoint()),
                 "telemetry",
+                "record",
+                "--db",
+                str(db),
+                "--span-id",
+                "3333333333333333",
+                "--trace-id",
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "--name",
+                "model-call",
+                "--subject-type",
+                "model",
+                "--model",
+                "gpt-selftest",
+                "--status",
+                "succeeded",
+                "--duration-ms",
+                "20",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "telemetry",
                 "report",
                 "--db",
                 str(db),
@@ -3763,24 +3789,34 @@ def test_telemetry_trace_context_effectiveness(root: Path, run_dir: Path) -> Tes
     report: dict[str, object] = {}
     effectiveness: dict[str, object] = {}
     try:
-        report = json.loads(commands[2].stdout)
-        effectiveness = json.loads(commands[3].stdout)
+        report = json.loads(commands[3].stdout)
+        effectiveness = json.loads(commands[4].stdout)
     except json.JSONDecodeError:
         pass
     trace_context = report.get("trace_context", {}) if isinstance(report.get("trace_context"), dict) else {}
     client_counts = report.get("client_type_counts", {}) if isinstance(report.get("client_type_counts"), dict) else {}
     model_counts = report.get("model_counts", {}) if isinstance(report.get("model_counts"), dict) else {}
     client_model_counts = report.get("client_model_counts", {}) if isinstance(report.get("client_model_counts"), dict) else {}
+    subject_type_counts = report.get("subject_type_counts", {}) if isinstance(report.get("subject_type_counts"), dict) else {}
+    top_subjects = report.get("top_subjects", []) if isinstance(report.get("top_subjects"), list) else []
+    subject_names = {
+        str(row.get("subject") or "")
+        for row in top_subjects
+        if isinstance(row, dict)
+    }
     diff = effectiveness.get("diff", {}) if isinstance(effectiveness.get("diff"), dict) else {}
     duration_diff = diff.get("duration_sum_ms", {}) if isinstance(diff.get("duration_sum_ms"), dict) else {}
     passed = (
         all(command.exit_code == 0 for command in commands)
-        and trace_context.get("trace_count") == 2
-        and trace_context.get("valid_traceparent_attribute_count") == 2
+        and trace_context.get("trace_count") == 3
+        and trace_context.get("valid_traceparent_attribute_count") == 3
         and client_counts.get("codex") == 1
         and client_counts.get("trae") == 1
         and model_counts.get("gpt-5") == 1
+        and model_counts.get("gpt-selftest") == 1
         and client_model_counts.get("trae / selftest-model") == 1
+        and subject_type_counts.get("model") == 1
+        and "gpt-selftest" in subject_names
         and duration_diff.get("delta") == -40
         and effectiveness.get("candidate", {}).get("metrics", {}).get("cache", {}).get("hits") == 1
     )
@@ -3929,6 +3965,148 @@ def test_telemetry_effectiveness_snapshot_trend(root: Path, run_dir: Path) -> Te
             "telemetry effectiveness snapshot/trend stores reusable metrics in governance_state"
             if passed
             else "telemetry effectiveness snapshot/trend regression failed"
+        ),
+        commands=commands,
+    )
+
+
+def test_gate_pool_auto_snapshot_and_agent_trace_context(root: Path, run_dir: Path) -> TestResult:
+    trace_id = "33333333333333333333333333333333"
+    parent_span = "4444444444444444"
+    group_id = "selftest-trace-context"
+    commands = [
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "gate-pool",
+                "--root",
+                str(root),
+                "--task-id",
+                "selftest-auto-snapshot",
+                "--trace-id",
+                trace_id,
+                "--final",
+                "--dry-run",
+                "--format",
+                "json",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "agent-comm",
+                "init",
+                group_id,
+                "--title",
+                "trace context selftest",
+            ],
+            cwd=run_dir,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "agent-comm",
+                "register",
+                group_id,
+                "worker",
+            ],
+            cwd=run_dir,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "agent-comm",
+                "send",
+                group_id,
+                "--to",
+                "worker",
+                "--subject",
+                "trace handoff",
+                "--body",
+                "carry trace context",
+                "--traceparent",
+                f"00-{trace_id}-{parent_span}-01",
+            ],
+            cwd=run_dir,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "agent-comm",
+                "read",
+                group_id,
+                "inbox",
+                "--agent",
+                "worker",
+                "--format",
+                "json",
+            ],
+            cwd=run_dir,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "agent-comm",
+                "report",
+                group_id,
+                "--format",
+                "json",
+            ],
+            cwd=run_dir,
+            env_root=root,
+        ),
+    ]
+    plan: dict[str, object] = {}
+    inbox: list[dict[str, object]] = []
+    report: dict[str, object] = {}
+    try:
+        plan = json.loads(commands[0].stdout)
+        inbox = json.loads(commands[4].stdout)
+        report = json.loads(commands[5].stdout)
+    except json.JSONDecodeError:
+        pass
+    step_names = [
+        str(step.get("name") or "")
+        for step in plan.get("steps", [])
+        if isinstance(step, dict)
+    ]
+    first_message = inbox[0] if inbox else {}
+    message_trace = (
+        first_message.get("trace_context", {})
+        if isinstance(first_message.get("trace_context"), dict)
+        else {}
+    )
+    report_trace = report.get("trace_context", {}) if isinstance(report.get("trace_context"), dict) else {}
+    passed = (
+        all(command.exit_code == 0 for command in commands)
+        and "ai_client_governance.py telemetry effectiveness snapshot" in step_names
+        and "ai_client_governance.py telemetry effectiveness trend" in step_names
+        and message_trace.get("trace_id") == trace_id
+        and message_trace.get("parent_span_id") == parent_span
+        and str(message_trace.get("traceparent") or "").startswith(f"00-{trace_id}-")
+        and report_trace.get("message_trace_context_count") == 2
+        and report_trace.get("valid_traceparent_count") == 2
+        and report_trace.get("distinct_trace_count") == 1
+    )
+    return TestResult(
+        name="gate-pool-auto-snapshot-agent-trace-context",
+        passed=passed,
+        summary=(
+            "final gate-pool plans automatic effectiveness snapshot/trend and agent messages propagate trace context"
+            if passed
+            else "gate-pool auto snapshot or agent trace-context propagation regression failed"
         ),
         commands=commands,
     )
@@ -5840,6 +6018,7 @@ def main() -> int:
             test_policy_gate_task_run_enforcement(root, run_dir),
             test_telemetry_trace_context_effectiveness(root, run_dir),
             test_telemetry_effectiveness_snapshot_trend(root, run_dir),
+            test_gate_pool_auto_snapshot_and_agent_trace_context(root, run_dir),
             test_shell_adapter_scope_diagnostics(root, run_dir),
             test_command_error_taxonomy_and_compact_flow(root, run_dir),
             test_file_ownership_audit(root, run_dir),

@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from ai_client_governance.common.paths import AGENT_COMM_DIR
+from ai_client_governance.records import telemetry
 
 BASE_DIR = AGENT_COMM_DIR
 GROUPS_DIR = BASE_DIR / "groups"
@@ -211,6 +212,7 @@ def build_message(
     message_type: str,
     requires_ack: bool,
     metadata: dict[str, Any],
+    trace_context: dict[str, str],
 ) -> dict[str, Any]:
     return {
         "schema_version": SCHEMA_VERSION,
@@ -223,7 +225,26 @@ def build_message(
         "body": body,
         "requires_ack": requires_ack,
         "created_at": utc_now(),
+        "trace_context": trace_context,
         "metadata": metadata,
+    }
+
+
+def trace_context_payload(args: argparse.Namespace, metadata: dict[str, Any]) -> dict[str, str]:
+    parsed = telemetry.parse_traceparent(args.traceparent or str(metadata.get("traceparent") or ""))
+    base = parsed or telemetry.trace_context_from_env()
+    context = telemetry.new_trace_context(
+        trace_id=args.trace_id or base.trace_id,
+        parent_span_id=base.span_id,
+        tracestate=args.tracestate or base.tracestate,
+    )
+    return {
+        "standard": "W3C traceparent/tracestate",
+        "trace_id": context.trace_id,
+        "span_id": context.span_id,
+        "parent_span_id": context.parent_span_id,
+        "traceparent": context.traceparent,
+        "tracestate": context.tracestate,
     }
 
 
@@ -329,6 +350,7 @@ def command_register(args: argparse.Namespace) -> int:
 def command_send(args: argparse.Namespace) -> int:
     load_group(args.group)
     metadata = parse_json(args.metadata, {})
+    trace_context = trace_context_payload(args, metadata)
     message = build_message(
         args.group,
         args.sender,
@@ -338,6 +360,7 @@ def command_send(args: argparse.Namespace) -> int:
         args.type,
         args.requires_ack,
         metadata,
+        trace_context,
     )
     append_to_sender_outbox(args.group, args.sender, message)
     append_to_recipient_inbox(args.group, args.to, message)
@@ -348,6 +371,7 @@ def command_send(args: argparse.Namespace) -> int:
 def command_broadcast(args: argparse.Namespace) -> int:
     load_group(args.group)
     metadata = parse_json(args.metadata, {})
+    trace_context = trace_context_payload(args, metadata)
     message = build_message(
         args.group,
         args.sender,
@@ -357,6 +381,7 @@ def command_broadcast(args: argparse.Namespace) -> int:
         args.type,
         args.requires_ack,
         metadata,
+        trace_context,
     )
     append_jsonl(group_dir(args.group) / "broadcasts.jsonl", message)
     append_to_sender_outbox(args.group, args.sender, message)
@@ -621,6 +646,23 @@ def build_report(group_id: str) -> dict[str, Any]:
     group = load_group(group_id)
     agents = load_agents(group_id)
     messages = collect_messages(group_id)
+    trace_contexts = [
+        row.get("trace_context")
+        for row in messages
+        if isinstance(row.get("trace_context"), dict)
+    ]
+    trace_ids = sorted(
+        {
+            str(item.get("trace_id") or "")
+            for item in trace_contexts
+            if item.get("trace_id")
+        }
+    )
+    traceparents = [
+        str(item.get("traceparent") or "")
+        for item in trace_contexts
+        if item.get("traceparent")
+    ]
     acked = {
         str(row.get("ack_message_id"))
         for row in messages
@@ -660,6 +702,15 @@ def build_report(group_id: str) -> dict[str, Any]:
         "agent_count": len(agents),
         "agents": agents,
         "message_count": len(messages),
+        "trace_context": {
+            "standard": "W3C traceparent/tracestate",
+            "message_trace_context_count": len(trace_contexts),
+            "distinct_trace_count": len(trace_ids),
+            "valid_traceparent_count": len(
+                [item for item in traceparents if telemetry.TRACEPARENT_RE.fullmatch(item)]
+            ),
+            "sample_trace_ids": trace_ids[:10],
+        },
         "ack_required_count": len(sent_requiring_ack),
         "acked_count": len(sent_requiring_ack.keys() & acked),
         "unacked_messages": sorted(set(sent_requiring_ack) - acked),
@@ -684,6 +735,11 @@ def command_report(args: argparse.Namespace) -> int:
         "agents={agent_count} messages={message_count} ack={acked_count}/{ack_required_count} "
         "heartbeats={heartbeat_count} artifacts={artifact_count} "
         "active_locks={active_lock_count}".format(**report)
+    )
+    trace = report["trace_context"]
+    print(
+        "trace_context=messages:{message_trace_context_count} "
+        "valid_traceparent:{valid_traceparent_count} distinct_traces:{distinct_trace_count}".format(**trace)
     )
     if report["unacked_messages"]:
         print("未确认消息:")
@@ -800,6 +856,9 @@ def add_common_message_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--type", default="message", help="Message type.")
     parser.add_argument("--requires-ack", action="store_true", help="Require an ack event.")
     parser.add_argument("--metadata", help="JSON object with extra metadata.")
+    parser.add_argument("--trace-id", default="", help="Trace id to propagate into this agent message.")
+    parser.add_argument("--traceparent", default="", help="W3C traceparent header to continue.")
+    parser.add_argument("--tracestate", default="", help="W3C tracestate header to continue.")
 
 
 def parse_args() -> argparse.Namespace:
