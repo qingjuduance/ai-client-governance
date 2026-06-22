@@ -138,6 +138,15 @@ def cli_command(py: str, entrypoint: Path, command: str, *args: str) -> list[str
     return [py, str(entrypoint), command, *args]
 
 
+def effectiveness_snapshot_label(event: str) -> str:
+    return f"gate-pool-{event}"
+
+
+def effectiveness_snapshot_key(event: str, trace_id: str, task_id: str | None) -> str:
+    owner = task_id or trace_id
+    return f"gate-pool:{event}:{owner}"
+
+
 def normalize_paths(paths: list[str]) -> list[str]:
     result: list[str] = []
     for value in paths:
@@ -655,6 +664,53 @@ def build_steps(root: Path, args: argparse.Namespace) -> list[GateStep]:
                 reason="Summarize execution telemetry for the trace.",
             )
         )
+        if args.final or event == "final-output":
+            label = effectiveness_snapshot_label(event)
+            snapshot_key = effectiveness_snapshot_key(event, trace_id, args.task_id)
+            steps.append(
+                GateStep(
+                    name="ai_client_governance.py telemetry effectiveness snapshot",
+                    phase="report",
+                    command=cli_command(
+                        py,
+                        entrypoint,
+                        "telemetry",
+                        "effectiveness",
+                        "snapshot",
+                        "--root",
+                        str(telemetry_root),
+                        "--trace-id",
+                        trace_id,
+                        "--snapshot-key",
+                        snapshot_key,
+                        "--label",
+                        label,
+                        "--top",
+                        str(args.top),
+                    ),
+                    reason="Automatically persist final-output effectiveness metrics for the traced gate-pool run.",
+                )
+            )
+            steps.append(
+                GateStep(
+                    name="ai_client_governance.py telemetry effectiveness trend",
+                    phase="report",
+                    command=cli_command(
+                        py,
+                        entrypoint,
+                        "telemetry",
+                        "effectiveness",
+                        "trend",
+                        "--root",
+                        str(telemetry_root),
+                        "--label",
+                        label,
+                        "--top",
+                        str(args.top),
+                    ),
+                    reason="Report stored final-output effectiveness snapshots as trend evidence.",
+                )
+            )
         steps.append(
             GateStep(
                 name="ai_client_governance.py tool-flow",

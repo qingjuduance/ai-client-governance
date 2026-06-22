@@ -446,8 +446,14 @@ def classify_command_error(
 def subject_from_event(event: dict[str, Any]) -> tuple[str, str]:
     if event.get("subject") not in (None, ""):
         return str(event.get("subject") or ""), str(event.get("subject_type") or "subject")
+    requested_type = str(event.get("subject_type") or "")
     if event.get("command") not in (None, ""):
         return str(event.get("command") or ""), "command"
+    if requested_type == "model":
+        attributes = event.get("attributes") if isinstance(event.get("attributes"), dict) else {}
+        model_subject = event.get("model") or attributes.get("model_id")
+        if model_subject not in (None, "", "unknown"):
+            return str(model_subject), "model"
     if event.get("url") not in (None, ""):
         return str(event.get("url") or ""), str(event.get("subject_type") or "http_url")
     if event.get("endpoint") not in (None, ""):
