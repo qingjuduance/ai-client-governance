@@ -21,6 +21,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from ai_client_governance.common import cli_arguments as common_cli_args
+
 
 SCHEMA_VERSION = 1
 ACTIVE_STATUSES = {"active", "integrating", "waiting"}
@@ -999,7 +1001,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     parser = build_parser()
-    args = parser.parse_args()
+    args = parser.parse_args(
+        common_cli_args.migrate_global_args(sys.argv[1:], names=("format",))
+    )
     cwd = Path.cwd()
     repo_root, common_dir = detect_repo(cwd)
     store = StateStore(common_dir)
