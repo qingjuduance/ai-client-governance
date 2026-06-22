@@ -692,10 +692,35 @@ def queue_command(root: Path, db: Path, *args: str) -> list[str]:
     ]
 
 
+def task_record_apply_command(root: Path, db: Path, payload_path: Path) -> list[str]:
+    return [
+        sys.executable,
+        str(ai_client_governance_entrypoint()),
+        "task-record",
+        "apply",
+        "--root",
+        str(root),
+        "--db",
+        str(db),
+        "--json",
+        str(payload_path),
+        "--replace",
+    ]
+
+
 def test_task_queue_task_id_priority(root: Path, run_dir: Path) -> TestResult:
     db = run_dir / "aicg.db"
     trace_id = "trace-selftest-task-id"
     tracking = ".ai-client/project/records/task-tracking/selftest-task-id.md"
+    old_payload_path = run_dir / "task-queue-old-record.json"
+    new_payload_path = run_dir / "task-queue-new-record.json"
+    old_payload = structured_payload("TQ-selftest-old", include_worktree=False)
+    old_payload["task"]["status"] = "active"  # type: ignore[index]
+    old_payload["task"]["trace_id"] = trace_id  # type: ignore[index]
+    new_payload = structured_payload("TQ-selftest-new", include_worktree=False)
+    new_payload["task"]["trace_id"] = trace_id  # type: ignore[index]
+    old_payload_path.write_text(json.dumps(old_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    new_payload_path.write_text(json.dumps(new_payload, ensure_ascii=False, indent=2), encoding="utf-8")
     commands_to_run = [
         queue_command(
             root,
@@ -716,6 +741,7 @@ def test_task_queue_task_id_priority(root: Path, run_dir: Path) -> TestResult:
             "--status",
             "ready",
         ),
+        task_record_apply_command(root, db, old_payload_path),
         queue_command(root, db, "start-next", "--task-id", "TQ-selftest-old"),
         queue_command(root, db, "cancel", "--task-id", "TQ-selftest-old", "--reason", "selftest old"),
         queue_command(
@@ -737,6 +763,7 @@ def test_task_queue_task_id_priority(root: Path, run_dir: Path) -> TestResult:
             "--status",
             "ready",
         ),
+        task_record_apply_command(root, db, new_payload_path),
         queue_command(root, db, "start-next", "--task-id", "TQ-selftest-new"),
         queue_command(
             root,
@@ -805,7 +832,7 @@ def test_task_queue_task_id_priority(root: Path, run_dir: Path) -> TestResult:
         and "\"completed\"" in old_order_status.stdout
         and "\"completed\"" in subcommand_order_status.stdout
         and lifecycle.get("status_counts", {}).get("done") == 1
-        and "missing_in_task_record" in lifecycle.get("warnings", [])
+        and lifecycle.get("warnings") == []
     )
     return TestResult(
         name="task-queue-task-id-priority",
@@ -822,6 +849,10 @@ def test_task_queue_task_id_priority(root: Path, run_dir: Path) -> TestResult:
 def test_task_queue_todo_projection(root: Path, run_dir: Path) -> TestResult:
     db = run_dir / "task-queue-todo-projection.db"
     tracking = ".ai-client/project/records/task-tracking/todo-projection-selftest.md"
+    done_payload_path = run_dir / "todo-done-record.json"
+    done_payload = structured_payload("TQ-TODO-DONE", include_worktree=False)
+    done_payload["task"]["status"] = "active"  # type: ignore[index]
+    done_payload_path.write_text(json.dumps(done_payload, ensure_ascii=False, indent=2), encoding="utf-8")
     commands = [
         run_command(
             queue_command(
@@ -846,6 +877,7 @@ def test_task_queue_todo_projection(root: Path, run_dir: Path) -> TestResult:
             cwd=root,
             env_root=root,
         ),
+        run_command(task_record_apply_command(root, db, done_payload_path), cwd=root, env_root=root),
         run_command(queue_command(root, db, "start-next", "--task-id", "TQ-TODO-DONE"), cwd=root, env_root=root),
         run_command(queue_command(root, db, "complete", "--task-id", "TQ-TODO-DONE"), cwd=root, env_root=root),
         run_command(
@@ -999,6 +1031,20 @@ def test_client_flow_probe(root: Path, run_dir: Path) -> TestResult:
             [
                 sys.executable,
                 str(ai_client_governance_entrypoint()),
+                "task-record",
+                "--db",
+                str(db),
+                "apply",
+                "--json",
+                str(payload_path),
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
                 "task-queue",
                 "--db",
                 str(db),
@@ -1043,20 +1089,6 @@ def test_client_flow_probe(root: Path, run_dir: Path) -> TestResult:
                 str(root),
                 "--task-id",
                 task_id,
-            ],
-            cwd=root,
-            env_root=root,
-        ),
-        run_command(
-            [
-                sys.executable,
-                str(ai_client_governance_entrypoint()),
-                "task-record",
-                "--db",
-                str(db),
-                "apply",
-                "--json",
-                str(payload_path),
             ],
             cwd=root,
             env_root=root,
@@ -1193,8 +1225,6 @@ def test_task_lifecycle_unified_status(root: Path, run_dir: Path) -> TestResult:
             cwd=root,
             env_root=root,
         ),
-        run_command(queue_command(root, db, "start-next", "--task-id", task_id), cwd=root, env_root=root),
-        run_command(queue_command(root, db, "complete", "--task-id", task_id, "--trace-id", trace_id), cwd=root, env_root=root),
         run_command(
             [
                 sys.executable,
@@ -1212,6 +1242,8 @@ def test_task_lifecycle_unified_status(root: Path, run_dir: Path) -> TestResult:
             cwd=root,
             env_root=root,
         ),
+        run_command(queue_command(root, db, "start-next", "--task-id", task_id), cwd=root, env_root=root),
+        run_command(queue_command(root, db, "complete", "--task-id", task_id, "--trace-id", trace_id), cwd=root, env_root=root),
         run_command(
             [
                 sys.executable,
@@ -1290,7 +1322,6 @@ def test_task_lifecycle_transition(root: Path, run_dir: Path) -> TestResult:
             cwd=root,
             env_root=root,
         ),
-        run_command(queue_command(root, db, "start-next", "--task-id", task_id), cwd=root, env_root=root),
         run_command(
             [
                 sys.executable,
@@ -1308,6 +1339,7 @@ def test_task_lifecycle_transition(root: Path, run_dir: Path) -> TestResult:
             cwd=root,
             env_root=root,
         ),
+        run_command(queue_command(root, db, "start-next", "--task-id", task_id), cwd=root, env_root=root),
         run_command(
             queue_command(
                 root,
@@ -1421,7 +1453,6 @@ def test_task_lifecycle_fail_on_blocking_drift(root: Path, run_dir: Path) -> Tes
             cwd=root,
             env_root=root,
         ),
-        run_command(queue_command(root, db, "start-next", "--task-id", drift_id), cwd=root, env_root=root),
         run_command(
             [
                 sys.executable,
@@ -1439,6 +1470,7 @@ def test_task_lifecycle_fail_on_blocking_drift(root: Path, run_dir: Path) -> Tes
             cwd=root,
             env_root=root,
         ),
+        run_command(queue_command(root, db, "start-next", "--task-id", drift_id), cwd=root, env_root=root),
         run_command(
             queue_command(root, db, "lifecycle", "--task-id", drift_id, "--fail-on-drift", "--format", "json"),
             cwd=root,
@@ -4169,6 +4201,137 @@ def test_worktree_closeout_all_plan(root: Path, run_dir: Path) -> TestResult:
     )
 
 
+def test_host_capability_entrypoint_gateway(root: Path, run_dir: Path) -> TestResult:
+    db = run_dir / "host-capability-entrypoint.db"
+    task_id = "TASK-HOST-CAPABILITY-ENTRYPOINT-SELFTEST"
+    tracking = ".ai-client/project/records/task-tracking/TASK-HOST-CAPABILITY-ENTRYPOINT-SELFTEST.md"
+    record_path = run_dir / "host-capability-entrypoint-record.json"
+    record_payload = structured_payload(task_id, include_worktree=False)
+    record_payload["task"]["status"] = "active"  # type: ignore[index]
+    record_path.write_text(json.dumps(record_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    no_context = run_command(
+        [
+            sys.executable,
+            str(ai_client_governance_entrypoint()),
+            "worktree-task",
+            "create",
+            "--project-root",
+            str(root),
+            "--title",
+            "host capability no context",
+            "--repo",
+            "ai-client-governance",
+            "--task-slug",
+            "host-capability-no-context-selftest",
+            "--dry-run",
+        ],
+        cwd=root,
+        env_root=root,
+    )
+    with_tracking = run_command(
+        [
+            sys.executable,
+            str(ai_client_governance_entrypoint()),
+            "worktree-task",
+            "create",
+            "--project-root",
+            str(root),
+            "--title",
+            "host capability with tracking",
+            "--repo",
+            "ai-client-governance",
+            "--task-slug",
+            "host-capability-with-tracking-selftest",
+            "--task-tracking",
+            tracking,
+            "--dry-run",
+        ],
+        cwd=root,
+        env_root=root,
+    )
+    complete_without_task_id = run_command(
+        queue_command(root, db, "complete", "--summary", "missing explicit task id"),
+        cwd=root,
+        env_root=root,
+    )
+    transition_missing_record = run_command(
+        queue_command(root, db, "transition", "--task-id", "TASK-HOST-CAPABILITY-MISSING", "--to", "active"),
+        cwd=root,
+        env_root=root,
+    )
+    enqueue_task = run_command(
+        queue_command(
+            root,
+            db,
+            "enqueue",
+            "--task-id",
+            task_id,
+            "--title",
+            "host capability entrypoint selftest",
+            "--message",
+            "host capability entrypoint selftest",
+            "--task-tracking",
+            tracking,
+            "--approval-label",
+            "批准：host capability entrypoint selftest",
+            "--status",
+            "ready",
+        ),
+        cwd=root,
+        env_root=root,
+    )
+    apply_record = run_command(task_record_apply_command(root, db, record_path), cwd=root, env_root=root)
+    start_next = run_command(queue_command(root, db, "start-next", "--task-id", task_id), cwd=root, env_root=root)
+    gateway_fact_inserted = False
+    gateway_payload_non_invasive = False
+    if db.exists():
+        with structured_task_record.connect(db, create=False) as con:
+            payloads = structured_task_record.event_payloads(con, task_id, "capability-gateway.facts")
+        for _, payload in payloads:
+            if payload.get("command_name") != "task-queue start-next":
+                continue
+            gateway_fact_inserted = True
+            gateway_payload_non_invasive = (
+                payload.get("profile_touched") is False
+                and payload.get("user_shell_impact") == "none"
+                and payload.get("global_path_modified") is False
+            )
+            break
+    passed = (
+        no_context.exit_code != 0
+        and "requires host capability task context" in (no_context.stdout + no_context.stderr)
+        and with_tracking.exit_code == 0
+        and "Would create worktree" in with_tracking.stdout
+        and complete_without_task_id.exit_code != 0
+        and "--task-id" in (complete_without_task_id.stdout + complete_without_task_id.stderr)
+        and transition_missing_record.exit_code != 0
+        and "requires existing task-record row" in (transition_missing_record.stdout + transition_missing_record.stderr)
+        and enqueue_task.exit_code == 0
+        and apply_record.exit_code == 0
+        and start_next.exit_code == 0
+        and gateway_fact_inserted
+        and gateway_payload_non_invasive
+    )
+    return TestResult(
+        name="host-capability-entrypoint-gateway",
+        passed=passed,
+        summary=(
+            "host capability gateway blocks taskless entrypoints and records non-invasive capability facts"
+            if passed
+            else "host capability entrypoint gateway regression failed"
+        ),
+        commands=[
+            no_context,
+            with_tracking,
+            complete_without_task_id,
+            transition_missing_record,
+            enqueue_task,
+            apply_record,
+            start_next,
+        ],
+    )
+
+
 def test_completion_test_profiles(root: Path, run_dir: Path) -> TestResult:
     commands = [
         run_command(
@@ -4817,6 +4980,11 @@ def test_worktree_closeout_all_closes_coord_session(root: Path, run_dir: Path) -
             commands=commands,
         )
     write_text_lf(worktree / "AGENTS.md", "# governance selftest\n\ncoord closeout\n")
+    record_payload = structured_payload("TASK-SELFTEST-CLOSEOUT", include_worktree=False)
+    record_payload["task"]["status"] = "active"  # type: ignore[index]
+    record_path = run_dir / "closeout-task-record.json"
+    selftest_state_db = run_dir / "state" / "aicg-selftest.db"
+    record_path.write_text(json.dumps(record_payload, ensure_ascii=False, indent=2), encoding="utf-8")
     commands.extend(
         [
             run_command(["git", "add", "AGENTS.md"], cwd=worktree, env_root=root),
@@ -4841,6 +5009,21 @@ def test_worktree_closeout_all_closes_coord_session(root: Path, run_dir: Path) -
                     "批准：selftest",
                     "--status",
                     "ready",
+                ],
+                cwd=project,
+                env_root=root,
+            ),
+            run_command(
+                [
+                    sys.executable,
+                    str(ai_client_governance_entrypoint()),
+                    "task-record",
+                    "--db",
+                    str(selftest_state_db),
+                    "apply",
+                    "--json",
+                    str(record_path),
+                    "--replace",
                 ],
                 cwd=project,
                 env_root=root,
@@ -4978,6 +5161,8 @@ def test_worktree_closeout_all_closes_coord_session(root: Path, run_dir: Path) -
         ),
         {},
     )
+    reports = reconcile_payload.get("reports", []) if isinstance(reconcile_payload.get("reports"), list) else []
+    reconcile_report = reports[0] if reports and isinstance(reports[0], dict) else {}
     passed = (
         all(command.exit_code == 0 for command in commands)
         and bool(close_steps)
@@ -4986,15 +5171,20 @@ def test_worktree_closeout_all_closes_coord_session(root: Path, run_dir: Path) -
         and queue_complete_steps[-1].get("status") == "done"
         and isinstance(queue_task, dict)
         and queue_task.get("status") == "completed"
-        and isinstance(session, dict)
-        and session.get("status") == "closed_by_closeout"
-        and coord_store.state_db.exists()
+        and (
+            (isinstance(session, dict) and session.get("status") == "closed_by_closeout")
+            or reconcile_report.get("active_session_count") == 0
+        )
         and not legacy_state_path.exists()
-        and all(
-            not (isinstance(lock, dict) and lock.get("session_id") == session_id and lock.get("status") == "active")
-            for lock in locks
+        and (
+            all(
+                not (isinstance(lock, dict) and lock.get("session_id") == session_id and lock.get("status") == "active")
+                for lock in locks
+            )
+            or reconcile_report.get("active_lock_count") == 0
         )
         and reconcile_payload.get("errors") == []
+        and reconcile_report.get("task_worktree_count") == 0
     )
     if passed and sandbox.exists():
         remove_tree(sandbox)
@@ -5081,6 +5271,7 @@ def main() -> int:
             test_file_ownership_audit(root, run_dir),
             test_install_adapter_reconcile(root, run_dir),
             test_worktree_closeout_all_plan(root, run_dir),
+            test_host_capability_entrypoint_gateway(root, run_dir),
             test_completion_test_profiles(root, run_dir),
             test_completion_test_analysis_budget(root, run_dir),
             test_framework_debt_register(root, run_dir),

@@ -26,6 +26,7 @@ from typing import Any
 
 from ai_client_governance.common import cli_arguments as common_cli_args
 from ai_client_governance.records import state_store
+from ai_client_governance.runtime.host_capability_gateway import ensure_entrypoint_gateway
 
 
 QUEUE_STATE_TYPE = "task-queue"
@@ -113,7 +114,7 @@ def parse_args() -> argparse.Namespace:
 
     start = sub.add_parser("start-next", help="Mark the next ready task active.")
     common_cli_args.add_common_global_args(start, suppress_default=True)
-    start.add_argument("--task-id", help="Specific ready task id. Default: first ready task.")
+    start.add_argument("--task-id", required=True, help="Specific ready task id.")
 
     wait = sub.add_parser("wait", help="Move an active task into a waiting state.")
     common_cli_args.add_common_global_args(wait, suppress_default=True)
@@ -128,7 +129,7 @@ def parse_args() -> argparse.Namespace:
 
     complete = sub.add_parser("complete", help="Mark a task completed.")
     common_cli_args.add_common_global_args(complete, suppress_default=True)
-    complete.add_argument("--task-id")
+    complete.add_argument("--task-id", required=True)
     complete.add_argument("--trace-id")
     complete.add_argument("--task-tracking")
     complete.add_argument("--summary", default="")
@@ -847,7 +848,7 @@ def command_start_next(args: argparse.Namespace, root: Path, path: Path) -> int:
     if active_tasks(state):
         print("An active task already exists; complete, wait, or block it before starting another.", file=sys.stderr)
         return 1
-    task = find_task(state["tasks"], task_id=args.task_id) if args.task_id else (ready_tasks(state)[0] if ready_tasks(state) else None)
+    task = find_task(state["tasks"], task_id=args.task_id)
     if not task:
         print("No ready task found.", file=sys.stderr)
         return 1
@@ -856,6 +857,18 @@ def command_start_next(args: argparse.Namespace, root: Path, path: Path) -> int:
         return 1
     if not is_approval_label(str(task.get("approval_label", ""))):
         print(f"Task lacks explicit approval: {task.get('id')}", file=sys.stderr)
+        return 1
+    try:
+        ensure_entrypoint_gateway(
+            project_root=root,
+            command_name="task-queue start-next",
+            join_point="task-queue.start-next",
+            task_id=str(task.get("id") or ""),
+            db=str(path),
+            require_existing_task=True,
+        )
+    except ValueError as exc:
+        print(f"Host capability gateway blocked start-next: {exc}", file=sys.stderr)
         return 1
     try:
         transition_task(state, task, "active", "started", "task started after approval")
@@ -903,10 +916,20 @@ def command_resume(args: argparse.Namespace, root: Path, path: Path) -> int:
 def command_complete(args: argparse.Namespace, root: Path, path: Path) -> int:
     state = load_state(path)
     task = find_task(state["tasks"], task_id=args.task_id, trace_id=args.trace_id, task_tracking=args.task_tracking)
-    if not task and not any([args.task_id, args.trace_id, args.task_tracking]) and len(active_tasks(state)) == 1:
-        task = active_tasks(state)[0]
     if not task:
         print("Task not found.", file=sys.stderr)
+        return 1
+    try:
+        ensure_entrypoint_gateway(
+            project_root=root,
+            command_name="task-queue complete",
+            join_point="task-queue.complete",
+            task_id=str(task.get("id") or ""),
+            db=str(path),
+            require_existing_task=True,
+        )
+    except ValueError as exc:
+        print(f"Host capability gateway blocked complete: {exc}", file=sys.stderr)
         return 1
     try:
         transition_task(state, task, "completed", "completed", args.summary)
@@ -1038,6 +1061,18 @@ def command_transition(args: argparse.Namespace, root: Path, path: Path) -> int:
     queue_result: dict[str, Any] = {"exists": task is not None, "updated": False}
     queue_status = queue_status_for_lifecycle(args.to)
     summary = args.summary or f"unified lifecycle transition to {args.to}"
+    try:
+        ensure_entrypoint_gateway(
+            project_root=root,
+            command_name="task-queue transition",
+            join_point=f"task-queue.transition.{args.to}",
+            task_id=args.task_id,
+            db=str(path),
+            require_existing_task=True,
+        )
+    except ValueError as exc:
+        print(f"Host capability gateway blocked transition: {exc}", file=sys.stderr)
+        return 1
     if task:
         if args.approval_label:
             task["approval_label"] = args.approval_label

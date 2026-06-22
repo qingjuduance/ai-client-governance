@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from ai_client_governance.records import state_store
+from ai_client_governance.runtime.host_capability_gateway import ensure_entrypoint_gateway
 from ai_client_governance.worktree.coord import GuardedState, StateStore, current_branch, current_head, detect_repo, git_text, safe_id
 
 DEFAULT_SELF_EXCLUDES = (".source-projects",)
@@ -386,6 +387,47 @@ def worktree_state_db(project_root: Path) -> Path:
     return state_store.db_path(project_root)
 
 
+def first_task_tracking(value: str | list[str] | None) -> str:
+    if isinstance(value, list):
+        return value[0] if value else ""
+    return value or ""
+
+
+def require_host_capability_gateway(
+    args: argparse.Namespace,
+    *,
+    project_root: Path,
+    command_name: str,
+    join_point: str,
+    task_id: str | None = None,
+    require_existing_task: bool = True,
+) -> str:
+    """Require task-scoped host capability context without touching host shell state."""
+    try:
+        result = ensure_entrypoint_gateway(
+            project_root=project_root,
+            command_name=command_name,
+            join_point=join_point,
+            task_id=task_id or getattr(args, "task_id", "") or getattr(args, "complete_task_id", ""),
+            task_tracking=first_task_tracking(getattr(args, "task_tracking", None)),
+            require_existing_task=require_existing_task,
+        )
+    except ValueError as exc:
+        raise ValueError(f"Host capability gateway blocked {command_name}: {exc}") from exc
+    return result.task_id
+
+
+def resolve_single_active_queue_task_id(project_root: Path) -> str:
+    from ai_client_governance.records import task_queue
+
+    path = task_queue.queue_db_path(project_root, None)
+    state = task_queue.load_state(path)
+    active = task_queue.active_tasks(state)
+    if len(active) != 1:
+        raise ValueError(f"--complete-current-task requires exactly one active queue task; found {len(active)}")
+    return str(active[0].get("id") or "")
+
+
 def project_relative_status_path(project_root: Path, path: Path) -> str:
     """Return a Git status path relative to the host project root."""
     try:
@@ -751,9 +793,15 @@ def add_closeout_completion_actions(plan: dict[str, Any], args: argparse.Namespa
         return
     script = governance_script_for_project(project_root)
     if args.complete_task_id or args.complete_current_task:
+        resolved_task_id = args.complete_task_id
+        if args.complete_current_task:
+            try:
+                resolved_task_id = resolve_single_active_queue_task_id(project_root)
+            except ValueError as exc:
+                plan["blockers"].append(str(exc))
+                return
         command = [sys.executable, str(script), "task-queue", "complete", "--summary", args.complete_summary, "--format", "json"]
-        if args.complete_task_id:
-            command.extend(["--task-id", args.complete_task_id])
+        command.extend(["--task-id", resolved_task_id])
         add_closeout_action(
             plan,
             action="complete-task-queue",
@@ -762,10 +810,17 @@ def add_closeout_completion_actions(plan: dict[str, Any], args: argparse.Namespa
             reason="mark the queue task completed as part of closeout so final response does not require a separate state turn",
         )
     if args.task_record_final_gate:
-        task_id = args.complete_task_id or "<completed-queue-task>"
         if not (args.complete_task_id or args.complete_current_task):
             plan["blockers"].append("--task-record-final-gate requires --complete-task-id or --complete-current-task")
             return
+        if args.complete_task_id:
+            task_id = args.complete_task_id
+        else:
+            try:
+                task_id = resolve_single_active_queue_task_id(project_root)
+            except ValueError as exc:
+                plan["blockers"].append(str(exc))
+                return
         add_closeout_action(
             plan,
             action="task-record-final-gate",
@@ -1305,9 +1360,14 @@ def execute_closeout_all(plan: dict[str, Any], args: argparse.Namespace) -> int:
             )
         if args.complete_task_id or args.complete_current_task:
             script = governance_script_for_project(project_root)
+            if args.complete_current_task and not completed_queue_task_id:
+                try:
+                    completed_queue_task_id = resolve_single_active_queue_task_id(project_root)
+                except ValueError as exc:
+                    plan["blockers"].append(str(exc))
+                    return 1
             command = [sys.executable, str(script), "task-queue", "complete", "--summary", args.complete_summary, "--format", "json"]
-            if args.complete_task_id:
-                command.extend(["--task-id", args.complete_task_id])
+            command.extend(["--task-id", completed_queue_task_id])
             completed = run_closeout_process(
                 plan,
                 command,
@@ -1643,6 +1703,17 @@ def print_status_text(snapshot: dict[str, Any], task_slug: str | None) -> None:
 def command_create(args: argparse.Namespace) -> int:
     """Create a new task worktree."""
     project_root = find_project_root(Path.cwd(), args.project_root)
+    try:
+        require_host_capability_gateway(
+            args,
+            project_root=project_root,
+            command_name="worktree-task create",
+            join_point="worktree-task.create",
+            require_existing_task=False,
+        )
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
     source_repo = source_repo_for(project_root, args.repo)
     task_slug = args.task_slug or generate_task_slug(args.title)
     branch_name = f"codex/{task_slug}"
@@ -2081,6 +2152,18 @@ def command_merge(args: argparse.Namespace) -> int:
 def command_finalize(args: argparse.Namespace) -> int:
     """Run a live worktree status gate before final output or closeout."""
     repo_root = find_project_root(Path.cwd(), args.project_root)
+    if args.task_id or args.task_tracking or args.require_host_closeout:
+        try:
+            require_host_capability_gateway(
+                args,
+                project_root=repo_root,
+                command_name="worktree-task finalize",
+                join_point="worktree-task.finalize",
+                require_existing_task=True,
+            )
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
     snapshot = build_status_snapshot(repo_root, args.target_ref)
     if args.record_state:
         db = record_status_snapshot(repo_root, snapshot)
@@ -2147,6 +2230,17 @@ def command_finalize(args: argparse.Namespace) -> int:
 def command_host_closeout(args: argparse.Namespace) -> int:
     """Verify host-side closeout after embedded ai-client-governance merges."""
     repo_root = find_project_root(Path.cwd(), args.project_root)
+    try:
+        require_host_capability_gateway(
+            args,
+            project_root=repo_root,
+            command_name="worktree-task host-closeout",
+            join_point="worktree-task.host-closeout",
+            require_existing_task=True,
+        )
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
     report = build_host_closeout_report(
         repo_root,
         repo=args.repo,
@@ -2264,6 +2358,27 @@ def command_remove(args: argparse.Namespace) -> int:
 
 def command_closeout_all(args: argparse.Namespace) -> int:
     """Plan or execute a conservative closeout for all selected task worktrees."""
+    if args.execute:
+        project_root = find_project_root(Path.cwd(), args.project_root)
+        task_id = args.complete_task_id or ""
+        if args.complete_current_task:
+            try:
+                task_id = resolve_single_active_queue_task_id(project_root)
+            except ValueError as exc:
+                print(str(exc), file=sys.stderr)
+                return 1
+        try:
+            require_host_capability_gateway(
+                args,
+                project_root=project_root,
+                command_name="worktree-task closeout-all",
+                join_point="worktree-task.closeout-all",
+                task_id=task_id,
+                require_existing_task=True,
+            )
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
     plan = build_closeout_all_plan(args)
     if not args.execute:
         print_closeout_all_report(plan, output_format=args.format)
@@ -2289,6 +2404,7 @@ def build_parser() -> argparse.ArgumentParser:
     create.add_argument("--project-root", help="Host project root containing .ai-client/project.")
     create.add_argument("--title", required=True, help="Task title.")
     create.add_argument("--repo", choices=["self", "ai-client-governance"], required=True, help="Source repository.")
+    create.add_argument("--task-id", help="Task-record id used by the non-invasive host capability gateway.")
     create.add_argument("--task-slug", help="Override generated task slug.")
     create.add_argument("--base", help="Base commit/branch. Default: HEAD.")
     create.add_argument("--scope", action="append", help="Initial session scopes (repeatable).")
@@ -2412,6 +2528,7 @@ def build_parser() -> argparse.ArgumentParser:
     # finalize
     finalize = subparsers.add_parser("finalize", help="Run a live worktree status gate before final output.")
     finalize.add_argument("--project-root", help="Host project root containing .ai-client/project.")
+    finalize.add_argument("--task-id", help="Task-record id used by the non-invasive host capability gateway.")
     finalize.add_argument("--target-ref", default="main", help="Target ref used for merged status. Default: main.")
     finalize.add_argument("--require-merged", action="store_true", help="Fail when any task worktree is not merged to target.")
     finalize.add_argument("--require-no-task-worktrees", action="store_true", help="Fail when any task worktree still exists.")
@@ -2433,6 +2550,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     host_closeout.add_argument("--project-root", help="Host project root containing .ai-client/project.")
     host_closeout.add_argument("--repo", choices=["ai-client-governance"], default="ai-client-governance", help="Embedded repository to verify.")
+    host_closeout.add_argument("--task-id", help="Task-record id used by the non-invasive host capability gateway.")
     host_closeout.add_argument("--task-slug", "--task", dest="task_slug", help="Task slug used to find related task tracking.")
     host_closeout.add_argument("--task-tracking", action="append", help="Related task tracking file. Repeatable.")
     host_closeout.add_argument("--require-task-tracking", action="store_true", help="Require tracking to mention current embedded HEAD.")
@@ -2698,6 +2816,7 @@ def command_dispatch(args: argparse.Namespace) -> int:
         project_root=str(project_root),
         repo=args.repo,
         title=args.title,
+        task_id=task_id,
         task_slug=task_slug,
         base=args.base,
         scope=args.scope,
