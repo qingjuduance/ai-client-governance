@@ -7,7 +7,7 @@
     "targetPath": ".ai-client/ai-client-governance",
     "defaultMethod": "git-submodule",
     "preferredMethod": "git-submodule",
-    "fallbackMethod": "nested-git-clone",
+    "alternateMethod": "nested-git-clone-explicit-user-choice",
     "existingPreparedRepoMethod": "existing-embedded-git-repository"
   },
   "rulesLayout": {
@@ -550,7 +550,7 @@
   "installer": {
     "script": "install-ai-client-governance.ps1",
     "defaultMode": "git-submodule",
-    "fallbackMode": "nested-git-clone",
+    "alternateMode": "nested-git-clone-explicit-user-choice",
     "existingPreparedRepoMode": "existing-embedded-git-repository",
     "supportsPlanOnly": true,
     "supportsPowerShellWhatIf": true,
