@@ -1424,6 +1424,30 @@ def default_components() -> list[ComponentDefinition]:
             fail_policy="fail_closed",
         ),
         component(
+            "state.reporter.session-bootstrap",
+            "reporter",
+            "session",
+            405,
+            "Summarize session-start rule entry files and sync-check state without dumping long AGENTS.md bodies.",
+            events=("session-start", "status-output", "resume"),
+            requires_facts=("root_entry", "common_governance_entry", "project_rules_entry"),
+            produces_facts=("rule_file_metadata", "bounded_heading_index", "sync_check_report"),
+            mechanism_label="ai_client_governance.py session-bootstrap",
+            gate_step="session-bootstrap",
+            fail_policy="warn_only",
+            effect="state_write",
+            condition=(
+                "Run at session start before reading long rules. Default output must stay compact; "
+                "deep reads use context-extract --headings, --match, or --range."
+            ),
+            performance_budget="three bounded UTF-8 file reads plus sync-check; no full rule-body terminal dump",
+            metadata={
+                "compact_output": True,
+                "forbidden_default": "raw Get-Content -Raw on long Chinese AGENTS.md files",
+                "safe_drilldown": "context-extract --headings/--match/--range",
+            },
+        ),
+        component(
             "state.filter.sync-check",
             "processing-interceptor",
             "session",
@@ -2303,11 +2327,13 @@ EXPECTED_RUNTIME_COMMAND_KEYS = {
     "taskRunRun",
     "taskRunDiagnose",
     "policyAssess",
+    "sessionBootstrap",
     "shellAdapterDiagnose",
     "shellAdapterProxyPowerShell",
     "agentCommRegister",
     "agentCommHeartbeat",
     "telemetryReport",
+    "jsonQuery",
     "telemetryEffectiveness",
     "telemetryEffectivenessSnapshot",
     "clientFlowProbe",
@@ -2468,7 +2494,8 @@ def write_declarative_registry(args: argparse.Namespace) -> dict[str, Any]:
     changed = existing != text
     if changed and not args.check:
         output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(text, encoding="utf-8")
+        with output.open("w", encoding="utf-8", newline="\n") as handle:
+            handle.write(text)
     return {
         "output": output.as_posix(),
         "requested_root": requested_root.as_posix(),

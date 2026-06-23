@@ -193,6 +193,60 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
         compact_output_policy="Return capability ids and control layers; include long notes only for the selected capability.",
     ),
     ToolSpec(
+        name="json_query",
+        description="Run or read JSON and extract fields without PowerShell pipes or inline python -c.",
+        command="json-query",
+        side_effect="readonly",
+        parallel_safe=True,
+        control_layer="plugin",
+        enforcement_level="schema_validated_when_called",
+        parameters_schema=object_schema(
+            {
+                "path": {"type": "array", "items": {"type": "string"}},
+                "input": {"type": "string"},
+                "command": {"type": "array", "items": {"type": "string"}},
+                "format": {"type": "string", "enum": ["json", "text"], "default": "text"},
+            },
+            required=["path"],
+        ),
+        output_schema=object_schema(
+            {
+                "status": {"type": "string"},
+                "path_count": {"type": "integer"},
+                "result_count": {"type": "integer"},
+                "results": {"type": "object"},
+            }
+        ),
+        compact_output_policy="Return only selected JSON path values and short parse/command errors; never require '| python -c' post-processing.",
+    ),
+    ToolSpec(
+        name="session_bootstrap",
+        description="Return compact session-start rule file metadata, bounded headings, and sync-check warnings.",
+        command="session-bootstrap",
+        side_effect="state_write",
+        parallel_safe=False,
+        control_layer="plugin",
+        enforcement_level="schema_validated_when_called",
+        parameters_schema=object_schema(
+            {
+                "root": {"type": "string", "default": "."},
+                "max_headings": {"type": "integer", "default": 12},
+                "no_fetch": {"type": "boolean", "default": False},
+                "format": {"type": "string", "enum": ["text", "json", "markdown"], "default": "text"},
+            }
+        ),
+        output_schema=object_schema(
+            {
+                "status": {"type": "string"},
+                "rule_files": {"type": "array"},
+                "sync_check": {"type": "object"},
+                "warnings": {"type": "array", "items": {"type": "string"}},
+                "next_commands": {"type": "array", "items": {"type": "string"}},
+            }
+        ),
+        compact_output_policy="Default output omits rule bodies and only reports metadata, bounded headings, sync warnings, and safe drill-down commands.",
+    ),
+    ToolSpec(
         name="shell_adapter_proxy_powershell",
         description="Run a PowerShell command through the non-invasive no-profile command proxy.",
         command="shell-adapter proxy-powershell",

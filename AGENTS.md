@@ -94,8 +94,9 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   某个 AI 工具私有的交互偏好。
 - 项目规则不能放宽通用安全边界、审批流程、Git 边界和恢复现场要求。
 - Windows/PowerShell 读取中文规则文件时，设置本次进程 UTF-8 编码，并使用
-  `Get-Content -Raw -Encoding UTF8`；长文件优先用
-  `python .ai-client/ai-client-governance/scripts/ai_client_governance.py context-extract` 摘录。
+  `Get-Content -Raw -Encoding UTF8`；会话启动和长规则读取优先用
+  `python .ai-client/ai-client-governance/scripts/ai_client_governance.py session-bootstrap --root .`
+  获取紧凑入口事实，再用 `context-extract --headings/--match/--range` 摘录细节。
 
 ## 核心原则：流程化与可审计
 
@@ -272,7 +273,7 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
 
 | 生命周期/问题域 | 事实源或代码域 | 首选命令族 | 收口证据 |
 |---|---|---|---|
-| 入口和同步 | `sync/`、根 adapter、manifest | `sync-check`、`rule-audit`、`runtime manifest-report` | 同步 warning/OK、adapter 边界、manifest 零漂移 |
+| 入口和同步 | `io/session_bootstrap.py`、`sync/`、根 adapter、manifest | `session-bootstrap`、`sync-check`、`rule-audit`、`runtime manifest-report` | 规则文件元数据/标题索引、同步 warning/OK、adapter 边界、manifest 零漂移 |
 | 用户输入和分析契约 | `lifecycle/`、`runtime/registry.py`、`records/task_record.py` | `lifecycle input-filter/preflight/finalize`、`contract describe` | REQ、claim、client identity、agent decision、analysis-contract 事件 |
 | 队列与任务记录 | `records/task_queue.py`、`records/task_record.py`、`records/state_store.py` | `task-queue lifecycle/transition`、`task-record init/apply/gate/status` | queue 与 task-record 无阻断漂移、requirements 和 outputs 闭合 |
 | worktree 与协作锁 | `worktree/task.py`、`worktree/coord.py` | `worktree-task create/status/reconcile/finalize/closeout-all/host-closeout`、`worktree-coord` | Git live state、coord session、lock、branch/merge/push 状态一致 |
@@ -295,8 +296,8 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   README、manifest 和 selftest/focused regression；如果只能先设计，必须登记
   `design_only` 或 framework-debt，不能声称已强制执行。
 - 运行输出可能很长的命令时，优先选择 `--format json` 加 task/trace/time 过滤、`--top`
-  或 compact 报告；读取长中文规则用 `context-extract` 或行号范围，避免终端截断造成
-  token 浪费和漏读。
+  或 compact 报告；会话启动先用 `session-bootstrap`，读取长中文规则再用
+  `context-extract` 或行号范围，避免终端截断造成 token 浪费和漏读。
 
 ### 运行态产物生命周期
 
@@ -574,6 +575,12 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
 - 使用 Windows PowerShell 代理时，简单命令可用 `--powershell-command`；复杂命令、
   管道、正则 `|`、变量、重定向、多命令组、here-string、嵌套引号、多行命令、inline JSON、
   `python -c` 或包含大量参数的命令必须走文件化执行，避免 shell 多层转义破坏参数。
+  其中 `JSON 输出 | python -c "json.load(sys.stdin)"` 这类管道后处理不是“文件化”问题，
+  必须改用
+  `python .ai-client/ai-client-governance/scripts/ai_client_governance.py json-query --path <json.path> -- <json-producing-command>`
+  或由 JSON 生产命令提供原生 `--summary`/compact 参数；`shell-adapter proxy-powershell`
+  默认在 subprocess 前阻断该模式，除非显式 break-glass 使用
+  `--allow-inline-json-pipeline`。
   `shell-adapter proxy-powershell` 默认会对高风险 inline 命令生成临时 UTF-8
   `AicgUserCommand.ps1` 并通过 wrapper `-File` 执行，telemetry 中必须能看到
   `command_file_used=true` 和 `command_file_source=auto|provided`。需要强制阻断而不是自动重写时，
@@ -680,18 +687,19 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   Git 命令、验证命令或子 agent 命令出现非预期失败时，必须写入
   `events.event_type=command-error.analysis` 或等价 command-error fact，payload 至少包含：
   `failed_command`、`exit_code`、`phase`、`parser_or_shell`、`failure_category`、
-  `root_cause`、`corrected_command`、`retry_count`、`dedupe_key`、`preventive_rule`、
-  `telemetry_span_id` 或 telemetry 查询条件、是否影响仓库状态、是否需要 framework-debt。
-  当前运行时分类至少包括 `python_c_inline_quoting`、`inline_json_quoting`、
-  `powershell_inline_complex_command`、`argparse_usage_error`、`git_command_failed`、
-  `working_directory_command_failed`、`powershell_command_not_found` 和
-  `unclassified_command_failure`。分类不能只用于事后报告：需要 command file 的分类必须改用
-  文件化命令或触发 fail-closed；`unclassified_command_failure` 必须保留为未识别盲区，
+   `root_cause`、`corrected_command`、`retry_count`、`dedupe_key`、`preventive_rule`、
+   `telemetry_span_id` 或 telemetry 查询条件、是否影响仓库状态、是否需要 framework-debt。
+   当前运行时分类至少包括 `pipeline_python_c_json_postprocess`、`python_c_inline_quoting`、`inline_json_quoting`、
+   `powershell_inline_complex_command`、`argparse_usage_error`、`git_command_failed`、
+   `working_directory_command_failed`、`powershell_command_not_found` 和
+   `unclassified_command_failure`。分类不能只用于事后报告：需要 command file 的分类必须改用
+   文件化命令或触发 fail-closed；需要 JSON 查询的分类必须改用 `json-query` 或生产者
+   compact 输出；`unclassified_command_failure` 必须保留为未识别盲区，
   不能被统计成已分类成功。同一 `dedupe_key` 重复出现时必须进入
   `task-run diagnose`/telemetry 报告或 framework-debt，作为命令错误拦截器和命令模板重构输入。
 - `telemetry report` 和 `task-run diagnose` 是命令错误看板，不是大 JSON 倾倒入口。
-  默认使用 `--task-id`、`--trace-id`、`--since`、`--until`、`--top` 收敛范围；
-  `tool-flow --format json` 默认必须输出 compact invocation 并省略 raw payload，
+   默认使用 `--summary`、`--task-id`、`--trace-id`、`--since`、`--until`、`--top` 收敛范围；
+   `tool-flow --format json` 默认必须输出 compact invocation 并省略 raw payload，
   只有取证时才显式使用 `--include-raw-json`。发现报告输出被截断、raw payload 过大或
   latest spans 携带完整原始事件时，按 P0 命令效率问题处理。
 - 裸 `git add`、`git commit`、`git merge`、`git push`、`git rm`、`git mv` 不是
@@ -953,6 +961,8 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
   或等价 focused gate，证明 runtime registry、manifest 和 README 没有继续手工漂移。
 - 规则/脚本强制执行能力变更后，收口前必须运行：
   `python .ai-client/ai-client-governance/scripts/ai_client_governance.py selftest --root <target-project>`。
+  `selftest` 默认只输出测试状态、summary 和命令数量；只有排查失败时才加 `--verbose`
+  展开子命令和 stdout/stderr，避免验证本身制造大段上下文噪声。
   涉及 DB/doc-index 运行态路径、命令错误、shell-adapter、telemetry 或 tool-flow 的改动还必须覆盖
   `state-db-defaults-to-host-from-worktree-cwd`、`doc-index-defaults-to-host-from-worktree-cwd`、
   `command-error-taxonomy-and-compact-flow` 或等价 focused regression，证明任务 worktree cwd

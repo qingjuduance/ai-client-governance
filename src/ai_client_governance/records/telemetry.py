@@ -308,7 +308,7 @@ def subject_hash(subject: str) -> str:
 
 
 def _command_contains_unstable_inline_python(command: str) -> bool:
-    for match in re.finditer(r"(?i)(^|\s)(?P<exe>\"[^\"]+\"|'[^']+'|\S+)\s+-c(?=\s|$)", command or ""):
+    for match in re.finditer(r"(?i)(^|[\s|;&])(?P<exe>\"[^\"]+\"|'[^']+'|[^\s|;&]+)\s+-c(?=\s|$)", command or ""):
         exe = match.group("exe").strip("\"'")
         basename = exe.replace("\\", "/").rsplit("/", 1)[-1].lower()
         if basename in {"python", "python.exe", "python3", "python3.exe", "py", "py.exe"}:
@@ -316,13 +316,30 @@ def _command_contains_unstable_inline_python(command: str) -> bool:
     return False
 
 
+def command_contains_python_json_stdin_pipeline(command: str) -> bool:
+    """Detect fragile PowerShell JSON post-processing via ``| python -c``."""
+    text = command or ""
+    lowered = text.lower()
+    if "|" not in text or "-c" not in lowered:
+        return False
+    if not _command_contains_unstable_inline_python(text):
+        return False
+    return any(marker in lowered for marker in ("json", "sys.stdin", "stdin", "convertfrom-json"))
+
+
 def analyze_powershell_inline_command(command: str, *, command_file_used: bool = False) -> dict[str, Any]:
     """Return a small risk hint for command strings that are often misparsed inline."""
-    if command_file_used:
+    json_pipeline = command_contains_python_json_stdin_pipeline(command or "")
+    if command_file_used and not json_pipeline:
         return {}
     text = command or ""
     lowered = text.lower()
     reasons: list[str] = []
+    requires_json_query = False
+    if json_pipeline:
+        reasons.append("pipeline-python-c-json-postprocess")
+        reasons.append("json-stdin-postprocess")
+        requires_json_query = True
     if _command_contains_unstable_inline_python(text) and not command_file_used:
         reasons.append("python-c-inline")
     if ("--payload-json" in lowered or "--metadata" in lowered) and any(char in text for char in "{}[]"):
@@ -340,8 +357,17 @@ def analyze_powershell_inline_command(command: str, *, command_file_used: bool =
     return {
         "risk": "inline-command-quoting",
         "reasons": sorted(set(reasons)),
-        "recommended_runner": "shell-adapter proxy-powershell --powershell-command-file",
-        "preventive_rule": "Put complex PowerShell, python -c, JSON, mixed quotes, and multi-statement logic in a UTF-8 command file.",
+        "recommended_runner": (
+            "ai_client_governance.py json-query --path <path> -- <json-producing command>"
+            if requires_json_query
+            else "shell-adapter proxy-powershell --powershell-command-file"
+        ),
+        "preventive_rule": (
+            "Do not pipe governance JSON into inline python -c; use json-query or the producer's compact output."
+            if requires_json_query
+            else "Put complex PowerShell, python -c, JSON, mixed quotes, and multi-statement logic in a UTF-8 command file."
+        ),
+        "requires_json_query": requires_json_query,
     }
 
 
@@ -367,7 +393,17 @@ def classify_command_error(
     suggested_runner = "task-run plan/run or shell-adapter proxy-powershell"
     requires_command_file = False
 
-    if _command_contains_unstable_inline_python(text):
+    requires_json_query = False
+
+    if command_contains_python_json_stdin_pipeline(text):
+        category = "pipeline_python_c_json_postprocess"
+        root_cause = "PowerShell pipe plus inline python -c JSON stdin parsing is fragile and often turns empty or non-JSON stdout into JSONDecodeError."
+        corrected_command = "Use ai_client_governance.py json-query --path <path> -- <json-producing command>, or add a native compact/summary flag to the producer."
+        preventive_rule = "Do not post-process governance JSON through PowerShell pipes and inline python -c; use governance-native JSON query or producer compact output."
+        retry_policy = "rewrite_with_json_query_before_retry"
+        suggested_runner = "ai_client_governance.py json-query"
+        requires_json_query = True
+    elif _command_contains_unstable_inline_python(text):
         category = "python_c_inline_quoting"
         root_cause = "Inline python -c code is fragile through PowerShell and proxy quoting layers."
         corrected_command = "Move the Python snippet into a temporary .py file or execute it through a UTF-8 PowerShell command file."
@@ -439,6 +475,7 @@ def classify_command_error(
         "preventive_rule": preventive_rule,
         "suggested_runner": suggested_runner,
         "requires_command_file": requires_command_file,
+        "requires_json_query": requires_json_query,
         "stderr_tail_available": bool(stderr_tail),
     }
 
@@ -858,6 +895,7 @@ def summarize_command_errors(
         "classified_failure_count": classified_count,
         "unclassified_failure_count": unclassified_count,
         "command_file_required_count": len([item for item in command_errors if item.get("requires_command_file")]),
+        "json_query_required_count": len([item for item in command_errors if item.get("requires_json_query")]),
         "failure_categories": dict(failure_category_counts),
         "top_dedupe_keys": [
             {"dedupe_key": key, "count": count}
@@ -1373,6 +1411,7 @@ def format_text(report: dict[str, Any]) -> str:
             f"classified={command_error.get('classified_failure_count', 0)} "
             f"unclassified={command_error.get('unclassified_failure_count', 0)} "
             f"command_file_required={command_error.get('command_file_required_count', 0)} "
+            f"json_query_required={command_error.get('json_query_required_count', 0)} "
             f"inline_warnings={command_error.get('inline_command_warning_count', 0)}"
         ),
         "",
@@ -1471,6 +1510,7 @@ def format_markdown(report: dict[str, Any]) -> str:
             f"- Command errors: classified={command_error.get('classified_failure_count', 0)} "
             f"unclassified={command_error.get('unclassified_failure_count', 0)} "
             f"command_file_required={command_error.get('command_file_required_count', 0)} "
+            f"json_query_required={command_error.get('json_query_required_count', 0)} "
             f"inline_warnings={command_error.get('inline_command_warning_count', 0)}"
         ),
         "",
@@ -1491,7 +1531,12 @@ def format_markdown(report: dict[str, Any]) -> str:
         for reason, count in sorted(warning_reasons.items(), key=lambda item: (-int(item[1]), item[0])):
             lines.append(f"| `{reason}` | {count} |")
         lines.append("")
-        lines.append("Recommended runner: `shell-adapter proxy-powershell --powershell-command-file`.")
+        runner = (
+            "`ai_client_governance.py json-query --path <path> -- <json-producing command>`"
+            if command_error.get("json_query_required_count")
+            else "`shell-adapter proxy-powershell --powershell-command-file`"
+        )
+        lines.append(f"Recommended runner: {runner}.")
     lines.extend(
         [
         "## Top Operations",
@@ -1537,6 +1582,40 @@ def format_markdown(report: dict[str, Any]) -> str:
             f"- Traceparent attributes: {trace['valid_traceparent_attribute_count']}/{trace['traceparent_attribute_count']}",
         ]
     )
+    return "\n".join(lines)
+
+
+def format_summary_text(report: dict[str, Any]) -> str:
+    command_error = report.get("command_error", {})
+    lines = [
+        "AI Client Governance Telemetry Summary",
+        f"DB: {report.get('db', '')}",
+        f"Spans: {report.get('span_count', 0)} terminal={report.get('terminal_span_count', 0)}",
+        f"Failures: {report.get('failed_count', 0)} rate={float(report.get('failure_rate') or 0):.2%}",
+        (
+            "Command errors: "
+            f"classified={command_error.get('classified_failure_count', 0)} "
+            f"unclassified={command_error.get('unclassified_failure_count', 0)} "
+            f"command_file_required={command_error.get('command_file_required_count', 0)} "
+            f"json_query_required={command_error.get('json_query_required_count', 0)} "
+            f"inline_warnings={command_error.get('inline_command_warning_count', 0)}"
+        ),
+        "Failure categories:",
+    ]
+    categories = command_error.get("failure_categories", {})
+    if categories:
+        for category, count in sorted(categories.items(), key=lambda item: (-int(item[1]), item[0])):
+            lines.append(f"  {category}: count={count}")
+    else:
+        lines.append("  none")
+    lines.append("Top operations:")
+    for row in report.get("top_operations", []):
+        lines.append(f"  {row.get('name', '')}: count={row.get('count', 0)}")
+    lines.append("Slowest validation spans:")
+    for row in report.get("slowest_validation_spans", []):
+        lines.append(f"  {row.get('duration_ms')}ms {row.get('name', '')} status={row.get('status', '')}")
+    if not report.get("slowest_validation_spans"):
+        lines.append("  none")
     return "\n".join(lines)
 
 
@@ -1740,7 +1819,44 @@ def command_init(args: argparse.Namespace) -> int:
 
 def command_report(args: argparse.Namespace) -> int:
     report = build_report(args)
-    if args.format == "json":
+    if args.summary:
+        command_error = report.get("command_error", {})
+        report = {
+            "db": report.get("db", ""),
+            "filters": report.get("filters", {}),
+            "span_count": report.get("span_count", 0),
+            "terminal_span_count": report.get("terminal_span_count", 0),
+            "failed_count": report.get("failed_count", 0),
+            "failure_rate": report.get("failure_rate", 0),
+            "command_error": command_error,
+            "duration_ms": report.get("duration_ms", {}),
+            "cache": report.get("cache", {}),
+            "top_operations": report.get("top_operations", []),
+            "slowest_validation_spans": [
+                {
+                    "name": row.get("name", ""),
+                    "phase": row.get("phase", ""),
+                    "duration_ms": row.get("duration_ms"),
+                    "status": row.get("status", ""),
+                    "exit_code": row.get("exit_code"),
+                }
+                for row in report.get("slowest_validation_spans", [])
+                if isinstance(row, dict)
+            ],
+            "compact_output": {
+                "summary": True,
+                "omitted_fields": [
+                    "top_subjects",
+                    "duration_by_phase",
+                    "duplicate_subjects",
+                    "trace_context",
+                    "latest_spans",
+                ],
+            },
+        }
+    if args.summary and args.format != "json":
+        print(format_summary_text(report))
+    elif args.format == "json":
         print(json.dumps(report, ensure_ascii=False, indent=2))
     elif args.format == "markdown":
         print(format_markdown(report))
@@ -1849,6 +1965,7 @@ def build_parser() -> argparse.ArgumentParser:
     report.add_argument("--since", default="", help="Only include spans at or after this ISO timestamp.")
     report.add_argument("--until", default="", help="Only include spans at or before this ISO timestamp.")
     report.add_argument("--top", type=int, default=10, help="Number of top rows to show.")
+    report.add_argument("--summary", action="store_true", help="Return only compact counts, command-error buckets, cache, and slowest validation spans.")
     report.add_argument("--format", choices=("text", "markdown", "json"), default="text")
     report.set_defaults(func=command_report)
 

@@ -1977,6 +1977,49 @@
       ]
     },
     {
+      "condition": "Run at session start before reading long rules. Default output must stay compact; deep reads use context-extract --headings, --match, or --range.",
+      "dedupe_key": "",
+      "dependencies": [],
+      "description": "Summarize session-start rule entry files and sync-check state without dumping long AGENTS.md bodies.",
+      "effect": "state_write",
+      "events": [
+        "session-start",
+        "status-output",
+        "resume"
+      ],
+      "fail_policy": "warn_only",
+      "final_only": false,
+      "gate_label": "",
+      "gate_step": "session-bootstrap",
+      "id": "state.reporter.session-bootstrap",
+      "input_sources": [],
+      "kind": "reporter",
+      "mechanism_label": "ai_client_governance.py session-bootstrap",
+      "metadata": {
+        "compact_output": true,
+        "forbidden_default": "raw Get-Content -Raw on long Chinese AGENTS.md files",
+        "safe_drilldown": "context-extract --headings/--match/--range"
+      },
+      "order": 405,
+      "path_prefixes": [],
+      "path_suffixes": [],
+      "performance_budget": "three bounded UTF-8 file reads plus sync-check; no full rule-body terminal dump",
+      "phase": "session",
+      "produces_facts": [
+        "rule_file_metadata",
+        "bounded_heading_index",
+        "sync_check_report"
+      ],
+      "requires_changed_paths": false,
+      "requires_facts": [
+        "root_entry",
+        "common_governance_entry",
+        "project_rules_entry"
+      ],
+      "task_sizes": [],
+      "task_types": []
+    },
+    {
       "condition": "Run at session start or status output; this is not a timed scheduler.",
       "dedupe_key": "",
       "dependencies": [],

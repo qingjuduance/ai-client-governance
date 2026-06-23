@@ -54,6 +54,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--keep", action="store_true", help="Keep temporary self-test files.")
     parser.add_argument("--cleanup-stale", action="store_true", help="Remove stale selftest-owned artifacts before running.")
     parser.add_argument("--format", choices=("text", "json"), default="text", help="Output format.")
+    parser.add_argument("--verbose", action="store_true", help="Include every child command and stdout/stderr first lines.")
     return parser.parse_args()
 
 
@@ -4679,6 +4680,12 @@ def test_shell_adapter_scope_diagnostics(root: Path, run_dir: Path) -> TestResul
 
 def test_command_error_taxonomy_and_compact_flow(root: Path, run_dir: Path) -> TestResult:
     db = run_dir / "command-error-taxonomy.db"
+    unsafe_pipeline_file = run_dir / "unsafe-json-pipeline.ps1"
+    write_text_lf(
+        unsafe_pipeline_file,
+        "python scripts/ai_client_governance.py runtime tool-gateway --format json | "
+        "python -c \"import sys,json; json.load(sys.stdin)\"\n",
+    )
     commands = [
         run_command(
             [
@@ -4702,6 +4709,30 @@ def test_command_error_taxonomy_and_compact_flow(root: Path, run_dir: Path) -> T
                 sys.executable,
                 "-c",
                 "import sys; sys.exit(7)",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "shell-adapter",
+                "--root",
+                str(root),
+                "--db",
+                str(db),
+                "proxy-powershell",
+                "--task-id",
+                "COMMAND-ERROR-SELFTEST",
+                "--task-type",
+                "rules-script",
+                "--scope-path",
+                ".ai-client/ai-client-governance/src/ai_client_governance/runtime/shell_adapter.py",
+                "--format",
+                "json",
+                "--powershell-command-file",
+                str(unsafe_pipeline_file),
             ],
             cwd=root,
             env_root=root,
@@ -4759,6 +4790,78 @@ def test_command_error_taxonomy_and_compact_flow(root: Path, run_dir: Path) -> T
             [
                 sys.executable,
                 str(ai_client_governance_entrypoint()),
+                "tool-invocations",
+                "--root",
+                str(root),
+                "--db",
+                str(db),
+                "record",
+                "--task-id",
+                "COMMAND-ERROR-SELFTEST",
+                "--task-type",
+                "rules-script",
+                "--name",
+                "unsafe-json-pipeline",
+                "--command",
+                "python scripts/ai_client_governance.py runtime tool-gateway --format json | python -c \"import sys,json; json.load(sys.stdin)\"",
+                "--status",
+                "failed",
+                "--exit-code",
+                "1",
+                "--phase",
+                "validation",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "shell-adapter",
+                "--root",
+                str(root),
+                "--db",
+                str(db),
+                "proxy-powershell",
+                "--task-id",
+                "COMMAND-ERROR-SELFTEST",
+                "--task-type",
+                "rules-script",
+                "--scope-path",
+                ".ai-client/ai-client-governance/src/ai_client_governance/runtime/shell_adapter.py",
+                "--format",
+                "json",
+                "--powershell-command",
+                "python scripts/ai_client_governance.py runtime tool-gateway --format json | python -c \"import sys,json; json.load(sys.stdin)\"",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "json-query",
+                "--path",
+                "tools[].name",
+                "--",
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "runtime",
+                "tool-gateway",
+                "--tool",
+                "framework_debt_report",
+                "--format",
+                "json",
+            ],
+            cwd=root,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
                 "telemetry",
                 "report",
                 "--root",
@@ -4767,6 +4870,7 @@ def test_command_error_taxonomy_and_compact_flow(root: Path, run_dir: Path) -> T
                 str(db),
                 "--task-id",
                 "COMMAND-ERROR-SELFTEST",
+                "--summary",
                 "--format",
                 "json",
             ],
@@ -4813,15 +4917,15 @@ def test_command_error_taxonomy_and_compact_flow(root: Path, run_dir: Path) -> T
     diagnose: dict[str, object] = {}
     flow: dict[str, object] = {}
     try:
-        telemetry_report = json.loads(commands[3].stdout)
+        telemetry_report = json.loads(commands[-3].stdout)
     except json.JSONDecodeError:
         pass
     try:
-        diagnose = json.loads(commands[4].stdout)
+        diagnose = json.loads(commands[-2].stdout)
     except json.JSONDecodeError:
         pass
     try:
-        flow = json.loads(commands[5].stdout)
+        flow = json.loads(commands[-1].stdout)
     except json.JSONDecodeError:
         pass
     command_error = (
@@ -4853,21 +4957,35 @@ def test_command_error_taxonomy_and_compact_flow(root: Path, run_dir: Path) -> T
         for item in failed_invocations
     ]
     json_policy = flow.get("json_policy", {}) if isinstance(flow.get("json_policy"), dict) else {}
+    blocked_json_pipeline_count = len(
+        [
+            command
+            for command in commands
+            if command.exit_code != 0 and "blocked JSON pipe post-processing" in command.stderr
+        ]
+    )
     passed = (
-        commands[0].exit_code == 7
-        and commands[1].exit_code != 0
-        and commands[2].exit_code == 0
-        and all(command.exit_code == 0 for command in commands[3:])
+        any(command.exit_code == 7 and "sys.exit(7)" in " ".join(command.command) for command in commands)
+        and any(command.exit_code != 0 and "--definitely-not-a-real-option" in " ".join(command.command) for command in commands)
+        and any(command.exit_code == 0 and command.stdout.strip().splitlines()[:1] == ["3"] for command in commands)
+        and any(command.exit_code == 0 and "recorded unsafe-json-pipeline status=failed" in command.stdout for command in commands)
+        and blocked_json_pipeline_count >= 2
+        and any(command.exit_code == 0 and "framework_debt_report" in command.stdout for command in commands)
+        and all(command.exit_code == 0 for command in commands[-3:])
         and categories.get("python_c_inline_quoting", 0) >= 1
+        and categories.get("pipeline_python_c_json_postprocess", 0) >= 1
         and categories.get("unclassified_command_failure", 0) >= 1
         and int(command_error.get("classified_failure_count", 0)) >= 1
         and int(command_error.get("unclassified_failure_count", 0)) >= 1
         and int(command_error.get("command_file_required_count", 0)) >= 1
+        and int(command_error.get("json_query_required_count", 0)) >= 1
         and int(command_error.get("inline_command_warning_count", 0)) >= 1
         and diagnose_categories.get("python_c_inline_quoting", 0) >= 1
+        and diagnose_categories.get("pipeline_python_c_json_postprocess", 0) >= 1
         and diagnose_categories.get("unclassified_command_failure", 0) >= 1
         and int(telemetry.get("unclassified_failure_count", 0)) >= 1
         and int(telemetry.get("command_file_required_failure_count", 0)) >= 1
+        and int(telemetry.get("json_query_required_failure_count", 0)) >= 1
         and json_policy.get("raw_omitted") is True
         and "python_c_inline_quoting" in failed_categories
         and "unclassified_command_failure" in failed_categories
@@ -6187,6 +6305,90 @@ def test_runtime_manifest_report(root: Path, run_dir: Path) -> TestResult:
     )
 
 
+def test_session_bootstrap_compact_rule_entry(root: Path, run_dir: Path) -> TestResult:
+    project = run_dir / "session-bootstrap-project"
+    embedded = project / ".ai-client" / "ai-client-governance"
+    project_rules = project / ".ai-client" / "project" / "rules" / "project"
+    embedded.mkdir(parents=True, exist_ok=True)
+    project_rules.mkdir(parents=True, exist_ok=True)
+    marker = "DO_NOT_DUMP_SESSION_BOOTSTRAP_BODY"
+    common_lines = ["# Common Rules", "## Read Order"]
+    project_lines = ["# Project Rules", "## Scope"]
+    for index in range(1, 41):
+        common_lines.extend([f"## Common Section {index}", f"{marker} common body line {index}"])
+        project_lines.extend([f"## Project Section {index}", f"{marker} project body line {index}"])
+    write_text_lf(project / "AGENTS.md", "# Root Entry\n## Read Order\nUse embedded and project rule entries.\n")
+    write_text_lf(embedded / "AGENTS.md", "\n".join(common_lines) + "\n")
+    write_text_lf(project_rules / "AGENTS.md", "\n".join(project_lines) + "\n")
+
+    commands = [
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "session-bootstrap",
+                "--root",
+                str(project),
+                "--no-fetch",
+                "--max-headings",
+                "6",
+                "--format",
+                "json",
+            ],
+            cwd=project,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "session-bootstrap",
+                "--root",
+                str(project),
+                "--no-sync-check",
+                "--max-headings",
+                "4",
+            ],
+            cwd=project,
+            env_root=root,
+        ),
+    ]
+    payload: dict[str, object] = {}
+    try:
+        payload = json.loads(commands[0].stdout)
+    except json.JSONDecodeError:
+        pass
+    rule_files = payload.get("rule_files", []) if isinstance(payload.get("rule_files"), list) else []
+    roles = {item.get("role") for item in rule_files if isinstance(item, dict)}
+    sync_payload = payload.get("sync_check", {}) if isinstance(payload.get("sync_check"), dict) else {}
+    text_lines = commands[1].stdout.splitlines()
+    dumped_body = marker in commands[0].stdout or marker in commands[1].stdout
+    passed = (
+        all(command.exit_code == 0 for command in commands)
+        and payload.get("status") == "warning"
+        and sync_payload.get("status") in {"warning", "not-git"}
+        and isinstance(sync_payload.get("warnings"), list)
+        and len(sync_payload.get("warnings", [])) >= 1
+        and {"root-entry", "common-governance", "project-rules"}.issubset(roles)
+        and all(isinstance(item, dict) and item.get("exists") is True for item in rule_files)
+        and any(isinstance(item, dict) and int(item.get("heading_count", 0)) >= 40 for item in rule_files)
+        and "context-extract" in commands[1].stdout
+        and "Sync-check: skipped" in commands[1].stdout
+        and len(text_lines) <= 60
+        and not dumped_body
+    )
+    return TestResult(
+        name="session-bootstrap-compact-rule-entry",
+        passed=passed,
+        summary=(
+            "session-bootstrap reports rule metadata, bounded headings, and sync warnings without dumping rule bodies"
+            if passed
+            else "session-bootstrap compact rule-entry regression failed"
+        ),
+        commands=commands,
+    )
+
+
 def test_lifecycle_analysis_contract_preflight(root: Path, run_dir: Path) -> TestResult:
     db = run_dir / "analysis-contract.db"
     task_id = "TASK-SELFTEST-ANALYSIS-CONTRACT"
@@ -6744,16 +6946,44 @@ def test_worktree_closeout_all_closes_coord_session(root: Path, run_dir: Path) -
     )
 
 
-def format_text(root: Path, run_dir: Path, results: list[TestResult]) -> str:
+def compact_command(command: CommandResult) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "command": " ".join(command.command),
+        "exit_code": command.exit_code,
+    }
+    if command.stdout.strip():
+        payload["stdout_first_line"] = command.stdout.strip().splitlines()[0]
+    if command.stderr.strip():
+        payload["stderr_first_line"] = command.stderr.strip().splitlines()[0]
+    return payload
+
+
+def compact_result(result: TestResult, *, verbose: bool = False) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "name": result.name,
+        "passed": result.passed,
+        "summary": result.summary,
+        "command_count": len(result.commands),
+    }
+    if verbose:
+        payload["commands"] = [asdict(command) for command in result.commands]
+    return payload
+
+
+def format_text(root: Path, run_dir: Path, results: list[TestResult], *, verbose: bool = False) -> str:
     lines = [
         "ai-client-governance Selftest Report",
         f"Root: {root}",
         f"Artifacts: {run_dir}",
+        f"Tests: {len(results)} passed={len([result for result in results if result.passed])} failed={len([result for result in results if not result.passed])}",
         "",
     ]
     for result in results:
         lines.append(f"- {result.name}: {'PASS' if result.passed else 'FAIL'}")
         lines.append(f"  {result.summary}")
+        lines.append(f"  commands: {len(result.commands)}")
+        if not verbose:
+            continue
         for command in result.commands:
             lines.append(f"  command: {' '.join(command.command)}")
             lines.append(f"  exit: {command.exit_code}")
@@ -6831,6 +7061,7 @@ def main() -> int:
             test_state_db_defaults_to_host_from_worktree_cwd(root, run_dir),
             test_doc_index_defaults_to_host_from_worktree_cwd(root, run_dir),
             test_runtime_manifest_report(root, run_dir),
+            test_session_bootstrap_compact_rule_entry(root, run_dir),
             test_lifecycle_analysis_contract_preflight(root, run_dir),
             test_sync_check_records_db_state(root, run_dir),
             test_worktree_coord_nested_global_args(root, run_dir),
@@ -6877,14 +7108,21 @@ def main() -> int:
                     "root": str(root),
                     "artifacts": str(run_dir),
                     "passed": passed,
-                    "results": [asdict(result) for result in results],
+                    "result_count": len(results),
+                    "passed_count": len([result for result in results if result.passed]),
+                    "failed_count": len([result for result in results if not result.passed]),
+                    "results": [compact_result(result, verbose=args.verbose) for result in results],
+                    "compact_output": {
+                        "summary": not args.verbose,
+                        "verbose_flag": "--verbose",
+                    },
                 },
                 ensure_ascii=False,
                 indent=2,
             )
         )
     else:
-        print(format_text(root, run_dir, results))
+        print(format_text(root, run_dir, results, verbose=args.verbose))
 
     if passed and not args.keep:
         resolved_tmp = (root / TMP_DIR).resolve()

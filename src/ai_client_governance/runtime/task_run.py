@@ -1311,6 +1311,7 @@ def build_diagnostics(
             "classified_failure_count": command_error_summary["classified_failure_count"],
             "unclassified_failure_count": command_error_summary["unclassified_failure_count"],
             "command_file_required_failure_count": command_error_summary["command_file_required_count"],
+            "json_query_required_failure_count": command_error_summary["json_query_required_count"],
             "scope_kind_counts": dict(sorted(scope_kind_counts.items())),
             "shell_adapter_auto_intercept": {
                 "installed": adapter_installed,
@@ -1547,6 +1548,7 @@ def format_diagnostics_text(diagnostics: dict[str, Any]) -> str:
         f"Telemetry classified failures: {telemetry_report.get('classified_failure_count', 0)}",
         f"Telemetry unclassified failures: {telemetry_report.get('unclassified_failure_count', 0)}",
         f"Telemetry command-file required failures: {telemetry_report.get('command_file_required_failure_count', 0)}",
+        f"Telemetry json-query required failures: {telemetry_report.get('json_query_required_failure_count', 0)}",
         f"Raw shell auto intercepted: {telemetry_report.get('raw_shell_auto_intercepted')}",
         f"Raw shell coverage ready: {telemetry_report.get('raw_shell_coverage_ready')}",
         f"Shell adapter auto intercept env: {auto_intercept.get('env_installed')}",

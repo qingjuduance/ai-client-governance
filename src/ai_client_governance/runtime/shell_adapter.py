@@ -205,6 +205,13 @@ def run_powershell_proxy(args: argparse.Namespace) -> int:
         print(str(exc), file=sys.stderr)
         return 2
     inline_warning = telemetry.analyze_powershell_inline_command(command, command_file_used=provided_command_file)
+    if inline_warning.get("requires_json_query") and not args.allow_inline_json_pipeline:
+        print(
+            "shell-adapter proxy-powershell blocked JSON pipe post-processing through inline python -c; "
+            "use ai_client_governance.py json-query --path <path> -- <json-producing command>",
+            file=sys.stderr,
+        )
+        return 2
     if inline_warning and args.fail_on_inline_risk and not provided_command_file and args.no_auto_command_file:
         print(
             "shell-adapter proxy-powershell blocked risky inline command; use --powershell-command-file or allow auto command-file rewriting",
@@ -526,6 +533,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--fail-on-inline-risk",
         action="store_true",
         help="Exit non-zero when a risky inline command is detected and no command-file path will be used.",
+    )
+    proxy.add_argument(
+        "--allow-inline-json-pipeline",
+        action="store_true",
+        help="Break-glass: allow '| python -c json.load(sys.stdin)' style post-processing instead of json-query.",
     )
     proxy.add_argument("--powershell-exe", help="PowerShell executable. Defaults to Windows PowerShell on Windows, pwsh elsewhere.")
     proxy.add_argument("--allow-non-windows", action="store_true", help="Allow pwsh-based proxy execution on non-Windows hosts when available.")
