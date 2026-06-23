@@ -333,7 +333,8 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
 - 只有显式批准并进入 `ready` 的任务才能 `start-next` 成为 `active`。
 - 队列事实源是 `.ai-client/project/state/aicg.db`，入口是：
   `python .ai-client/ai-client-governance/scripts/ai_client_governance.py task-queue ...`。
-- `task-queue` 不提供默认 JSON 队列文件、heartbeat 文件或 `--queue-file` fallback；
+- `task-queue` 不提供默认 JSON 队列文件、heartbeat 文件，也不能通过 `--queue-file`
+  读取旧队列；
   需要人读报告时使用 `status --format text/json` 输出到 stdout。
 - 一次只允许一个 active task；插入任务完成后必须返回原主任务或记录阻塞。
 - 这里的 active task 是治理事务边界，不是工作量上限。一个 active task 内部可以
