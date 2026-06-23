@@ -932,10 +932,11 @@ README 和 manifest 演进；项目业务规则继续留在宿主项目特化层
 - 通用 skill 事实源在 `.ai-client/ai-client-governance/skills/`。
 - 项目特化 skill 放 `.ai-client/project/skills/`。
 - 目标项目原生 skill 优先级最高；同名冲突必须记录，不能静默覆盖。
-- 如果宿主 AI 客户端只识别当前项目根 `skills/`，使用
+- Codex 项目级 skill 的发现目录是当前项目的 `.agents/skills/`；如果宿主 AI
+  客户端只识别该目录，使用
   `python .ai-client/ai-client-governance/scripts/ai_client_governance.py skill-sync install-local --root . --execute`
   创建当前项目本地发现 adapter；不要把仓库内 skills 装到全局 `CODEX_HOME/skills`，
-  也不要把旧 `.codex/skills/` 当来源。
+  不要用 `--dest skills` 恢复项目根旧 adapter，也不要把旧 `.codex/skills/` 当来源。
 - 修改任意 skill 后必须运行对应 skill 校验；带脚本的 skill 还要跑最小真实用例。
 
 ## 收口

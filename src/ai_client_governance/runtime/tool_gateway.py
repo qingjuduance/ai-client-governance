@@ -248,7 +248,7 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
     ),
     ToolSpec(
         name="skill_sync",
-        description="List and expose .ai-client skills through the current project's local skills directory.",
+        description="List and expose .ai-client skills through the current project's .agents/skills directory.",
         command="skill-sync",
         side_effect="repo_write",
         parallel_safe=False,
@@ -258,7 +258,7 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
             {
                 "command": {"type": "string", "enum": ["list", "install-local"]},
                 "root": {"type": "string", "default": "."},
-                "dest": {"type": "string", "default": "skills"},
+                "dest": {"type": "string", "default": ".agents/skills"},
                 "skill": {"type": "array", "items": {"type": "string"}},
                 "execute": {"type": "boolean", "default": False},
                 "mode": {"type": "string", "enum": ["junction", "symlink", "copy"], "default": "junction"},

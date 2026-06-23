@@ -3,9 +3,9 @@
 
 The skill sources remain in `.ai-client/project/skills` and
 `.ai-client/ai-client-governance/skills`. Some Codex surfaces only discover
-project-local skills from a root `skills/` directory at session startup, so this
-command creates local links or copies in the current project instead of
-installing anything into the user's global CODEX_HOME.
+project-local skills from `.agents/skills` at session startup, so this command
+creates local links or copies in the current project instead of installing
+anything into the user's global CODEX_HOME.
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -23,6 +24,8 @@ from ai_client_governance.common.paths import COMMON_REPO_PATH, PROJECT_SKILLS_D
 
 
 SOURCE_PRIORITY = ("project", "common")
+PROJECT_DISCOVERY_DIR = Path(".agents") / "skills"
+LEGACY_ROOT_SKILLS_DIR = "skills"
 WINDOWS_JUNCTION = "junction"
 COPY_MODE = "copy"
 SYMLINK_MODE = "symlink"
@@ -59,7 +62,7 @@ def parse_args() -> argparse.Namespace:
 
     install = sub.add_parser(
         "install-local",
-        help="Expose active .ai-client skills through the current project's root skills/ directory.",
+        help="Expose active .ai-client skills through the current project's .agents/skills directory.",
     )
     add_common_args(install)
     install.add_argument("--skill", action="append", default=[], help="Install only this skill name. Repeatable.")
@@ -75,13 +78,13 @@ def parse_args() -> argparse.Namespace:
 
 def add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--root", default=".", help="Project or embedded governance root. Default: current directory.")
-    parser.add_argument("--dest", help="Local skills destination. Default: <project-root>/skills.")
+    parser.add_argument("--dest", help="Local skills destination. Default: <project-root>/.agents/skills.")
     parser.add_argument("--format", choices=("text", "json"), default="text")
 
 
 def resolve_dest(project_root: Path, value: str | None) -> Path:
     if not value:
-        return (project_root / "skills").resolve()
+        return (project_root / PROJECT_DISCOVERY_DIR).resolve()
     path = Path(value).expanduser()
     if not path.is_absolute():
         path = project_root / path
@@ -201,7 +204,9 @@ def active_skill_paths(project_root: Path, dest: Path, requested: set[str]) -> t
 def ensure_inside_project(project_root: Path, dest: Path) -> None:
     resolved_root = project_root.resolve()
     resolved_dest = dest.resolve()
-    if resolved_dest != resolved_root / "skills" and resolved_root not in resolved_dest.parents:
+    if resolved_dest == resolved_root / LEGACY_ROOT_SKILLS_DIR:
+        raise ValueError("Project-root skills/ is a legacy adapter path; use .agents/skills for Codex project skills.")
+    if resolved_dest != resolved_root / PROJECT_DISCOVERY_DIR and resolved_root not in resolved_dest.parents:
         raise ValueError(f"Local skill destination must stay inside the current project: {dest}")
 
 
@@ -268,7 +273,7 @@ def install_one(item: SkillSource, source: Path, dest_root: Path, *, mode: str, 
 def render_list(skills: list[SkillSource], dest: Path) -> str:
     lines = [
         "AI Client Governance local skill sources",
-        f"Local skills dir: {dest}",
+        f"Project skill discovery dir: {dest}",
         f"Skills: {len(skills)} active={len([item for item in skills if item.active])}",
     ]
     for item in skills:
@@ -285,7 +290,7 @@ def render_install(results: list[InstallResult], *, execute: bool, dest: Path) -
     existing = len([item for item in results if item.status == "exists"])
     lines = [
         "AI Client Governance local skill install",
-        f"Local skills dir: {dest}",
+        f"Project skill discovery dir: {dest}",
         f"Mode: {'execute' if execute else 'dry-run'}",
         f"Results: installed={installed} planned={planned} existing={existing} total={len(results)}",
     ]
@@ -303,7 +308,11 @@ def main() -> int:
     requested_root = Path(args.root).resolve()
     project_root = host_project_root(requested_root).resolve()
     dest = resolve_dest(project_root, args.dest)
-    ensure_inside_project(project_root, dest)
+    try:
+        ensure_inside_project(project_root, dest)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
 
     if args.command == "list":
         skills = discover_skills(project_root, dest)

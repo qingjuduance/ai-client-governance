@@ -6417,6 +6417,22 @@ def test_skill_sync_local_install(root: Path, run_dir: Path) -> TestResult:
                 sys.executable,
                 str(ai_client_governance_entrypoint()),
                 "skill-sync",
+                "list",
+                "--root",
+                str(project),
+                "--dest",
+                "skills",
+                "--format",
+                "json",
+            ],
+            cwd=project,
+            env_root=root,
+        ),
+        run_command(
+            [
+                sys.executable,
+                str(ai_client_governance_entrypoint()),
+                "skill-sync",
                 "install-local",
                 "--root",
                 str(project),
@@ -6466,9 +6482,9 @@ def test_skill_sync_local_install(root: Path, run_dir: Path) -> TestResult:
     post_install: dict[str, object] = {}
     try:
         listed = json.loads(commands[0].stdout)
-        dry_run = json.loads(commands[1].stdout)
-        executed = json.loads(commands[2].stdout)
-        post_install = json.loads(commands[3].stdout)
+        dry_run = json.loads(commands[2].stdout)
+        executed = json.loads(commands[3].stdout)
+        post_install = json.loads(commands[4].stdout)
     except json.JSONDecodeError:
         pass
     listed_skills = listed.get("skills", []) if isinstance(listed.get("skills"), list) else []
@@ -6481,9 +6497,12 @@ def test_skill_sync_local_install(root: Path, run_dir: Path) -> TestResult:
     }
     dry_results = dry_run.get("results", []) if isinstance(dry_run.get("results"), list) else []
     exec_results = executed.get("results", []) if isinstance(executed.get("results"), list) else []
-    local_dest = project / "skills"
+    local_dest = project / ".agents" / "skills"
+    root_skills_dest = project / "skills"
     passed = (
-        all(command.exit_code == 0 for command in commands)
+        all(command.exit_code == 0 for index, command in enumerate(commands) if index != 1)
+        and commands[1].exit_code == 1
+        and "legacy adapter path" in commands[1].stderr
         and listed.get("local_skills_dir") == str(local_dest.resolve())
         and {"common-skill", "project-skill"}.issubset(listed_names)
         and all(isinstance(item, dict) and item.get("status") == "planned" for item in dry_results)
@@ -6492,14 +6511,15 @@ def test_skill_sync_local_install(root: Path, run_dir: Path) -> TestResult:
         and active_sources.get("common-skill") == "common"
         and (local_dest / "common-skill" / "SKILL.md").exists()
         and (local_dest / "project-skill" / "SKILL.md").exists()
-        and ".codex" not in commands[2].stdout
-        and "CODEX_HOME" not in commands[2].stdout
+        and not root_skills_dest.exists()
+        and ".codex" not in commands[3].stdout
+        and "CODEX_HOME" not in commands[3].stdout
     )
     return TestResult(
         name="skill-sync-local-install",
         passed=passed,
         summary=(
-            "skill-sync exposes .ai-client skills through the current project's local skills directory"
+            "skill-sync exposes .ai-client skills through the current project's .agents/skills directory"
             if passed
             else "skill-sync local install regression failed"
         ),

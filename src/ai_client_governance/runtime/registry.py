@@ -1452,7 +1452,7 @@ def default_components() -> list[ComponentDefinition]:
             "reporter",
             "session",
             406,
-            "List and locally expose .ai-client skills through the current project's root skills directory.",
+            "List and locally expose .ai-client skills through the current project's .agents/skills directory.",
             events=("session-start", "status-output", "resume"),
             requires_facts=("project_skills", "common_governance_skills"),
             produces_facts=("local_skill_sources", "local_skill_install_plan"),
@@ -1461,14 +1461,14 @@ def default_components() -> list[ComponentDefinition]:
             fail_policy="warn_only",
             effect="repo_write",
             condition=(
-                "Run when repository-local skills are present but the host client only discovers root skills/. "
-                "The source of truth remains .ai-client; root skills/ is a local discovery adapter, not a global install."
+                "Run when repository-local skills are present and the host client discovers project skills from .agents/skills. "
+                "The source of truth remains .ai-client; .agents/skills is a local discovery adapter, not a global install."
             ),
             performance_budget="bounded directory scan plus optional local junction/symlink/copy creation",
             metadata={
                 "source_priority": ("project", "common"),
                 "global_install_forbidden": True,
-                "default_destination": "skills/",
+                "default_destination": ".agents/skills/",
             },
         ),
         component(

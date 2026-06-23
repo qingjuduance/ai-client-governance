@@ -2020,10 +2020,10 @@
       "task_types": []
     },
     {
-      "condition": "Run when repository-local skills are present but the host client only discovers root skills/. The source of truth remains .ai-client; root skills/ is a local discovery adapter, not a global install.",
+      "condition": "Run when repository-local skills are present and the host client discovers project skills from .agents/skills. The source of truth remains .ai-client; .agents/skills is a local discovery adapter, not a global install.",
       "dedupe_key": "",
       "dependencies": [],
-      "description": "List and locally expose .ai-client skills through the current project's root skills directory.",
+      "description": "List and locally expose .ai-client skills through the current project's .agents/skills directory.",
       "effect": "repo_write",
       "events": [
         "session-start",
@@ -2039,7 +2039,7 @@
       "kind": "reporter",
       "mechanism_label": "ai_client_governance.py skill-sync list/install-local",
       "metadata": {
-        "default_destination": "skills/",
+        "default_destination": ".agents/skills/",
         "global_install_forbidden": true,
         "source_priority": [
           "project",
