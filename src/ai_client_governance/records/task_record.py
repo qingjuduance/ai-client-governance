@@ -109,6 +109,7 @@ STATE_ARTIFACT_OWNERSHIP_EVENT = "state-artifact-ownership.analysis"
 PATCH_PREFLIGHT_EVENT = "patch-preflight.analysis"
 DISCOVERED_ISSUE_RECORDING_EVENT = "final-output.discovered-issues-recorded"
 AGENT_DISPATCH_BRIEF_EVENT = "agent-dispatch-brief.analysis"
+AGENT_REVIEW_RESULT_EVENT = "agent-review-result.analysis"
 AGENT_DECISION_EVENT = "agent-decision.analysis"
 DATA_CONFIRMATION_EVENT = "data-confirmation.analysis"
 SHELL_PROXY_USAGE_EVENT = "shell-proxy-usage.analysis"
@@ -1826,6 +1827,36 @@ def validate_capability_gateway_event(
     for event_id, payload in payloads:
         components = payload.get("runtime_adapter_components")
         component_set = set(str(item) for item in components) if isinstance(components, list) else set()
+        if str(payload.get("capability_fact_kind") or "").strip() != "registration":
+            invalid_event_ids.append(event_id)
+            continue
+        if str(payload.get("control_layer") or "").strip() != "plugin":
+            invalid_event_ids.append(event_id)
+            continue
+        if str(payload.get("enforcement_level") or "").strip() != "audit_only":
+            invalid_event_ids.append(event_id)
+            continue
+        if payload.get("hard_enforcement_available") is not False:
+            invalid_event_ids.append(event_id)
+            continue
+        if payload.get("registration_event") is not True:
+            invalid_event_ids.append(event_id)
+            continue
+        if payload.get("invocation_telemetry_required") is not True:
+            invalid_event_ids.append(event_id)
+            continue
+        if str(payload.get("shell_control_layer") or "").strip() != "plugin-command-wrapper":
+            invalid_event_ids.append(event_id)
+            continue
+        if str(payload.get("shell_enforcement_scope") or "").strip() != "governed_commands_only":
+            invalid_event_ids.append(event_id)
+            continue
+        if payload.get("raw_host_shell_interception") is not False:
+            invalid_event_ids.append(event_id)
+            continue
+        if not str(payload.get("residual_risk") or "").strip():
+            invalid_event_ids.append(event_id)
+            continue
         if payload.get("lifecycle_input_filter_enforced") is not True:
             invalid_event_ids.append(event_id)
             continue
@@ -1854,8 +1885,13 @@ def validate_capability_gateway_event(
             errors,
             "error",
             (
-                "capability-gateway facts must record lifecycle_input_filter_enforced=true, "
-                "prewrite runtime adapter, required runtime_adapter_components, "
+                "capability-gateway facts must record plugin registration/audit boundary fields "
+                "(capability_fact_kind=registration, control_layer=plugin, enforcement_level=audit_only, "
+                "hard_enforcement_available=false, registration_event=true, "
+                "invocation_telemetry_required=true, shell_control_layer=plugin-command-wrapper, "
+                "shell_enforcement_scope=governed_commands_only, raw_host_shell_interception=false, "
+                "residual_risk), lifecycle_input_filter_enforced=true, prewrite runtime adapter, "
+                "required runtime_adapter_components, "
                 "shell_enforcement_mode=non-invasive-command-proxy, profile_policy=no_profile, "
                 "profile_touched=false, and user_shell_impact=none"
             ),
@@ -2113,6 +2149,172 @@ def validate_agent_dispatch_brief(
         add(notes, "note", f"agent dispatch brief facts present: {AGENT_DISPATCH_BRIEF_EVENT}", "events")
 
 
+def payload_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    if value is None:
+        return ""
+    return json.dumps(value, ensure_ascii=False, sort_keys=True)
+
+
+def payload_contains(value: Any, patterns: tuple[str, ...]) -> bool:
+    lowered = payload_text(value).lower()
+    return any(pattern.lower() in lowered for pattern in patterns)
+
+
+def payload_nonempty(value: Any) -> bool:
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (list, tuple, dict, set)):
+        return bool(value)
+    return value is not None
+
+
+def review_result_is_pass(value: Any) -> bool:
+    text = payload_text(value).lower()
+    if not any(pattern in text for pattern in ("pass", "passed", "approved", "通过", "复测通过")):
+        return False
+    if any(pattern in text for pattern in ("fail", "failed", "blocked", "不通过", "未通过", "阻塞")) and not any(
+        pattern in text for pattern in ("retest pass", "retest passed", "复测通过", "整改后通过", "最终通过")
+    ):
+        return False
+    return True
+
+
+def review_items_resolved(value: Any) -> bool:
+    if value in (None, "", [], ()):
+        return True
+    if isinstance(value, list):
+        for item in value:
+            if not isinstance(item, dict):
+                return False
+            status = str(item.get("status") or "").strip().lower()
+            if status not in {"resolved", "closed", "follow_up", "follow-up", "no_action", "none"}:
+                return False
+        return True
+    text = payload_text(value).lower()
+    if any(pattern in text for pattern in ("unresolved", "blocking", "未处理", "未解决", "阻塞")) and not any(
+        pattern in text for pattern in ("resolved", "closed", "follow", "已处理", "已关闭", "已记录")
+    ):
+        return False
+    return any(pattern in text for pattern in ("none", "no unresolved", "resolved", "closed", "无", "已处理", "已关闭"))
+
+
+def agent_review_errors(review: dict[str, Any]) -> list[str]:
+    issues: list[str] = []
+    for field in ("executor_agent", "executor_client_type", "reviewer_agent", "reviewer_client_type"):
+        if not str(review.get(field) or "").strip():
+            issues.append(field)
+    executor = str(review.get("executor_agent") or "").strip().lower()
+    reviewer = str(review.get("reviewer_agent") or "").strip().lower()
+    executor_client = str(review.get("executor_client_type") or "").strip().lower()
+    reviewer_client = str(review.get("reviewer_client_type") or "").strip().lower()
+    if executor and reviewer and executor == reviewer and executor_client == reviewer_client:
+        issues.append("independent_reviewer")
+    if not str(review.get("reviewed_task_id") or review.get("reviewed_leaf_id") or "").strip():
+        issues.append("reviewed_task_or_leaf_id")
+    if not review_result_is_pass(review.get("decision")):
+        issues.append("decision")
+
+    lifecycle = review.get("lifecycle_fact_check")
+    if not isinstance(lifecycle, dict):
+        issues.append("lifecycle_fact_check")
+    else:
+        required_lifecycle = (
+            "task_queue_lifecycle",
+            "task_record_status",
+            "requirements_triggers_outputs_worktrees_validations_events",
+            "final_gate",
+            "worktree_live_state",
+            "branch_head_dirty_status",
+            "validation_results",
+            "telemetry_raw_shell_gap",
+            "active_pending_state",
+        )
+        missing = [key for key in required_lifecycle if not payload_nonempty(lifecycle.get(key))]
+        issues.extend(f"lifecycle_fact_check.{key}" for key in missing)
+        if payload_contains(lifecycle, ("stale", "dirty-unexplained", "missing", "blocked", "fail", "不通过", "阻塞")) and not payload_contains(
+            lifecycle,
+            ("clean", "passed", "pass", "none", "no gap", "通过"),
+        ):
+            issues.append("lifecycle_fact_check.blocking_state")
+
+    commit_status = review.get("commit_status_check")
+    if not isinstance(commit_status, dict):
+        issues.append("commit_status_check")
+    else:
+        for key in ("commit", "merge", "push"):
+            if not payload_nonempty(commit_status.get(key)):
+                issues.append(f"commit_status_check.{key}")
+
+    if not review_items_resolved(review.get("unhandled_items")):
+        issues.append("unhandled_items")
+    if not review_items_resolved(review.get("low_quality_items")):
+        issues.append("low_quality_items")
+    if not payload_nonempty(review.get("evidence")):
+        issues.append("evidence")
+    if not payload_nonempty(review.get("remediation_guidance")):
+        issues.append("remediation_guidance")
+    if not payload_nonempty(review.get("retest_plan")):
+        issues.append("retest_plan")
+    if not review_result_is_pass(review.get("retest_result")):
+        issues.append("retest_result")
+    return issues
+
+
+def validate_agent_review_result(
+    con: sqlite3.Connection,
+    task: sqlite3.Row,
+    task_types: set[str],
+    event: str,
+    errors: list[Finding],
+    notes: list[Finding],
+) -> None:
+    """Require final cross-client Agent review results for multi-agent work."""
+    if event != "final" or "multi-agent" not in task_types:
+        return
+    payloads = event_payloads(con, task["task_id"], AGENT_REVIEW_RESULT_EVENT)
+    if not payloads:
+        add(errors, "error", f"multi-agent final gate requires event_type={AGENT_REVIEW_RESULT_EVENT}", "events")
+        return
+
+    valid = False
+    invalid_event_ids: list[str] = []
+    for event_id, payload in payloads:
+        reviews = payload.get("reviews")
+        if not isinstance(reviews, list) or not reviews:
+            invalid_event_ids.append(f"{event_id}:reviews")
+            continue
+        event_errors: list[str] = []
+        for index, review in enumerate(reviews):
+            if not isinstance(review, dict):
+                event_errors.append(f"reviews[{index}]")
+                continue
+            review_issues = agent_review_errors(review)
+            event_errors.extend(f"reviews[{index}].{issue}" for issue in review_issues)
+        if event_errors:
+            invalid_event_ids.append(f"{event_id}:{','.join(event_errors)}")
+            continue
+        valid = True
+        break
+
+    if not valid:
+        add(
+            errors,
+            "error",
+            (
+                "agent review result must use reviews[] with executor_agent, executor_client_type, reviewer_agent, "
+                "reviewer_client_type, reviewed_task_id or reviewed_leaf_id, pass decision, lifecycle_fact_check, "
+                "commit_status_check, resolved unhandled/low_quality items, evidence, remediation_guidance, "
+                "retest_plan, and passing retest_result"
+            ),
+            "events",
+            ", ".join(invalid_event_ids),
+        )
+    else:
+        add(notes, "note", f"agent review result facts present: {AGENT_REVIEW_RESULT_EVENT}", "events")
+
+
 def validate_design_package(
     con: sqlite3.Connection,
     task: sqlite3.Row,
@@ -2165,11 +2367,12 @@ def validate_capability_gateway_facts(
     errors: list[Finding],
     notes: list[Finding],
 ) -> None:
-    """Final gate must verify capability gateway telemetry facts, not just prose claims.
+    """Final gate must verify governed shell invocation evidence, not prose claims.
 
-    Checks that shell-adapter telemetry spans exist for the task, proving commands
-    went through the governance proxy rather than raw shell. Also checks that the
-    shell-proxy-usage event records used_proxy=true with telemetry evidence.
+    The capability-gateway event is a plugin registration/audit fact. It cannot
+    prove host-native raw shell prevention. Final closeout therefore checks the
+    shell-proxy-usage analysis event for governed-command telemetry or an
+    explicit exception.
     """
     task_size = str(task["task_size"] or "").strip().lower()
     if not (task_types & MUTATING_TASK_TYPES or task_size in {"medium", "large"}):
@@ -2180,7 +2383,7 @@ def validate_capability_gateway_facts(
     # Check shell-proxy-usage event has telemetry evidence
     payloads = event_payloads(con, task["task_id"], SHELL_PROXY_USAGE_EVENT)
     if not payloads:
-        add(errors, "error", f"capability gateway requires event_type={SHELL_PROXY_USAGE_EVENT}", "events")
+        add(errors, "error", f"final gate requires governed shell invocation event_type={SHELL_PROXY_USAGE_EVENT}", "events")
         return
     has_proxy_evidence = False
     for _event_id, payload in payloads:
@@ -2195,12 +2398,12 @@ def validate_capability_gateway_facts(
             has_proxy_evidence = True
             break
     if has_proxy_evidence:
-        add(notes, "note", f"capability gateway telemetry facts present: {SHELL_PROXY_USAGE_EVENT}", "events")
+        add(notes, "note", f"governed shell invocation evidence present: {SHELL_PROXY_USAGE_EVENT}", "events")
     else:
         add(
             errors,
             "error",
-            "capability gateway final gate requires used_proxy=true with telemetry_evidence, or exception_reason",
+            "final gate requires governed shell invocation evidence: used_proxy=true with telemetry_evidence, or exception_reason",
             "events",
         )
     validate_capability_gateway_event(con, task, errors, notes)
@@ -2245,6 +2448,7 @@ def validate_task(con: sqlite3.Connection, db: Path, task_id: str, event: str, e
     validate_readonly_side_effect_policy(con, task, task_types, errors, notes)
     validate_discovered_issue_recording(con, task, task_types, event, errors, notes)
     validate_agent_dispatch_brief(con, task, task_types, errors, notes)
+    validate_agent_review_result(con, task, task_types, event, errors, notes)
     validate_design_package(con, task, task_types, errors, notes)
     validate_analysis_contract_preflight(con, task, task_types, event, errors, notes)
     validate_capability_gateway_facts(con, task, task_types, event, db, errors, notes)

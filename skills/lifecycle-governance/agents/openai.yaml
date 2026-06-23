@@ -1,0 +1,4 @@
+interface:
+  display_name: "Lifecycle Governance"
+  short_description: "Run task lifecycle gates reliably"
+  default_prompt: "Use $lifecycle-governance to run the governed task lifecycle."
