@@ -30,6 +30,7 @@ RUNNER_VERSION = "task-run-dag-v1"
 STDIO_LIMIT = 4000
 TELEMETRY_EVENT_SCHEMA_VERSION = 2
 DEFAULT_JSONL_ARTIFACT_DIR = Path(".ai-client") / "project" / "logs" / "tool-invocations"
+COMMON_REPO_NAME = "ai-client-governance"
 
 READONLY_PREFIXES = (
     "git status",
@@ -594,11 +595,16 @@ def safe_id(value: str) -> str:
 
 
 def host_project_root(root: Path) -> Path:
-    """Return the host project root when running inside .ai-client/project/.worktree."""
+    """Return the host project root when running inside embedded governance paths."""
     resolved = root.resolve()
     parts = resolved.parts
     for index in range(len(parts) - 2):
         if parts[index : index + 3] == (".ai-client", "project", ".worktree"):
+            host = Path(*parts[:index])
+            if (host / ".ai-client" / "project").exists():
+                return host
+    for index in range(len(parts) - 1):
+        if parts[index : index + 2] == (".ai-client", COMMON_REPO_NAME):
             host = Path(*parts[:index])
             if (host / ".ai-client" / "project").exists():
                 return host

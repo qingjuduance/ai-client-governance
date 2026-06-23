@@ -170,6 +170,7 @@ def host_project_root(root: Path) -> Path:
             host = Path(*parts[:index])
             if (host / ".ai-client" / "project").exists():
                 return host
+    for index in range(len(parts) - 1):
         if parts[index : index + 2] == (".ai-client", COMMON_REPO_NAME):
             host = Path(*parts[:index])
             if (host / ".ai-client" / "project").exists():

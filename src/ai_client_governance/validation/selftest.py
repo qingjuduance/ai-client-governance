@@ -3687,18 +3687,20 @@ def test_task_run_command_compression_plan(root: Path, run_dir: Path) -> TestRes
 
 
 def test_task_run_dag_cache_diagnostics(root: Path, run_dir: Path) -> TestResult:
+    task_root = host_project_root(root)
     jsonl_artifact_dir = run_dir / "task-run-telemetry-jsonl"
     cache_dir = run_dir / "task-run-cache"
+    input_path = ai_client_governance_root() / "README.md"
     validation_command = (
         f"{sys.executable} {ai_client_governance_entrypoint()} "
-        "validate-encoding --root . --paths README.md --strict"
+        f"validate-encoding --root {ai_client_governance_root()} --paths README.md --strict"
     )
     run_base = [
         sys.executable,
         str(ai_client_governance_entrypoint()),
         "task-run",
         "--root",
-        str(root),
+        str(task_root),
         "run",
         "--task-id",
         "TASK-RUN-DAG-SELFTEST",
@@ -3710,7 +3712,7 @@ def test_task_run_dag_cache_diagnostics(root: Path, run_dir: Path) -> TestResult
         "--cache-dir",
         str(cache_dir),
         "--input-path",
-        "README.md",
+        str(input_path),
         "--jsonl-artifact-dir",
         str(jsonl_artifact_dir),
         "--format",
@@ -3747,7 +3749,7 @@ def test_task_run_dag_cache_diagnostics(root: Path, run_dir: Path) -> TestResult
                 str(ai_client_governance_entrypoint()),
                 "task-run",
                 "--root",
-                str(root),
+                str(task_root),
                 "diagnose",
                 "--jsonl-artifact-dir",
                 str(jsonl_artifact_dir),
@@ -3764,7 +3766,7 @@ def test_task_run_dag_cache_diagnostics(root: Path, run_dir: Path) -> TestResult
                 str(ai_client_governance_entrypoint()),
                 "task-run",
                 "--root",
-                str(root),
+                str(task_root),
                 "diagnose",
                 "--jsonl-artifact-dir",
                 str(jsonl_artifact_dir),
@@ -3783,7 +3785,7 @@ def test_task_run_dag_cache_diagnostics(root: Path, run_dir: Path) -> TestResult
                 str(ai_client_governance_entrypoint()),
                 "task-run",
                 "--root",
-                str(root),
+                str(task_root),
                 "diagnose",
                 "--jsonl-artifact-dir",
                 str(jsonl_artifact_dir),
@@ -3801,7 +3803,7 @@ def test_task_run_dag_cache_diagnostics(root: Path, run_dir: Path) -> TestResult
                 str(ai_client_governance_entrypoint()),
                 "task-run",
                 "--root",
-                str(root),
+                str(task_root),
                 "diagnose",
                 "--jsonl-artifact-dir",
                 str(jsonl_artifact_dir),
@@ -3857,6 +3859,11 @@ def test_task_run_dag_cache_diagnostics(root: Path, run_dir: Path) -> TestResult
     filtered_filters = (
         filtered_telemetry.get("filters", {}) if isinstance(filtered_telemetry.get("filters"), dict) else {}
     )
+    scope_kind_counts = telemetry.get("scope_kind_counts", {})
+    has_expected_scope = (
+        isinstance(scope_kind_counts, dict)
+        and ("mixed" in scope_kind_counts or "ai-client-governance-common" in scope_kind_counts)
+    )
     raw_shell_require_output = commands[6].stdout + commands[6].stderr
     passed = (
         all(command.exit_code == 0 for command in commands[:6])
@@ -3872,7 +3879,7 @@ def test_task_run_dag_cache_diagnostics(root: Path, run_dir: Path) -> TestResult
         and not raw_shell_auto_intercept.get("installed")
         and telemetry.get("raw_shell_gap")
         and "raw-shell-coverage" in raw_shell_require_output
-        and "mixed" in telemetry.get("scope_kind_counts", {})
+        and has_expected_scope
         and "ai-client-governance-common" in str(latest_event.get("scope_reason", ""))
         and not telemetry.get("duplicate_commands")
         and not telemetry.get("failures")
